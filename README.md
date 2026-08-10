@@ -50,10 +50,4 @@ lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
 lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
 lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,create=file
 
-📥 Installazione Rapida
-Clona o scarica lo script sulla tua macchina Debian/Ubuntu:
-
-Bash
-wget [https://raw.githubusercontent.com/tuo-repo/unsloth-suite.sh](https://raw.githubusercontent.com/tuo-repo/unsloth-suite.sh)
-# oppure crea il file in locale:
-nano unsloth-suite.sh
+-- VER: 0.0.1 --
