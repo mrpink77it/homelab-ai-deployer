@@ -9,18 +9,6 @@ Questo strumento gestisce l'intero ciclo di vita dell'ambiente AI: dall'allineam
 
 ---
 
-## 📋 Indice
-- [Caratteristiche Principali](#-caratteristiche-principali)
-- [Prerequisiti e Requisiti di Sistema](#-prerequisiti-e-requisiti-di-sistema)
-- [Requisiti LXC Proxmox (Pass-Through GPU)](#-requisiti-lxc-proxmox-pass-through-gpu)
-- [Installazione Rapida](#-installazione-rapida)
-- [Utilizzo dello Script](#-utilizzo-dello-script)
-  - [Interfaccia Interattiva (CLI Menu)](#1-interfaccia-interattiva-cli-menu)
-  - [Utilizzo da Riga di Comando (CLI Flags)](#2-utilizzo-da-riga-di-comando-cli-flags)
-- [Architettura della Suite](#-architettura-della-suite)
-- [Gestione dei Servizi Systemd](#-gestione-dei-servizi-systemd)
-
----
 
 ## ✨ Caratteristiche Principali
 
