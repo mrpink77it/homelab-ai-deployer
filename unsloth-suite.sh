@@ -33,12 +33,10 @@ show_banner() {
     clear
     echo -e "${CYAN}"
     echo "=========================================================================="
-    echo "      __  ______  _____ __    ____  ______ __  __   _____ __  ______ _____ "
-    echo "     / / / / __ \/ ___// /   / __ \/_  __// / / /  / ___// / / /  _// ___/ "
-    echo "    / / / / / / /\__ \/ /   / / / / / /  / /_/ /   \__ \/ / / // / / /__   "
-    echo "   / /_/ / /_/ /___/ / /___/ /_/ / / /  / __  /   ___/ / /_/ // / / ___/   "
-    echo "   \____/\____//____/_____/\____/ /_/  /_/ /_/   /____/\____/___//_/       "
-    echo "                                                                           "
+    echo "  _   _ _  _ ____ _    ____ ____ _  _   ____ _  _ _ ___ ____ "
+    echo "  |   | |\ | [__  |    |  | |___ |__|   [__  |  | |  |  |___ "
+    echo "  |___| | \| ___] |___ |__| |___ |  |   ___] |__| |  |  |___ "
+    echo "                                                             "
     echo "       Unsloth + ComfyUI + OpenCode Orchestration Suite Manager           "
     echo "=========================================================================="
     echo -e "${NC}"
@@ -136,7 +134,7 @@ menu_nvidia() {
     case $nv_choice in
         1) cmd_install_nvidia_cuda; read -p "Premere INVIO per continuare..." ;;
         2) install_nvidia_drivers_only; read -p "Premere INVIO per continuare..." ;;
-        3) install_cuda_toolkit_only; read -p "Premere INVIO for continuare..." ;;
+        3) install_cuda_toolkit_only; read -p "Premere INVIO per continuare..." ;;
         4) install_container_toolkit_only; read -p "Premere INVIO per continuare..." ;;
         5) detect_host_nvidia_version; nvidia-smi 2>/dev/null || log_err "nvidia-smi non trovato."; read -p "Premere INVIO per continuare..." ;;
         6) return ;;
@@ -337,7 +335,6 @@ cmd_install_opencode() {
     source venv/bin/activate
     pip install --upgrade pip
     
-    # Installazione pacchetti OpenCode / Open-Interpreter con backend compatibile OpenAI
     pip install open-interpreter opencode-ai requests openai
 
     configure_unsloth_endpoint
