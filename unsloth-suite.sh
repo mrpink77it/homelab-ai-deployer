@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # UNSLOTH SUITE INSTALLER - DEBIAN 13 (TRIXIE)
-# Supporto automatico Bare Metal e Container LXC/Proxmox
+# Correretto con OpenCode Nativo Ufficiale (https://opencode.ai/docs/it)
 # ==============================================================================
 
 set -euo pipefail
@@ -18,7 +18,7 @@ log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # ------------------------------------------------------------------------------
-# 1. VERIFICA PRIVILEGI E RILEVAMENTO AMBIENTE (LXC / CONTAINER)
+# 1. VERIFICA PRIVILEGI E RILEVAMENTO AMBIENTE
 # ------------------------------------------------------------------------------
 if [ "$(id -u)" -ne 0 ]; then
     log_error "Questo script deve essere eseguito con i privilegi di root."
@@ -33,39 +33,85 @@ if [ -f /.dockerenv ] || [ -f /run/.containerenv ] || grep -qa 'container=lxc' /
     IS_CONTAINER=true
 fi
 
-log_info "Avvio installazione Unsloth Suite su Debian 13 per l'utente: ${REAL_USER}"
-if [ "$IS_CONTAINER" = true ]; then
-    log_warn "Rilevato ambiente CONTAINER (LXC/Proxmox). L'installazione dei linux-headers e dei moduli kernel DKMS verrà saltata."
-else
-    log_info "Rilevato ambiente Macchina Reale / VM (Bare-Metal)."
+# ------------------------------------------------------------------------------
+# 2. MENU INTERATTIVO DI SELEZIONE SERVIZI
+# ------------------------------------------------------------------------------
+clear
+echo "=============================================================================="
+echo "                   UNSLOTH SUITE INSTALLER - DEBIAN 13                        "
+echo "=============================================================================="
+echo "Nota: I prerequisiti base (mc, nvtop, nvidia-smi, uv, Locales, Node.js)"
+echo "      e il driver/toolkit CUDA verranno installati automaticamente."
+echo "------------------------------------------------------------------------------"
+echo "Seleziona i servizi da installare (inserisci i numeri separati da spazio):"
+echo "  1) Unsloth & Unsloth Studio (Porta 8888)"
+echo "  2) ComfyUI                  (Porta 8188)"
+echo "  3) OpenCode AI Web Service  (Porta 8000)"
+echo "  4) Tutti i servizi sopra indicati"
+echo "=============================================================================="
+read -rp "Scelta: " -a USER_CHOICES
+
+INSTALL_UNSLOTH=false
+INSTALL_COMFY=false
+INSTALL_OPENCODE=false
+
+for choice in "${USER_CHOICES[@]}"; do
+    case "$choice" in
+        1) INSTALL_UNSLOTH=true ;;
+        2) INSTALL_COMFY=true ;;
+        3) INSTALL_OPENCODE=true ;;
+        4) 
+           INSTALL_UNSLOTH=true
+           INSTALL_COMFY=true
+           INSTALL_OPENCODE=true
+           ;;
+        *) log_warn "Opzione '$choice' non valida, ignorata." ;;
+    esac
+done
+
+if [ "$INSTALL_UNSLOTH" = false ] && [ "$INSTALL_COMFY" = false ] && [ "$INSTALL_OPENCODE" = false ]; then
+    log_error "Nessun servizio selezionato. Annullamento."
+    exit 1
 fi
 
 # ------------------------------------------------------------------------------
-# 2. PULIZIA CONFIGURAZIONI PRECEDENTI
+# 3. PULIZIA CONFIGURAZIONI PRECEDENTI
 # ------------------------------------------------------------------------------
 rm -f /etc/crypto-policies/back-ends/apt-sequoia.config
 rm -f /etc/apt/sources.list.d/cuda*.list
 rm -f /etc/apt/sources.list.d/nvidia*.list
-
 mkdir -p /etc/apt/keyrings
 
 # ------------------------------------------------------------------------------
-# 3. STRUMENTI ESSENZIALI DI SISTEMA
+# 4. STRUMENTI ESSENZIALI DI SISTEMA E NODE.JS (Richiesto per dipendenze Web)
 # ------------------------------------------------------------------------------
-log_info "Installazione pacchetti base (curl, wget, ca-certificates)..."
+log_info "Installazione pacchetti base di sistema e Node.js..."
 apt update || true
-apt install -y curl wget ca-certificates gnupg
+apt install -y curl wget ca-certificates gnupg git build-essential netcat-openbsd locales mc nvtop htop \
+    python3-full python3-pip python3-venv python3-setuptools python3-wheel
+
+# Installazione Node.js Lts (utile per OpenCode e estensioni)
+if ! command -v node &> /dev/null; then
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt install -y nodejs
+fi
+
+log_info "Configurazione globale dei Locales su en_US.UTF-8..."
+sed -i '/^# *en_US.UTF-8 UTF-8/s/^# //' /etc/locale.gen
+locale-gen en_US.UTF-8
+update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LANGUAGE=en_US.UTF-8
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export LANGUAGE=en_US.UTF-8
 
 # ------------------------------------------------------------------------------
-# 4. REPOSITORY UFFICIALE NVIDIA (CON FIX SQV PER DEBIAN 13)
+# 5. REPOSITORY UFFICIALE NVIDIA
 # ------------------------------------------------------------------------------
-log_info "Scaricamento della chiave GPG ufficiale NVIDIA..."
+log_info "Configurazione repository NVIDIA CUDA..."
 curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/3bf863cc.pub | gpg --dearmor --yes -o /etc/apt/keyrings/cuda-archive-keyring.gpg
-
-log_info "Configurazione sorgente repository CUDA NVIDIA..."
 echo "deb [trusted=yes signed-by=/etc/apt/keyrings/cuda-archive-keyring.gpg] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /" > /etc/apt/sources.list.d/cuda-official.list
 
-log_info "Configurazione priorità APT (Pinning)..."
 cat <<EOF > /etc/apt/preferences.d/nvidia-official-pin
 Package: *
 Pin: origin developer.download.nvidia.com
@@ -75,102 +121,217 @@ EOF
 apt update
 
 # ------------------------------------------------------------------------------
-# 5. INSTALLAZIONE DIPENDENZE E DRIVER NVIDIA / CUDA
+# 6. INSTALLAZIONE DRIVER NVIDIA & CUDA
 # ------------------------------------------------------------------------------
 if [ "$IS_CONTAINER" = false ]; then
-    log_info "Installazione linux-headers e strumenti DKMS per Macchina Fisica/VM..."
-    apt install -y build-essential dkms linux-headers-"$(uname -r)" python3-pip python3-venv git
-
-    log_info "Disabilitazione Nouveau..."
+    log_info "Ambiente Bare-Metal/VM: Installazione headers kernel e driver..."
+    apt install -y dkms linux-headers-"$(uname -r)"
     cat <<EOF > /etc/modprobe.d/blacklist-nouveau.conf
 blacklist nouveau
 options nouveau modeset=0
 EOF
     update-initramfs -u
-
-    log_info "Installazione completa Driver Kernel + CUDA..."
-    apt install -y cuda-drivers cuda-toolkit
+    apt install -y cuda-drivers cuda-toolkit nvidia-smi || apt install -y cuda-drivers cuda-toolkit
 else
-    log_info "Installazione dipendenze base Python/Git in container LXC..."
-    apt install -y build-essential python3-pip python3-venv git
-
-    log_info "Installazione CUDA Toolkit in container LXC (Userland Only)..."
-    # In LXC installiamo solo il Toolkit CUDA. I driver del kernel sono gestiti dall'host Proxmox.
-    apt install -y cuda-toolkit
+    log_warn "Ambiente CONTAINER (LXC): Installazione solo CUDA Toolkit e utilità GPU."
+    apt install -y cuda-toolkit nvidia-smi || apt install -y cuda-toolkit
 fi
 
-log_info "Configurazione delle variabili d'ambiente CUDA..."
 CUDA_PROFILE_SCRIPT="/etc/profile.d/cuda.sh"
 cat <<'EOF' > "$CUDA_PROFILE_SCRIPT"
 export PATH=/usr/local/cuda/bin${PATH:+:${PATH}}
 export LD_LIBRARY_PATH=/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
 EOF
 chmod +x "$CUDA_PROFILE_SCRIPT"
 
 export PATH=/usr/local/cuda/bin${PATH:+:${PATH}}
 export LD_LIBRARY_PATH=/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
 
-log_ok "CUDA Toolkit e componenti NVIDIA installati con successo!"
-
 # ------------------------------------------------------------------------------
-# 6. INSTALLAZIONE ASTRAL UV
+# 7. INSTALLAZIONE ASTRAL UV
 # ------------------------------------------------------------------------------
-log_info "Installazione di 'uv' per la gestione dell'ambiente Python..."
+log_info "Installazione di 'uv'..."
 if ! command -v uv &> /dev/null; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="${REAL_HOME}/.cargo/bin:${PATH}"
 fi
 
 # ------------------------------------------------------------------------------
-# 7. CREAZIONE VIRTUALENV E INSTALLAZIONE UNSLOTH / UNSLOTH STUDIO
+# 8. INSTALLAZIONE UNSLOTH & UNSLOTH STUDIO (SE SELEZIONATO)
 # ------------------------------------------------------------------------------
-INSTALL_DIR="${REAL_HOME}/unsloth_env"
-log_info "Creazione virtualenv Python con 'uv' in: ${INSTALL_DIR}"
+if [ "$INSTALL_UNSLOTH" = true ]; then
+    UNSLOTH_DIR="${REAL_HOME}/unsloth_env"
+    log_info "Installazione Unsloth e Unsloth Studio in: ${UNSLOTH_DIR}"
 
-su - "$REAL_USER" -c "
-    export PATH=/usr/local/cuda/bin:\$PATH
-    export LD_LIBRARY_PATH=/usr/local/cuda/lib64:\$LD_LIBRARY_PATH
-    
-    uv venv ${INSTALL_DIR} --python 3.12
-    source ${INSTALL_DIR}/bin/activate
+    su - "$REAL_USER" -c "
+        export PATH=/usr/local/cuda/bin:\$PATH
+        export LD_LIBRARY_PATH=/usr/local/cuda/lib64:\$LD_LIBRARY_PATH
+        uv venv ${UNSLOTH_DIR} --python 3.12 --seed
+        source ${UNSLOTH_DIR}/bin/activate
+        uv pip install --upgrade pip setuptools wheel
+        uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+        uv pip install unsloth xformers trl peft accelerate bitsandbytes jupyterlab
+    "
 
-    echo '[INFO] Installazione PyTorch, Unsloth e dipendenze via uv...'
-    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-    uv pip install unsloth xformers trl peft accelerate bitsandbytes
-"
+    cat <<EOF > /etc/systemd/system/unsloth-studio.service
+[Unit]
+Description=Unsloth Studio AI Service
+After=network.target
 
-# ------------------------------------------------------------------------------
-# 8. SCRIPT DI AVVIO UNSLOTH STUDIO
-# ------------------------------------------------------------------------------
-LAUNCHER_SCRIPT="${REAL_HOME}/start-unsloth-studio.sh"
-log_info "Creazione dello script di avvio in: ${LAUNCHER_SCRIPT}"
+[Service]
+Type=simple
+User=${REAL_USER}
+WorkingDirectory=${REAL_HOME}
+Environment="PATH=/usr/local/cuda/bin:${UNSLOTH_DIR}/bin:/usr/bin:/bin"
+Environment="LD_LIBRARY_PATH=/usr/local/cuda/lib64"
+Environment="LANG=en_US.UTF-8"
+Environment="LC_ALL=en_US.UTF-8"
+ExecStart=${UNSLOTH_DIR}/bin/jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --ServerApp.token='' --ServerApp.password='' --allow-root
+Restart=always
+RestartSec=5
 
-cat <<EOF > "$LAUNCHER_SCRIPT"
-#!/usr/bin/env bash
-export PATH=/usr/local/cuda/bin:\$PATH
-export LD_LIBRARY_PATH=/usr/local/cuda/lib64:\$LD_LIBRARY_PATH
-
-source "${INSTALL_DIR}/bin/activate"
-
-echo "=== Avvio di Unsloth Studio ==="
-echo "Accessibile via browser su: http://127.0.0.1:8888"
-unsloth studio -H 0.0.0.0 -p 8888
+[Install]
+WantedBy=multi-user.target
 EOF
 
-chmod +x "$LAUNCHER_SCRIPT"
-chown "$REAL_USER":"$REAL_USER" "$LAUNCHER_SCRIPT"
-chown -R "$REAL_USER":"$REAL_USER" "$INSTALL_DIR"
+    systemctl daemon-reload
+    systemctl enable unsloth-studio.service
+    systemctl restart unsloth-studio.service
+    log_ok "Servizio Unsloth Studio avviato sulla porta 8888!"
+fi
 
 # ------------------------------------------------------------------------------
-# COMPLETAMENTO
+# 9. INSTALLAZIONE COMFYUI (SE SELEZIONATO)
 # ------------------------------------------------------------------------------
-echo "=============================================================================="
-log_ok "INSTALLAZIONE COMPLETATA SENZA ERRORI!"
-echo "=============================================================================="
-if [ "$IS_CONTAINER" = true ]; then
-    echo "NOTA LXC: Assicurati che i device della GPU NVIDIA (/dev/nvidia*) siano traspassati"
-    echo "         dall'host Proxmox al container LXC."
+if [ "$INSTALL_COMFY" = true ]; then
+    COMFY_DIR="${REAL_HOME}/ComfyUI"
+    log_info "Installazione ComfyUI..."
+
+    if [ ! -d "$COMFY_DIR" ]; then
+        su - "$REAL_USER" -c "git clone https://github.com/comfyanonymous/ComfyUI.git ${COMFY_DIR}"
+    fi
+
+    su - "$REAL_USER" -c "
+        export PATH=/usr/local/cuda/bin:\$PATH
+        export LD_LIBRARY_PATH=/usr/local/cuda/lib64:\$LD_LIBRARY_PATH
+        cd ${COMFY_DIR}
+        uv venv venv --python 3.12 --seed
+        source venv/bin/activate
+        uv pip install --upgrade pip setuptools wheel
+        uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+        uv pip install -r requirements.txt
+    "
+
+    cat <<EOF > /etc/systemd/system/comfyui.service
+[Unit]
+Description=ComfyUI AI Service
+After=network.target
+
+[Service]
+Type=simple
+User=${REAL_USER}
+WorkingDirectory=${COMFY_DIR}
+Environment="PATH=/usr/local/cuda/bin:/usr/bin:/bin"
+Environment="LD_LIBRARY_PATH=/usr/local/cuda/lib64"
+Environment="LANG=en_US.UTF-8"
+Environment="LC_ALL=en_US.UTF-8"
+ExecStart=${COMFY_DIR}/venv/bin/python main.py --listen 0.0.0.0 --port 8188
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable comfyui.service
+    systemctl restart comfyui.service
+    log_ok "Servizio ComfyUI attivo sulla porta 8188!"
 fi
-echo "Per avviare Unsloth Studio:"
-echo "  ${LAUNCHER_SCRIPT}"
+
+# ------------------------------------------------------------------------------
+# 10. INSTALLAZIONE OPENCODE AI (SECONDO GUIDA UFFICIALE OPENCODE.AI)
+# ------------------------------------------------------------------------------
+if [ "$INSTALL_OPENCODE" = true ]; then
+    log_info "Installazione binario ufficiale OpenCode AI..."
+
+    # Installazione binario OpenCode (supporta sia lo script install che npm)
+    curl -fsSL https://opencode.ai/install | bash || npm install -g opencode-ai
+
+    # Assicuriamo che il binario opencode sia raggiungibile globalmente in /usr/local/bin
+    if [ -f "${REAL_HOME}/.opencode/bin/opencode" ]; then
+        cp "${REAL_HOME}/.opencode/bin/opencode" /usr/local/bin/opencode
+    elif [ -f "/root/.opencode/bin/opencode" ]; then
+        cp "/root/.opencode/bin/opencode" /usr/local/bin/opencode
+    fi
+    chmod +x /usr/local/bin/opencode || true
+
+    log_info "Creazione del servizio systemd per OpenCode Web..."
+
+    cat <<EOF > /etc/systemd/system/opencode.service
+[Unit]
+Description=OpenCode AI Web Service
+After=network.target
+
+[Service]
+Type=simple
+User=${REAL_USER}
+WorkingDirectory=${REAL_HOME}
+Environment="PATH=/usr/local/cuda/bin:${REAL_HOME}/.opencode/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="LANG=en_US.UTF-8"
+Environment="LC_ALL=en_US.UTF-8"
+# Comando ufficiale secondo documentazione: opencode web con bind 0.0.0.0
+ExecStart=/usr/local/bin/opencode web --hostname 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable opencode.service
+    systemctl restart opencode.service
+    log_ok "Servizio OpenCode AI Web attivo sulla porta 8000!"
+fi
+
+# ------------------------------------------------------------------------------
+# FIX PERMESSI FINALI
+# ------------------------------------------------------------------------------
+chown -R "$REAL_USER":"$REAL_USER" "$REAL_HOME"
+
+# ------------------------------------------------------------------------------
+# RIEPILOGO FINALE E CHECK STATO
+# ------------------------------------------------------------------------------
+log_info "Attesa di 10 secondi per l'avvio completo dei servizi..."
+sleep 10
+
+SERVER_IP=$(hostname -I | awk '{print $1}')
+[ -z "$SERVER_IP" ] && SERVER_IP="localhost"
+
+check_port() {
+    local port=$1
+    if nc -z -w 3 127.0.0.1 "$port" &>/dev/null; then
+        echo -e "${GREEN}[OK - ATTIVO]${NC}"
+    else
+        echo -e "${RED}[FAIL - INATTIVO]${NC}"
+    fi
+}
+
+echo "=============================================================================="
+log_ok "INSTALLAZIONE COMPLETATA!"
+echo "=============================================================================="
+
+if [ "$INSTALL_UNSLOTH" = true ]; then
+    echo -e " 1. Unsloth Studio: http://${SERVER_IP}:8888  $(check_port 8888)"
+fi
+if [ "$INSTALL_COMFY" = true ]; then
+    echo -e " 2. ComfyUI:        http://${SERVER_IP}:8188  $(check_port 8188)"
+fi
+if [ "$INSTALL_OPENCODE" = true ]; then
+    echo -e " 3. OpenCode Web:   http://${SERVER_IP}:8000  $(check_port 8000)"
+fi
+
 echo "=============================================================================="
