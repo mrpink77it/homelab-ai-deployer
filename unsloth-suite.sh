@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# UNSLOTH SUITE INSTALLER - DEBIAN 13 (TRIXIE)
-# Correretto con OpenCode Nativo Ufficiale (https://opencode.ai/docs/it)
+# UNSLOTH SUITE INSTALLER - DEBIAN 13 (TRIXIE) / UBUNTU
+# Script Unificato con Fix OpenCode AI & Fix ComfyUI (comfy-kitchen)
 # ==============================================================================
 
 set -euo pipefail
@@ -38,7 +38,7 @@ fi
 # ------------------------------------------------------------------------------
 clear
 echo "=============================================================================="
-echo "                   UNSLOTH SUITE INSTALLER - DEBIAN 13                        "
+echo "                   UNSLOTH SUITE INSTALLER - DEBIAN / UBUNTU                   "
 echo "=============================================================================="
 echo "Nota: I prerequisiti base (mc, nvtop, nvidia-smi, uv, Locales, Node.js)"
 echo "      e il driver/toolkit CUDA verranno installati automaticamente."
@@ -83,14 +83,13 @@ rm -f /etc/apt/sources.list.d/nvidia*.list
 mkdir -p /etc/apt/keyrings
 
 # ------------------------------------------------------------------------------
-# 4. STRUMENTI ESSENZIALI DI SISTEMA E NODE.JS (Richiesto per dipendenze Web)
+# 4. STRUMENTI ESSENZIALI DI SISTEMA E NODE.JS
 # ------------------------------------------------------------------------------
 log_info "Installazione pacchetti base di sistema e Node.js..."
 apt update || true
 apt install -y curl wget ca-certificates gnupg git build-essential netcat-openbsd locales mc nvtop htop \
     python3-full python3-pip python3-venv python3-setuptools python3-wheel
 
-# Installazione Node.js Lts (utile per OpenCode e estensioni)
 if ! command -v node &> /dev/null; then
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
     apt install -y nodejs
@@ -203,7 +202,7 @@ EOF
 fi
 
 # ------------------------------------------------------------------------------
-# 9. INSTALLAZIONE COMFYUI (SE SELEZIONATO)
+# 9. INSTALLAZIONE COMFYUI (CON FIX PER COMFY-KITCHEN / PYTORCH)
 # ------------------------------------------------------------------------------
 if [ "$INSTALL_COMFY" = true ]; then
     COMFY_DIR="${REAL_HOME}/ComfyUI"
@@ -222,6 +221,9 @@ if [ "$INSTALL_COMFY" = true ]; then
         uv pip install --upgrade pip setuptools wheel
         uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
         uv pip install -r requirements.txt
+        
+        # Aggiornamento comfy-kitchen per risolvere il crash in PyTorch 2.4+
+        uv pip install --upgrade comfy-kitchen
     "
 
     cat <<EOF > /etc/systemd/system/comfyui.service
@@ -257,10 +259,8 @@ fi
 if [ "$INSTALL_OPENCODE" = true ]; then
     log_info "Installazione binario ufficiale OpenCode AI..."
 
-    # Installazione binario OpenCode (supporta sia lo script install che npm)
     curl -fsSL https://opencode.ai/install | bash || npm install -g opencode-ai
 
-    # Assicuriamo che il binario opencode sia raggiungibile globalmente in /usr/local/bin
     if [ -f "${REAL_HOME}/.opencode/bin/opencode" ]; then
         cp "${REAL_HOME}/.opencode/bin/opencode" /usr/local/bin/opencode
     elif [ -f "/root/.opencode/bin/opencode" ]; then
@@ -282,7 +282,6 @@ WorkingDirectory=${REAL_HOME}
 Environment="PATH=/usr/local/cuda/bin:${REAL_HOME}/.opencode/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="LANG=en_US.UTF-8"
 Environment="LC_ALL=en_US.UTF-8"
-# Comando ufficiale secondo documentazione: opencode web con bind 0.0.0.0
 ExecStart=/usr/local/bin/opencode web --hostname 0.0.0.0 --port 8000
 Restart=always
 RestartSec=5
