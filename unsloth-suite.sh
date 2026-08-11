@@ -292,16 +292,16 @@ run_guided_step \
     "Per abilitare le performance di calcolo accelerato via GPU, lo script scarica la chiave GPG\nufficiale di NVIDIA, configura i repository dedicati e imposta una priorità (pin)\nsulla distribuzione aggirando i blocchi di sicurezza apt sulle firme legacy." \
     "curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/3bf863cc.pub | gpg --dearmor --yes -o /etc/apt/keyrings/cuda-archive-keyring.gpg && echo 'deb [signed-by=/etc/apt/keyrings/cuda-archive-keyring.gpg] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /' > /etc/apt/sources.list.d/cuda-official.list && echo -e 'Package: *\nPin: origin developer.download.nvidia.com\nPin-Priority: 1001' > /etc/apt/preferences.d/nvidia-official-pin && apt-get update -o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowngradeToInsecureRepositories=true || apt update"
 
-# FASE 4: Driver NVIDIA e Toolkit CUDA (LXC vs Bare-Metal)
+# FASE 4: Driver NVIDIA e Toolkit CUDA (LXC vs Bare-Metal) - Con --allow-unauthenticated
 if [ "$IS_CONTAINER" = true ]; then
-    DRV_CMD='if [ -f "/proc/driver/nvidia/version" ]; then NVRM_VERSION=$(grep "Kernel Module" /proc/driver/nvidia/version | awk "{print \$8}"); MAJOR_VERSION=$(echo "$NVRM_VERSION" | cut -d"." -f1); apt install -y "nvidia-utils-${MAJOR_VERSION}" cuda-toolkit || { RUN_FILE="NVIDIA-Linux-x86_64-${NVRM_VERSION}.run"; wget -q "https://us.download.nvidia.com/XFree86/Linux-x86_64/${NVRM_VERSION}/${RUN_FILE}" && chmod +x "$RUN_FILE" && ./"$RUN_FILE" --no-kernel-module --silent && rm -f "$RUN_FILE"; apt install -y cuda-toolkit; }; else apt install -y cuda-toolkit; fi'
+    DRV_CMD='if [ -f "/proc/driver/nvidia/version" ]; then NVRM_VERSION=$(grep "Kernel Module" /proc/driver/nvidia/version | awk "{print \$8}"); MAJOR_VERSION=$(echo "$NVRM_VERSION" | cut -d"." -f1); apt install -y --allow-unauthenticated "nvidia-utils-${MAJOR_VERSION}" cuda-toolkit || { RUN_FILE="NVIDIA-Linux-x86_64-${NVRM_VERSION}.run"; wget -q "https://us.download.nvidia.com/XFree86/Linux-x86_64/${NVRM_VERSION}/${RUN_FILE}" && chmod +x "$RUN_FILE" && ./"$RUN_FILE" --no-kernel-module --silent && rm -f "$RUN_FILE"; apt install -y --allow-unauthenticated cuda-toolkit; }; else apt install -y --allow-unauthenticated cuda-toolkit; fi'
     DRV_DESC="Ambiente LXC (Container Proxmox) rilevato. Lo script analizza la versione dei driver\ninstallati sull'Host Proxmox e configura i componenti userspace (inclusi i comandi\ncome nvidia-smi) e il toolkit CUDA all'interno del container."
 else
     DRV_DESC="Ambiente Bare-Metal o VM fisica rilevato. Lo script installa i driver completi\ndell'architettura NVIDIA, configura i moduli DKMS e inibisce i driver open-source nouveau."
     if grep -qi "ubuntu" /etc/os-release; then
-        DRV_CMD='apt install -y dkms linux-headers-$(uname -r) && echo -e "blacklist nouveau\noptions nouveau modeset=0" > /etc/modprobe.d/blacklist-nouveau.conf && update-initramfs -u && apt install -y ubuntu-drivers-common && ubuntu-drivers autoinstall && apt install -y cuda-toolkit'
+        DRV_CMD='apt install -y --allow-unauthenticated dkms linux-headers-$(uname -r) && echo -e "blacklist nouveau\noptions nouveau modeset=0" > /etc/modprobe.d/blacklist-nouveau.conf && update-initramfs -u && apt install -y --allow-unauthenticated ubuntu-drivers-common && ubuntu-drivers autoinstall && apt install -y --allow-unauthenticated cuda-toolkit'
     else
-        DRV_CMD='apt install -y dkms linux-headers-$(uname -r) && echo -e "blacklist nouveau\noptions nouveau modeset=0" > /etc/modprobe.d/blacklist-nouveau.conf && update-initramfs -u && apt install -y cuda-drivers cuda-toolkit'
+        DRV_CMD='apt install -y --allow-unauthenticated dkms linux-headers-$(uname -r) && echo -e "blacklist nouveau\noptions nouveau modeset=0" > /etc/modprobe.d/blacklist-nouveau.conf && update-initramfs -u && apt install -y --allow-unauthenticated cuda-drivers cuda-toolkit'
     fi
 fi
 
