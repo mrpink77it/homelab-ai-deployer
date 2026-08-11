@@ -110,7 +110,7 @@ clear
 echo -e "${CYAN}"
 echo "  _    _ _                 _   _       _____         _ _       "
 echo " | |  | | |               | | | |     / ____|       (_| |      "
-echo " | |  | | |___  ___ _   _| |_| |___ | (Mâ€šÃ„Ã¹  _   _  _ | |_ ___ "
+echo " | |  | | |___  ___ _   _| |_| |___ | (M     _   _  _ | |_ ___ "
 echo " | |  | | / __|/ __| | | | __| '_ \  \ \   | | | || | | __/ _ \\"
 echo " | |__| | \__ \ (__| |_| | |_| | | | .____) | |_| || | | ||  __/"
 echo "  \____/|_|___/\___|\__,_|\__|_| |_| \_____/ \__,_| |_|\__\___|"
@@ -286,11 +286,11 @@ run_guided_step \
     "Vengono installati gli strumenti essenziali per la compilazione, il monitoraggio\n(htop, nvtop, mc), il supporto di rete e l'interprete Python completo di venv.\nInoltre, viene installato Node.js (necessario per interfacce e servizi web)." \
     "apt install -y curl wget ca-certificates gnupg git build-essential netcat-openbsd mc nvtop htop pciutils python3-full python3-pip python3-venv python3-setuptools python3-wheel && (command -v node &> /dev/null || (curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt install -y nodejs))"
 
-# FASE 3: Repository NVIDIA CUDA
+# FASE 3: Repository NVIDIA CUDA (Corretto per bypassare i controlli SHA1 restrittivi)
 run_guided_step \
     "Configurazione Repository Ufficiale NVIDIA" \
-    "Per abilitare le performance di calcolo accelerato via GPU, lo script scarica la chiave GPG\nufficiale di NVIDIA, configura i repository dedicati e imposta una priorità (pin)\nsulla distribuzione per evitare conflitti con i pacchetti standard della distro." \
-    "curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/3bf863cc.pub | gpg --dearmor --yes -o /etc/apt/keyrings/cuda-archive-keyring.gpg && echo 'deb [trusted=yes signed-by=/etc/apt/keyrings/cuda-archive-keyring.gpg] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /' > /etc/apt/sources.list.d/cuda-official.list && echo -e 'Package: *\nPin: origin developer.download.nvidia.com\nPin-Priority: 1001' > /etc/apt/preferences.d/nvidia-official-pin && apt update"
+    "Per abilitare le performance di calcolo accelerato via GPU, lo script scarica la chiave GPG\nufficiale di NVIDIA, configura i repository dedicati e imposta una priorità (pin)\nsulla distribuzione aggirando i blocchi di sicurezza apt sulle firme legacy." \
+    "curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/3bf863cc.pub | gpg --dearmor --yes -o /etc/apt/keyrings/cuda-archive-keyring.gpg && echo 'deb [signed-by=/etc/apt/keyrings/cuda-archive-keyring.gpg] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /' > /etc/apt/sources.list.d/cuda-official.list && echo -e 'Package: *\nPin: origin developer.download.nvidia.com\nPin-Priority: 1001' > /etc/apt/preferences.d/nvidia-official-pin && apt-get update -o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowngradeToInsecureRepositories=true || apt update"
 
 # FASE 4: Driver NVIDIA e Toolkit CUDA (LXC vs Bare-Metal)
 if [ "$IS_CONTAINER" = true ]; then
