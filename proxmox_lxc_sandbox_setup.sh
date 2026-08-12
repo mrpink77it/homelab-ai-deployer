@@ -5,64 +5,64 @@
 
 set -e
 
-pveam update> /dev/null 2>&1
+pveam update > /dev/null 2>&1
 
 echo "===================================================="
 echo "      🚀 CREAZIONE CONTAINER LXC SANDBOX           "
 echo "===================================================="
 
 # 1. ID Container
-read -p "1) ID Container LXC [es. 100]: " CT_ID </dev/tty
+read -p "1) ID Container LXC [es. 100]: " CT_ID
 while [ -z "$CT_ID" ]; do
-  read -p "   --> Inserisci un ID valido: " CT_ID </dev/tty
+  read -p "   --> Inserisci un ID valido: " CT_ID
 done
 
 # 2. Hostname / Nome Container
-read -p "2) Nome Container / Hostname [default: sandbox-ai]: " HOSTNAME </dev/tty
+read -p "2) Nome Container / Hostname [default: sandbox-ai]: " HOSTNAME
 HOSTNAME=${HOSTNAME:-sandbox-ai}
 
 # 3. Sistema Operativo
 echo -e "\n3) Scegli il Sistema Operativo:"
 echo "   1) Debian 13 (Trixie)"
 echo "   2) Ubuntu 24.04 (Noble)"
-read -p "   Selezione [1-2, default: 1]: " OS_CHOICE </dev/tty
+read -p "   Selezione [1-2, default: 1]: " OS_CHOICE
 OS_CHOICE=${OS_CHOICE:-1}
 
 # 4. Risorse Hardware
-read -p "4) CPU Cores [default: 2]: " CORES </dev/tty
+read -p "4) CPU Cores [default: 2]: " CORES
 CORES=${CORES:-2}
 
-read -p "5) Memoria RAM in MB [default: 2048]: " RAM </dev/tty
+read -p "5) Memoria RAM in MB [default: 2048]: " RAM
 RAM=${RAM:-2048}
 
-read -p "6) Memoria SWAP in MB [default: 512]: " SWAP </dev/tty
+read -p "6) Memoria SWAP in MB [default: 512]: " SWAP
 SWAP=${SWAP:-512}
 
-read -p "7) Dimensione Disco in GB [default: 8]: " DISK </dev/tty
+read -p "7) Dimensione Disco in GB [default: 8]: " DISK
 DISK=${DISK:-8}
 
 # 5. Storage Proxmox
-read -p "8) Storage Proxmox [default: local-lvm]: " STORAGE </dev/tty
+read -p "8) Storage Proxmox [default: local-lvm]: " STORAGE
 STORAGE=${STORAGE:-local-lvm}
 
 # 6. Configurazione Rete
-read -p "9) Bridge di Rete [default: vmbr0]: " BRIDGE </dev/tty
+read -p "9) Bridge di Rete [default: vmbr0]: " BRIDGE
 BRIDGE=${BRIDGE:-vmbr0}
 
 echo -e "\n10) Modalità Indirizzo IP:"
 echo "   1) DHCP (Automatico)"
 echo "   2) Statico (Manuale)"
-read -p "   Selezione [1-2, default: 1]: " NET_CHOICE </dev/tty
+read -p "   Selezione [1-2, default: 1]: " NET_CHOICE
 NET_CHOICE=${NET_CHOICE:-1}
 
 if [ "$NET_CHOICE" -eq "2" ]; then
-    read -p "    --> Indirizzo IP con CIDR [es. 192.168.1.180/24]: " STATIC_IP </dev/tty
+    read -p "    --> Indirizzo IP con CIDR [es. 192.168.1.180/24]: " STATIC_IP
     while [ -z "$STATIC_IP" ]; do
-      read -p "        Inserisci un IP valido con subnet (es. 192.168.1.180/24): " STATIC_IP </dev/tty
+      read -p "        Inserisci un IP valido con subnet (es. 192.168.1.180/24): " STATIC_IP
     done
-    read -p "    --> IP Gateway [es. 192.168.1.1]: " GATEWAY </dev/tty
+    read -p "    --> IP Gateway [es. 192.168.1.1]: " GATEWAY
     while [ -z "$GATEWAY" ]; do
-      read -p "        Inserisci il Gateway della rete: " GATEWAY </dev/tty
+      read -p "        Inserisci il Gateway della rete: " GATEWAY
     done
     NET_PARAM="name=eth0,bridge=$BRIDGE,ip=$STATIC_IP,gw=$GATEWAY"
 else
