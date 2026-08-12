@@ -46,9 +46,11 @@ La selezione dei singoli componenti (Unsloth Studio, OpenCode AI o entrambi).
 🧹 Rimozione (Disinstallazione)
 Eseguendo nuovamente lo script (sudo ./manager.sh) e selezionando l'opzione 2 (Disinstalla), potrai ripulire completamente il sistema rimuovendo ambienti virtuali, file di configurazione e servizi systemd associati in modo pulito.
 
-3. Avvia lo script con privilegi di root
+Avvia lo script con privilegi di root
+
 Bash
 sudo ./manager.sh
+
 Lo script ti guiderà attraverso:
 
 La configurazione della localizzazione di sistema (en_US.UTF-8).
