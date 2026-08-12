@@ -1,49 +1,104 @@
-# Guida Preparazione Sandbox LXC / Server Remoto
+# Guida Preparazione Sandbox (LXC / Bare Metal / Server Remoto)
 
-Questa guida descrive i passaggi per preparare una macchina remota o un container LXC isolato da utilizzare come **Sandbox di Esecuzione** tramite l'Opzione 4 dell'**Homelab AI Deployer**.
+Questa guida descrive i passaggi per preparare una macchina fisica, una VM o un container LXC isolato da utilizzare come **Sandbox di Esecuzione** tramite l'Opzione 4 dell'**Homelab AI Deployer**.
 
 ---
 
 ## 📋 Requisiti Minimi
 Per consentire la configurazione automatica delle chiavi SSH e l'esecuzione di codice remoto tramite l'API Code Runner (`:9000`), la Sandbox deve soddisfare i seguenti requisiti:
+- Sistema Operativo: **Debian 13 (Trixie)** o **Ubuntu 24.04 LTS (Noble)**
 - Server SSH attivo (`openssh-server`)
 - Accesso SSH Root abilitato (`PermitRootLogin yes`)
 - Interprete Python 3 installato (`python3`)
+- Connettività di rete raggiungibile dal Controller Homelab AI
 
 ---
 
-## 🏗️ Opzione 1: Creazione e Preparazione da Zero dalla Shell Proxmox VE
+## 🏗️ Opzione 1: Creazione Guidata da Proxmox VE (LXC)
 
-Se desideri creare un nuovo container LXC Debian dedicato direttamente dalla CLI di Proxmox VE, copia ed esegui questa sequenza sulla shell del nodo Proxmox:
-
-> 💡 *Sostituisci `100` con l'ID desiderato per il container e adatta lo storage (`local-lvm`) o il bridge di rete (`vmbr0`) se diversi dalla tua configurazione.*
+Esegui questo script interattivo direttamente sulla shell del tuo nodo **Proxmox VE**. Ti permetterà di scegliere l'OS (**Debian 13** o **Ubuntu 24.04**) e impostare i parametri del container (ID, RAM, CPU, Disco, Storage e Bridge).
 
 ```bash
-# 1. Scarica l'ultimo template Debian 12 disponibile
-pveam update
-TEMPLATE_NAME=$(pveam available | grep debian-12 | head -n 1 | awk '{print $2}')
+bash -c '$(cat << "EOF"
+pveam update > /dev/null 2>&1
+
+echo "===================================================="
+echo "      🚀 CREAZIONE CONTAINER LXC SANDBOX           "
+echo "===================================================="
+
+read -p "1) ID Container LXC [es. 100]: " CT_ID
+while [ -z "$CT_ID" ]; do
+  read -p "   --> Inserisci un ID valido: " CT_ID
+done
+
+echo -e "\n2) Scegli il Sistema Operativo:"
+echo "   1) Debian 13 (Trixie)"
+echo "   2) Ubuntu 24.04 (Noble)"
+read -p "   Selezione [1-2, default: 1]: " OS_CHOICE
+OS_CHOICE=${OS_CHOICE:-1}
+
+read -p "3) CPU Cores [default: 2]: " CORES
+CORES=${CORES:-2}
+
+read -p "4) Memoria RAM in MB [default: 2048]: " RAM
+RAM=${RAM:-2048}
+
+read -p "5) Dimensione Disco in GB [default: 8]: " DISK
+DISK=${DISK:-8}
+
+read -p "6) Storage Proxmox [default: local-lvm]: " STORAGE
+STORAGE=${STORAGE:-local-lvm}
+
+read -p "7) Bridge di Rete [default: vmbr0]: " BRIDGE
+BRIDGE=${BRIDGE:-vmbr0}
+
+if [ "$OS_CHOICE" -eq "2" ]; then
+    OS_TYPE="ubuntu"
+    SEARCH_KEY="ubuntu-24.04"
+else
+    OS_TYPE="debian"
+    SEARCH_KEY="debian-13"
+fi
+
+echo -e "\n🔍 Ricerca template $SEARCH_KEY..."
+TEMPLATE_NAME=$(pveam available \vert{} grep "$SEARCH_KEY" | head -n 1 | awk '{print $2}')
+
+if [ -z "$TEMPLATE_NAME" ]; then
+    echo "⚠️ Template $SEARCH_KEY non trovato nei repository PVE. Provo ricerca generica per $OS_TYPE..."
+    TEMPLATE_NAME=$(pveam available \vert{} grep "$OS_TYPE" | head -n 1 | awk '{print $2}')
+fi
+
+if [ -z "$TEMPLATE_NAME" ]; then
+    echo "❌ Impossibile trovare un template per $OS_TYPE. Annullamento."
+    exit 1
+fi
+
+echo "⬇️ Downloading template: $TEMPLATE_NAME..."
 pveam download local "$TEMPLATE_NAME"
 
-# 2. Crea il container LXC Sandbox (ID: 100, RAM: 2GB, CPU: 2 Core, IP: DHCP)
-pct create 100 "local:vztmpl/$TEMPLATE_NAME" \
-  --ostype debian \
-  --hostname sandbox-ai \
-  --cores 2 \
-  --memory 2048 \
+echo "📦 Creazione Container LXC ID $CT_ID..."
+pct create "$CT_ID" "local:vztmpl/$TEMPLATE_NAME" \
+  --ostype "$OS_TYPE" \
+  --hostname "sandbox-ai" \
+  --cores "$CORES" \
+  --memory "$RAM" \
   --swap 512 \
-  --storage local-lvm \
-  --rootfs local-lvm:8 \
-  --net0 name=eth0,bridge=vmbr0,ip=dhcp \
+  --storage "$STORAGE" \
+  --rootfs "$STORAGE:$DISK" \
+  --net0 name=eth0,bridge="$BRIDGE",ip=dhcp \
   --unprivileged 0 \
   --onboot 1
 
-# 3. Avvia il container LXC appena creato
-pct start 100
+echo "▶️ Avvio Container LXC $CT_ID..."
+pct start "$CT_ID"
 
-# 4. Attendi l'avvio della rete e configura SSH + Python
+echo "⏳ Attesa avvio rete e configurazione SSH/Python..."
 sleep 5
-pct exec 100 -- bash -c "apt update && apt install -y openssh-server python3 && sed -i 's/#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && systemctl restart ssh"
+pct exec "$CT_ID" -- bash -c "apt update && apt install -y openssh-server python3 && sed -i 's/#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && systemctl restart ssh"
 
-# 5. Stampa l'IP assegnato al container
-echo -ne "\n>>> IP della Sandbox creata: "
-pct exec 100 -- ip -4 addr show eth0 | grep inet | awk '{print $2}' | cut -d/ -f1
+echo -e "\n===================================================="
+echo -ne "✅ CONFIGURAZIONE COMPLETATA!\n👉 IP della Sandbox: "
+pct exec "$CT_ID" -- ip -4 addr show eth0 | grep inet | awk '{print $2}' | cut -d/ -f1
+echo "===================================================="
+EOF
+)'
