@@ -25,7 +25,13 @@ curl -fsSL https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main
 Esegui questo script interattivo direttamente sulla shell del tuo nodo **Proxmox VE**. Ti permetterà di scegliere l'OS (**Debian 13** o **Ubuntu 24.04**) e personalizzare le risorse hardware (ID, RAM, CPU, Disco, Storage e Bridge).
 
 ```bash
-bash -c '$(cat << "EOF"
+#!/usr/bin/env bash
+# ==============================================================================
+# Homelab AI Deployer - Proxmox LXC Sandbox Setup
+# ==============================================================================
+
+set -e
+
 pveam update > /dev/null 2>&1
 
 echo "===================================================="
@@ -106,5 +112,3 @@ echo -e "\n===================================================="
 echo -ne "✅ CONFIGURAZIONE COMPLETATA!\n👉 IP della Sandbox: "
 pct exec "$CT_ID" -- ip -4 addr show eth0 | grep inet | awk '{print $2}' | cut -d/ -f1
 echo "===================================================="
-EOF
-)'
