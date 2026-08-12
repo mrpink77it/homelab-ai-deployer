@@ -1,6 +1,6 @@
-# Guida Preparazione Sandbox (LXC / Bare Metal / Server Remoto)
+# Guida Preparazione Sandbox
 
-Questa guida descrive i passaggi per preparare una macchina fisica, una VM o un container LXC isolato da utilizzare come **Sandbox di Esecuzione** tramite l'Opzione 4 dell'**Homelab AI Deployer**.
+Questa guida descrive i passaggi per preparare un container LXC isolato da utilizzare come **Sandbox di Esecuzione** tramite l'Opzione 4 dell'**Homelab AI Deployer**.
 
 ---
 
@@ -14,7 +14,6 @@ Per consentire la configurazione automatica delle chiavi SSH e l'esecuzione di c
 
 ---
 
-## 🏗️ Opzione 1: Creazione e Preparazione LXC su Proxmox VE (Shell PVE)
 
 Esegui questo script interattivo direttamente sulla shell del tuo nodo **Proxmox VE**. Ti permetterà di scegliere l'OS (**Debian 13** o **Ubuntu 24.04**) e personalizzare le risorse hardware (ID, RAM, CPU, Disco, Storage e Bridge).
 
