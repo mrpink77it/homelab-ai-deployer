@@ -187,11 +187,11 @@ export LANG="en_US.UTF-8"
 export LC_ALL="en_US.UTF-8"
 export LANGUAGE="en_US.UTF-8"
 
-# FASE 1-5: Sistema, Driver, UV e Servizi
-run_guided_step "Aggiornamento e Pulizia Sistema" "Pulizia repository e full-upgrade." "rm -f /etc/crypto-policies/back-ends/apt-sequoia.config && apt update && apt full-upgrade -y"
+# FASE 1-5: Sistema, Driver, UV e Servizi (Include la rimozione preventiva di vecchi file cuda.list corrotti)
+run_guided_step "Aggiornamento e Pulizia Sistema" "Pulizia repository corrotto e full-upgrade." "rm -f /etc/apt/sources.list.d/cuda-official.list /etc/crypto-policies/back-ends/apt-sequoia.config && apt update && apt full-upgrade -y"
 run_guided_step "Installazione Utility e Node.js" "Installazione strumenti base e Node.js." "apt install -y curl wget ca-certificates gnupg git build-essential netcat-openbsd mc nvtop htop pciutils python3-full python3-pip python3-venv && (command -v node &> /dev/null || (curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt install -y nodejs))"
 
-# Repository NVIDIA e Driver (Fix SHA1 policy su Debian Trixie/latest)
+# Repository NVIDIA e Driver (Fix SHA1 policy su Debian Trixie)
 run_guided_step \
     "Configurazione Repository NVIDIA" \
     "Aggiunta repo CUDA con trust esplicito per evitare errori di firme SHA1 deprecate." \
