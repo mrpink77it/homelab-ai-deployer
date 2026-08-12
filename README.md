@@ -1,53 +1,74 @@
-# 🚀 UNSLOTH SUITE — Unsloth + ComfyUI + OpenCode Orchestration Suite
+# Unsloth Suite Manager 🚀
 
-Una suite completa di gestione e orchestrazione automatizzata disegnata per deploy su **Debian** e **Ubuntu** (con supporto nativo per **Container LXC Proxmox** con GPU Pass-Through).
+[![Shell Script](https://img.shields.io/badge/shell_script-bash-blue.svg)](https://www.gnu.org/software/bash/)
+[![Linux](https://img.shields.io/badge/OS-Debian_%2F_Ubuntu-orange.svg)](https://www.debian.org/)
+[![NVIDIA CUDA](https://img.shields.io/badge/NVIDIA-CUDA-green.svg)](https://developer.nvidia.com/cuda-toolkit)
 
-Questo strumento gestisce l'intero ciclo di vita dell'ambiente AI: dall'allineamento automatico dei driver NVIDIA/CUDA con l'Host Proxmox, fino all'installazione e orchestrazione via `systemd` di **Unsloth**, **ComfyUI** e **OpenCode Interpreter**.
+**Unsloth Suite Manager** è uno script Bash avanzato e interattivo progettato per automatizzare la configurazione, l'installazione e la rimozione di ambienti di intelligenza artificiale su distribuzioni **Debian** e **Ubuntu**. 
 
----
-
-## 📋 Indice
-- [Caratteristiche Principali](#-caratteristiche-principali)
-- [Prerequisiti e Requisiti di Sistema](#-prerequisiti-e-requisiti-di-sistema)
-- [Requisiti LXC Proxmox (Pass-Through GPU)](#-requisiti-lxc-proxmox-pass-through-gpu)
-- [Installazione Rapida](#-installazione-rapida)
-- [Utilizzo dello Script](#-utilizzo-dello-script)
-  - [Interfaccia Interattiva (CLI Menu)](#1-interfaccia-interattiva-cli-menu)
-  - [Utilizzo da Riga di Comando (CLI Flags)](#2-utilizzo-da-riga-di-comando-cli-flags)
-- [Architettura della Suite](#-architettura-della-suite)
-- [Gestione dei Servizi Systemd](#-gestione-dei-servizi-systemd)
+Supporta nativamente sia ambienti **Bare-Metal / VM** che **Container LXC (es. Proxmox VE)** con accelerazione GPU NVIDIA.
 
 ---
 
-## ✨ Caratteristiche Principali
+## 🛠️ Servizi Inclusi
 
-* **NVIDIA Driver Host-Matching Auto-Detect:** Legge la versione esatta dei driver usati dal kernel dell'Host direttamente dal container LXC ed installa l'esatto branch user-space corrispondente.
-* **Stack GPU Completo:** Supporto per l'installazione granulare di Driver NVIDIA, CUDA Toolkit e NVIDIA Container Toolkit (per Docker).
-* **Integrazione OpenCode Interpreter / Studio:** Configurazione automatica delle variabili d'ambiente (`OPENAI_API_BASE`, `OPENAI_API_KEY`) per collegare OpenCode direttamente all'endpoint LLM di Unsloth.
-* **Orchestratore Python:** Script intermedio automatico che fa da bridge tra Unsloth (generazione testo/prompt) e ComfyUI (generazione immagini).
-* **Gestione Daemon Systemd:** Registrazione, avvio, arresto e monitoraggio dei servizi in background con un solo comando.
-* **Menu Grafico ASCII + CLI Flags:** Utilizzabile sia in modalità guidata che tramite scripting/automazioni CLI.
+1. **Unsloth & Unsloth Studio** (Porta `8888`): Ambiente JupyterLab ottimizzato per il fine-tuning efficiente di Large Language Models (LLM) tramite PyTorch e Unsloth.
+2. **OpenCode AI Web Service** (Porta `8000`): Servizio web per l'assistenza alla programmazione e sviluppo assistito da IA.
 
 ---
 
-## 💻 Prerequisiti e Requisiti di Sistema
+## ⚙️ Caratteristiche Principali
 
-* **Sistema Operativo Supportato:** Debian 11/12+, Ubuntu 20.04 / 22.04 / 24.04 LTS.
-* **Privilegi:** Utente con permessi `sudo`.
-* **Hardware:** Scheda Video NVIDIA (consigliate GPU con al minimo 8GB-12GB VRAM per Unsloth + ComfyUI).
+* **Rilevamento Ambiente Intelligente:** Riconosce automaticamente se è in esecuzione su un server fisico/VM o all'interno di un container LXC (configurando correttamente i driver userspace e il toolkit CUDA).
+* **Gestione Avanzata Repository NVIDIA:** Aggira i blocchi di sicurezza moderni di APT legati alle firme SHA1 legacy e alla sincronizzazione dei mirror.
+* **Interfaccia Guidata in Tempo Reale:** Mostra un pannello di controllo pulito con l'avanzamento dei log in tempo reale.
+* **Package Manager Moderno:** Sfrutta **Astral UV** per velocizzare drasticamente l'installazione delle dipendenze Python.
+* **Gestione a Demoni (Systemd):** Tutti i servizi vengono configurati come servizi di sistema per garantire l'avvio automatico e la persistenza in background.
 
 ---
 
-## ⚙️ Requisiti LXC Proxmox (Pass-Through GPU)
+## 📥 Requisiti di Sistema
 
-Se si installa la suite all'interno di un container LXC su Proxmox VE, assicurarsi che nel file di configurazione del container sull'Host (`/etc/pve/lxc/<ID_CONTAINER>.conf`) siano presenti i pass-through per le periferiche NVIDIA:
+* **Sistema Operativo:** Debian 12+ o Ubuntu 22.04 / 24.04 (consigliato OS pulito).
+* **Hardware:** GPU NVIDIA con supporto CUDA (consigliata VRAM adeguata).
+* **Privilegi:** Accesso root (`sudo`).
 
-```text
-lxc.cgroup2.devices.allow: c 195:* rwm
-lxc.cgroup2.devices.allow: c 239:* rwm
-lxc.mount.entry: /dev/nvidia0 dev/nvidia0 none bind,optional,create=file
-lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
-lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
-lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,create=file
+---
 
--- VER: 0.0.1 --
+Lo script ti guiderà attraverso:
+
+La configurazione della localizzazione di sistema (en_US.UTF-8).
+
+La scelta se Installare o Disinstallare i servizi.
+
+La selezione dei singoli componenti (Unsloth Studio, OpenCode AI o entrambi).
+
+🧹 Rimozione (Disinstallazione)
+Eseguendo nuovamente lo script (sudo ./manager.sh) e selezionando l'opzione 2 (Disinstalla), potrai ripulire completamente il sistema rimuovendo ambienti virtuali, file di configurazione e servizi systemd associati in modo pulito.
+
+
+
+## 🚀 Istruzioni per l'uso
+
+### 1. Clona o scarica lo script
+Salva lo script principale con il nome `manager.sh` nella tua macchina di destinazione.
+
+### 2. Rendi lo script eseguibile
+Apri il terminale ed esegui il comando:
+```bash
+chmod +x manager.sh
+
+
+Lo script ti guiderà attraverso:
+
+La configurazione della localizzazione di sistema (en_US.UTF-8).
+
+La scelta se Installare o Disinstallare i servizi.
+
+La selezione dei singoli componenti (Unsloth Studio, OpenCode AI o entrambi).
+
+🧹 Rimozione (Disinstallazione)
+Eseguendo nuovamente lo script (sudo ./manager.sh) e selezionando l'opzione 2 (Disinstalla), potrai ripulire completamente il sistema rimuovendo ambienti virtuali, file di configurazione e servizi systemd associati in modo pulito.
+
+📄 Licenza
+Distribuito sotto licenza MIT. Sentiti libero di forkare, migliorare e adattare questo script alle tue esigenze.
