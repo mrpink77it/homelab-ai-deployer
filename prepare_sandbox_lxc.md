@@ -21,6 +21,8 @@ Apri la shell del tuo nodo Proxmox VE e incolla il seguente comando:
 ```bash
 wget -O setup.sh https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/proxmox_lxc_sandbox_setup.sh && bash setup.sh && rm setup.sh```
 
+---
+
 Esegui questo script interattivo direttamente sulla shell del tuo nodo **Proxmox VE**. Ti permetterà di scegliere l'OS (**Debian 13** o **Ubuntu 24.04**) e personalizzare le risorse hardware (ID, RAM, CPU, Disco, Storage e Bridge).
 
 ```bash
