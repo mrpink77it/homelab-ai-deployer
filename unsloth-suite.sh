@@ -119,7 +119,7 @@ echo -e "${NC}"
 
 draw_box "BENVENUTO NEL MANAGER UFFICIALE PER AMBIENTI AI & AUTOMAZIONE"
 echo -e " Questo script consente di configurare in modo sicuro e pulito suite di intelligenza"
-echo -e " artificiale avanzate (Unsloth Studio, ComfyUI, OpenCode AI) su distribuzioni"
+echo -e " artificiale avanzate (Unsloth Studio, OpenCode AI) su distribuzioni"
 echo -e " Debian e Ubuntu (supporto nativo Bare-Metal e Container LXC/Proxmox)."
 echo ""
 echo "+------------------------------------------------------------------------------+"
@@ -137,24 +137,20 @@ if [ "$MAIN_ACTION" == "2" ]; then
     draw_box "PANNELLO DI DISINSTALLAZIONE SERVIZI"
     echo "Seleziona i servizi da RIMUOVERE (numeri separati da spazio):"
     echo "  1) Unsloth & Unsloth Studio"
-    echo "  2) ComfyUI"
-    echo "  3) OpenCode AI Web Service"
-    echo "  4) Tutti i servizi sopra indicati"
+    echo "  2) OpenCode AI Web Service"
+    echo "  3) Tutti i servizi sopra indicati"
     echo "------------------------------------------------------------------------------"
     read -rp "Scelta: " -a UNINSTALL_CHOICES
 
     UNINSTALL_UNSLOTH=false
-    UNINSTALL_COMFY=false
     UNINSTALL_OPENCODE=false
 
     for choice in "${UNINSTALL_CHOICES[@]}"; do
         case "$choice" in
             1) UNINSTALL_UNSLOTH=true ;;
-            2) UNINSTALL_COMFY=true ;;
-            3) UNINSTALL_OPENCODE=true ;;
-            4) 
+            2) UNINSTALL_OPENCODE=true ;;
+            3) 
                UNINSTALL_UNSLOTH=true
-               UNINSTALL_COMFY=true
                UNINSTALL_OPENCODE=true
                ;;
             *) log_warn "Opzione '$choice' non valida, ignorata." ;;
@@ -171,15 +167,6 @@ if [ "$MAIN_ACTION" == "2" ]; then
         echo ""
     fi
 
-    if [ "$UNINSTALL_COMFY" = true ]; then
-        log_info "Rimozione ComfyUI:"
-        do_uninstall_step "Arresto del servizio systemd" "systemctl stop comfyui.service"
-        do_uninstall_step "Disabilitazione del servizio all'avvio" "systemctl disable comfyui.service"
-        do_uninstall_step "Rimozione configurazione systemd" "rm -f /etc/systemd/system/comfyui.service"
-        do_uninstall_step "Cancellazione directory ComfyUI" "rm -rf ${REAL_HOME}/ComfyUI"
-        echo ""
-    fi
-
     if [ "$UNINSTALL_OPENCODE" = true ]; then
         log_info "Rimozione OpenCode AI:"
         do_uninstall_step "Arresto del servizio systemd" "systemctl stop opencode.service"
@@ -192,7 +179,7 @@ if [ "$MAIN_ACTION" == "2" ]; then
         echo ""
     fi
 
-    if [ "$UNINSTALL_UNSLOTH" = true ] || [ "$UNINSTALL_COMFY" = true ] || [ "$UNINSTALL_OPENCODE" = true ]; then
+    if [ "$UNINSTALL_UNSLOTH" = true ] || [ "$UNINSTALL_OPENCODE" = true ]; then
         do_uninstall_step "Ricaricamento demoni di sistema" "systemctl daemon-reload"
         echo ""
         log_ok "Disinstallazione completata con successo."
@@ -245,31 +232,27 @@ clear
 draw_box "SELEZIONE SERVIZI DA INSTALLARE"
 echo "Seleziona i servizi da INSTALLARE (numeri separati da spazio):"
 echo "  1) Unsloth & Unsloth Studio (Porta 8888)"
-echo "  2) ComfyUI                  (Porta 8188)"
-echo "  3) OpenCode AI Web Service  (Porta 8000)"
-echo "  4) Tutti i servizi sopra indicati"
+echo "  2) OpenCode AI Web Service  (Porta 8000)"
+echo "  3) Tutti i servizi sopra indicati"
 echo "------------------------------------------------------------------------------"
 read -rp "Scelta: " -a INSTALL_CHOICES
 
 INSTALL_UNSLOTH=false
-INSTALL_COMFY=false
 INSTALL_OPENCODE=false
 
 for choice in "${INSTALL_CHOICES[@]}"; do
     case "$choice" in
         1) INSTALL_UNSLOTH=true ;;
-        2) INSTALL_COMFY=true ;;
-        3) INSTALL_OPENCODE=true ;;
-        4) 
+        2) INSTALL_OPENCODE=true ;;
+        3) 
            INSTALL_UNSLOTH=true
-           INSTALL_COMFY=true
            INSTALL_OPENCODE=true
            ;;
         *) log_warn "Opzione '$choice' non valida, ignorata." ;;
     esac
 done
 
-if [ "$INSTALL_UNSLOTH" = false ] && [ "$INSTALL_COMFY" = false ] && [ "$INSTALL_OPENCODE" = false ]; then
+if [ "$INSTALL_UNSLOTH" = false ] && [ "$INSTALL_OPENCODE" = false ]; then
     log_error "Nessun servizio selezionato. Annullamento."
     exit 1
 fi
@@ -286,13 +269,13 @@ run_guided_step \
     "Vengono installati gli strumenti essenziali per la compilazione, il monitoraggio\n(htop, nvtop, mc), il supporto di rete e l'interprete Python completo di venv.\nInoltre, viene installato Node.js (necessario per interfacce e servizi web)." \
     "apt install -y curl wget ca-certificates gnupg git build-essential netcat-openbsd mc nvtop htop pciutils python3-full python3-pip python3-venv python3-setuptools python3-wheel && (command -v node &> /dev/null || (curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt install -y nodejs))"
 
-# FASE 3: Repository NVIDIA CUDA (Corretto per bypassare i controlli SHA1 restrittivi)
+# FASE 3: Repository NVIDIA CUDA
 run_guided_step \
     "Configurazione Repository Ufficiale NVIDIA" \
     "Per abilitare le performance di calcolo accelerato via GPU, lo script scarica la chiave GPG\nufficiale di NVIDIA, configura i repository dedicati e imposta una priorità (pin)\nsulla distribuzione aggirando i blocchi di sicurezza apt sulle firme legacy." \
     "curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/3bf863cc.pub | gpg --dearmor --yes -o /etc/apt/keyrings/cuda-archive-keyring.gpg && echo 'deb [signed-by=/etc/apt/keyrings/cuda-archive-keyring.gpg] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /' > /etc/apt/sources.list.d/cuda-official.list && echo -e 'Package: *\nPin: origin developer.download.nvidia.com\nPin-Priority: 1001' > /etc/apt/preferences.d/nvidia-official-pin && apt-get update -o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowngradeToInsecureRepositories=true || apt update"
 
-# FASE 4: Driver NVIDIA e Toolkit CUDA (LXC vs Bare-Metal) - Con --allow-unauthenticated
+# FASE 4: Driver NVIDIA e Toolkit CUDA (LXC vs Bare-Metal)
 if [ "$IS_CONTAINER" = true ]; then
     DRV_CMD='if [ -f "/proc/driver/nvidia/version" ]; then NVRM_VERSION=$(grep "Kernel Module" /proc/driver/nvidia/version | awk "{print \$8}"); MAJOR_VERSION=$(echo "$NVRM_VERSION" | cut -d"." -f1); apt install -y --allow-unauthenticated "nvidia-utils-${MAJOR_VERSION}" cuda-toolkit || { RUN_FILE="NVIDIA-Linux-x86_64-${NVRM_VERSION}.run"; wget -q "https://us.download.nvidia.com/XFree86/Linux-x86_64/${NVRM_VERSION}/${RUN_FILE}" && chmod +x "$RUN_FILE" && ./"$RUN_FILE" --no-kernel-module --silent && rm -f "$RUN_FILE"; apt install -y --allow-unauthenticated cuda-toolkit; }; else apt install -y --allow-unauthenticated cuda-toolkit; fi'
     DRV_DESC="Ambiente LXC (Container Proxmox) rilevato. Lo script analizza la versione dei driver\ninstallati sull'Host Proxmox e configura i componenti userspace (inclusi i comandi\ncome nvidia-smi) e il toolkit CUDA all'interno del container."
@@ -335,26 +318,7 @@ if [ "$INSTALL_UNSLOTH" = true ]; then
         "cat <<EOF > /etc/systemd/system/unsloth-studio.service\n[Unit]\nDescription=Unsloth Studio AI Service\nAfter=network.target\n\n[Service]\nType=simple\nUser=${REAL_USER}\nWorkingDirectory=${REAL_HOME}\nEnvironment=\"PATH=/usr/local/cuda/bin:${UNSLOTH_DIR}/bin:/usr/bin:/bin\"\nEnvironment=\"LD_LIBRARY_PATH=/usr/local/cuda/lib64\"\nEnvironment=\"LANG=en_US.UTF-8\"\nEnvironment=\"LC_ALL=en_US.UTF-8\"\nExecStart=${UNSLOTH_DIR}/bin/jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --ServerApp.token='' --ServerApp.password='' --allow-root\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\nEOF\nsystemctl daemon-reload && systemctl enable unsloth-studio.service && systemctl restart unsloth-studio.service"
 fi
 
-# FASE 7: ComfyUI
-if [ "$INSTALL_COMFY" = true ]; then
-    COMFY_DIR="${REAL_HOME}/ComfyUI"
-    run_guided_step \
-        "Clonazione e Setup di ComfyUI" \
-        "Viene clonato il repository ufficiale di ComfyUI da GitHub, creato il venv isolato\ne installata la versione di PyTorch 2.5.1 in abbinamento alle dipendenze del file requirements.txt." \
-        "su - ${REAL_USER} -c 'if [ ! -d \"${COMFY_DIR}\" ]; then git clone https://github.com/comfyanonymous/ComfyUI.git ${COMFY_DIR}; fi; export PATH=/usr/local/cuda/bin:\$PATH; export LD_LIBRARY_PATH=/usr/local/cuda/lib64:\$LD_LIBRARY_PATH; cd ${COMFY_DIR}; uv venv venv --python 3.12 --seed; source venv/bin/activate; uv pip install --upgrade pip setuptools wheel; uv pip install \"torch==2.5.1\" \"torchvision==0.20.1\" \"torchaudio==2.5.1\" --index-url https://download.pytorch.org/whl/cu124; uv pip install -r requirements.txt'"
-
-    COMFY_EXTRA_FLAGS=""
-    if ! command -v nvidia-smi &>/dev/null || ! nvidia-smi &>/dev/null; then
-        COMFY_EXTRA_FLAGS="--cpu"
-    fi
-
-    run_guided_step \
-        "Configurazione Servizio Systemd per ComfyUI" \
-        "Creazione del demone di sistema per l'esecuzione persistente di ComfyUI sulla porta 8188." \
-        "cat <<EOF > /etc/systemd/system/comfyui.service\n[Unit]\nDescription=ComfyUI AI Service\nAfter=network.target\n\n[Service]\nType=simple\nUser=${REAL_USER}\nWorkingDirectory=${COMFY_DIR}\nEnvironment=\"PATH=/usr/local/cuda/bin:/usr/bin:/bin\"\nEnvironment=\"LD_LIBRARY_PATH=/usr/local/cuda/lib64\"\nEnvironment=\"LANG=en_US.UTF-8\"\nEnvironment=\"LC_ALL=en_US.UTF-8\"\nExecStart=${COMFY_DIR}/venv/bin/python main.py --listen 0.0.0.0 --port 8188 ${COMFY_EXTRA_FLAGS}\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\nEOF\nsystemctl daemon-reload && systemctl enable comfyui.service && systemctl restart comfyui.service"
-fi
-
-# FASE 8: OpenCode AI
+# FASE 7: OpenCode AI
 if [ "$INSTALL_OPENCODE" = true ]; then
     run_guided_step \
         "Installazione OpenCode AI Web Service" \
@@ -399,11 +363,8 @@ echo "--------------------------------------------------------------------------
 if [ "$INSTALL_UNSLOTH" = true ]; then
     echo -e " 1. Unsloth Studio: http://${SERVER_IP}:8888  $(check_port 8888)"
 fi
-if [ "$INSTALL_COMFY" = true ]; then
-    echo -e " 2. ComfyUI:        http://${SERVER_IP}:8188  $(check_port 8188)"
-fi
 if [ "$INSTALL_OPENCODE" = true ]; then
-    echo -e " 3. OpenCode Web:   http://${SERVER_IP}:8000  $(check_port 8000)"
+    echo -e " 2. OpenCode Web:   http://${SERVER_IP}:8000  $(check_port 8000)"
 fi
 
 echo "=============================================================================="
