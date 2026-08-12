@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# UNSLOTH SUITE MANAGER - v0.5 (12.08.2026)
+# UNSLOTH SUITE MANAGER - v0.6.1 (12.08.2026)
 # Gestore Avanzato Installazione & Disinstallazione Servizi AI (Con Code Runner)
 # ==============================================================================
 
@@ -78,6 +78,34 @@ run_guided_step() {
         echo -e "${RED}Ultime righe del log di errore:${NC}"
         tail -n 15 "$LOG_FILE"
         exit 1
+    fi
+}
+
+# Funzione isolata per l'installazione dei Driver NVIDIA, CUDA e Container Toolkit
+install_nvidia_drivers_and_cuda() {
+    # Repository NVIDIA Container Toolkit
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null || true
+    curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+        sed 's#deb [^ ]*#& [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg]#' > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    apt update
+
+    if [ "$IS_CONTAINER" = true ]; then
+        if [ -f "/proc/driver/nvidia/version" ]; then
+            local nv_ver
+            nv_ver=$(grep "Kernel Module" /proc/driver/nvidia/version | awk '{print $8}')
+            echo "Driver Host Rilevato: $nv_ver. Download installer userspace..."
+            
+            wget -q "https://us.download.nvidia.com/XFree86/Linux-x86_64/${nv_ver}/NVIDIA-Linux-x86_64-${nv_ver}.run" -O /tmp/nvidia-driver.run
+            chmod +x /tmp/nvidia-driver.run
+            /tmp/nvidia-driver.run -s --no-kernel-module --no-drm --ui=none || true
+            rm -f /tmp/nvidia-driver.run
+        fi
+        apt install -y --allow-unauthenticated cuda-toolkit nvidia-container-toolkit || true
+    else
+        apt install -y --allow-unauthenticated dkms linux-headers-$(uname -r)
+        echo -e "blacklist nouveau\noptions nouveau modeset=0" > /etc/modprobe.d/blacklist-nouveau.conf
+        update-initramfs -u
+        apt install -y --allow-unauthenticated cuda-drivers cuda-toolkit nvidia-container-toolkit
     fi
 }
 
@@ -164,7 +192,7 @@ echo " | |  | | |___  ___ _   _| |_| |___ | (M     _   _  _ | |_ ___ "
 echo " | |  | | / __|/ __| | | | __| '_ \  \ \   | | | || | | __/ _ \\"
 echo " | |__| | \__ \ (__| |_| | |_| | | | .____) | |_| || | | ||  __/"
 echo "  \____/|_|___/\___|\__,_|\__|_| |_| \_____/ \__,_| |_|\__\___|"
-echo "                                           v0.5 (12.08.2026)   "
+echo "                                           v0.6.1 (12.08.2026) "
 echo -e "${NC}"
 
 draw_box "BENVENUTO NEL MANAGER UFFICIALE PER AMBIENTI AI & AUTOMAZIONE"
@@ -253,14 +281,11 @@ run_guided_step \
     "Aggiunta repo CUDA con trust esplicito per evitare errori di firme SHA1 deprecate." \
     "echo 'deb [trusted=yes] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /' > /etc/apt/sources.list.d/cuda-official.list && apt update"
 
-if [ "$IS_CONTAINER" = true ]; then
-    DRV_CMD='if [ -f "/proc/driver/nvidia/version" ]; then NVRM_VERSION=$(grep "Kernel Module" /proc/driver/nvidia/version | awk "{print \$8}"); MAJOR_VERSION=$(echo "$NVRM_VERSION" | cut -d"." -f1); apt install -y --allow-unauthenticated "nvidia-utils-${MAJOR_VERSION}" cuda-toolkit || true; else apt install -y --allow-unauthenticated cuda-toolkit; fi'
-    DRV_DESC="Ambiente Container rilevato. Configurazione toolkit e userspace."
-else
-    DRV_DESC="Ambiente Bare-Metal / Macchina Fisica rilevato. Installazione driver completi."
-    DRV_CMD='apt install -y --allow-unauthenticated dkms linux-headers-$(uname -r) && echo -e "blacklist nouveau\noptions nouveau modeset=0" > /etc/modprobe.d/blacklist-nouveau.conf && update-initramfs -u && apt install -y --allow-unauthenticated cuda-drivers cuda-toolkit'
-fi
-run_guided_step "Installazione Driver e Toolkit CUDA" "$DRV_DESC" "$DRV_CMD"
+# Installazione Driver Userspace/Kernel, CUDA Toolkit e Container Toolkit
+run_guided_step \
+    "Installazione Driver NVIDIA, CUDA e Container Toolkit" \
+    "Setup completo dell'ambiente GPU e dei pacchetti toolkit." \
+    "install_nvidia_drivers_and_cuda"
 
 # Astral UV e Unsloth
 run_guided_step "Installazione Astral UV" "Installazione package manager in Rust." "curl -LsSf https://astral.sh/uv/install.sh | sh"
