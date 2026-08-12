@@ -60,11 +60,11 @@ else
 fi
 
 echo -e "\n🔍 Ricerca template $SEARCH_KEY..."
-TEMPLATE_NAME=$(pveam available \vert{} grep "$SEARCH_KEY" | head -n 1 | awk '{print $2}')
+TEMPLATE_NAME=$(pveam available | grep "$SEARCH_KEY" | head -n 1 | awk '{print $2}')
 
 if [ -z "$TEMPLATE_NAME" ]; then
     echo "⚠️ Template $SEARCH_KEY non trovato nei repository PVE. Provo ricerca generica per $OS_TYPE..."
-    TEMPLATE_NAME=$(pveam available \vert{} grep "$OS_TYPE" | head -n 1 | awk '{print $2}')
+    TEMPLATE_NAME=$(pveam available | grep "$OS_TYPE" | head -n 1 | awk '{print $2}')
 fi
 
 if [ -z "$TEMPLATE_NAME" ]; then
@@ -91,9 +91,9 @@ pct create "$CT_ID" "local:vztmpl/$TEMPLATE_NAME" \
 echo "▶️ Avvio Container LXC $CT_ID..."
 pct start "$CT_ID"
 
-echo "⏳ Attesa avvio rete e configurazione SSH/Python..."
+echo "⏳ Attesa avvio rete e configurazione SSH/Python/UTF-8..."
 sleep 5
-pct exec "$CT_ID" -- bash -c "apt update && apt install -y openssh-server python3 && sed -i 's/#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && systemctl restart ssh"
+pct exec "$CT_ID" -- bash -c "apt update && apt install -y openssh-server python3 locales && sed -i '/^# *en_US.UTF-8 UTF-8/s/^# //' /etc/locale.gen && locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 && sed -i 's/#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && systemctl restart ssh"
 
 echo -e "\n===================================================="
 echo -ne "✅ CONFIGURAZIONE COMPLETATA!\n👉 IP della Sandbox: "
