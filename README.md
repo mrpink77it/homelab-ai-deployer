@@ -1,5 +1,23 @@
 # 🦥 Homelab AI Deployer
 
+> **La tua suite AI per l'Homelab: genera ed esegue codice automaticamente in totale sicurezza.**
+
+Benvenuto in **Homelab AI Deployer**! Questo progetto nasce per mettere a tua disposizione un assistente AI avanzato in grado di **scrivere ed eseguire automaticamente codice** direttamente nel tuo laboratorio domestico (Homelab) o ambiente **Proxmox VE**.
+
+Non dovrai più copiare e incollare manualmente gli script generati dall'IA: il sistema permette all'Intelligenza Artificiale di creare il codice, inviarlo ed eseguirlo in autonomia, gestendo al contempo tutta la configurazione complessa di driver NVIDIA, CUDA e ambienti Python.
+
+---
+
+### 💡 Come funziona? (Generazione ed Esecuzione Automatica)
+
+Il sistema sfrutta un'architettura a due componenti per unire **automazione totale** e **massima sicurezza**:
+
+1. **🧠 Controller (L'Ingegneria ed Elaborazione AI - con GPU):** 
+   È il "cervello" della tua infrastruttura. Qui girano i modelli AI (tramite OpenCode AI e Unsloth Studio) che analizzano le tue richieste, **ragionano e generano il codice** sfruttando la potenza della tua scheda video.
+
+2. **🛡️ Sandbox (L'Esecutore Sicuro):** 
+   È un container LXC o macchina virtuale isolata dal resto della rete. Quando l'IA genera uno script o un comando, **lo invia ed esegue automaticamente all'interno della Sandbox**. L'IA riceve il risultato dell'esecuzione (o eventuali errori) e può correggerlo da sola, il tutto senza toccare né rischiare di danneggiare il tuo server principale.
+
 [![Status WIP](https://img.shields.io/badge/status-Work_in_Progress-yellow.svg)](https://github.com/mrpink77it/homelab-ai-deployer)
 [![shell script](https://img.shields.io/badge/shell_script-bash-1f425f.svg)](https://www.gnu.org/software/bash/)
 [![OS](https://img.shields.io/badge/OS-Debian_%2F_Ubuntu-orange.svg)](https://debian.org)
