@@ -18,7 +18,6 @@
 * 🛡️ **Setup Automatizzato Sandbox**: Script helper dedicato (`sandbox_setup.sh`) per la preparazione lampo di nodi esecutori LXC/VM remoti.
 * 🎮 **Stack GPU & CUDA Completo**: Installazione e configurazione automatica dei driver NVIDIA, CUDA Toolkit e NVIDIA Container Toolkit (con fix nativi per container LXC e gestione trust SHA1 per Debian 12 / Trixie).
 * 🦥 **Unsloth Studio**: Ambiente di sviluppo per Fine-Tuning & Inferenza LLM ad alte prestazioni via Astral `uv` con Jupyter Lab (`:8888`).
-* 🎨 **ComfyUI**: Piattaforma nodale per la generazione di immagini e video AI (`:8188`).
 * 💻 **OpenCode AI Web**: Piattaforma web di sviluppo assistito da intelligenza artificiale (`:8000`).
 * 🛡️ **Code Runner API (Sandbox Execution)**: Microservizio FastAPI (`:9000`) per eseguire codice generato dall'AI in un ambiente remoto isolato via SSH.
 * 🧹 **Gestione & Uninstall Pulito**: Script integrato per la rimozione selettiva o totale dei servizi e delle unità `systemd`.
@@ -30,7 +29,6 @@
 | Servizio | Porta | Descrizione |
 | :--- | :---: | :--- |
 | **Unsloth Studio** | `8888` | Interfaccia Jupyter Lab per Fine-Tuning & Inferenza LLM |
-| **ComfyUI** | `8188` | Interfaccia grafica nodale per Generative AI (Images/Video) |
 | **OpenCode AI** | `8000` | Interfaccia Web OpenCode |
 | **Code Runner API** | `9000` | Endpoint REST FastAPI per l'esecuzione remota sicura in Sandbox |
 
@@ -73,7 +71,140 @@ L'architettura separa nettamente il **Controller AI** (dove girano i modelli, le
 +---------------------------------+             SSH             +---------------------------------+
 |         CONTROLLER AI           |---------------------------->|          SANDBOX LXC/VM         |
 |  - Unsloth Studio (Porta 8888)  |   Exec: python3 -c "..."    |  - Configurato da               |
-|  - ComfyUI        (Porta 8188)  |                             |    sandbox_setup.sh             |
-|  - OpenCode AI    (Porta 8000)  |                             |  - Python 3 / OpenSSH           |
-|  - Code Runner    (Porta 9000)  |<----------------------------|  - Nessun accesso GPU Host / LAN |
+|  - OpenCode AI    (Porta 8000)  |                             |    sandbox_setup.sh             |
+|  - Code Runner    (Porta 9000)  |<----------------------------|  - Python 3 / OpenSSH           |
 +---------------------------------+        stdout / stderr      +---------------------------------+
+```
+
+### Configurazione del Nodo Sandbox (In 2 Passaggi)
+
+Per predisporre un nuovo container LXC o VM da utilizzare come Sandbox isolata:
+
+#### 1. Prepara il Nodo Sandbox
+Esegui lo script `sandbox_setup.sh` all'interno del container/VM destinato a fare da Sandbox per installare le dipendenze minimali (Python 3, OpenSSH Server) e configurare le regole SSH:
+
+```bash
+# Esegui sulla macchina Sandbox:
+curl -fsSL [https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/sandbox_setup.sh](https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/sandbox_setup.sh) | sudo bash
+```
+
+#### 2. Associa Controller ➔ Sandbox
+Dal Controller AI, genera ed invia la chiave SSH verso l'IP della Sandbox:
+
+```bash
+# 1. Genera la chiave SSH sul Controller (se non presente)
+ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519
+
+# 2. Autorizza la chiave sul nodo Sandbox
+ssh-copy-id -i /root/.ssh/id_ed25519.pub root@<IP_SANDBOX>
+
+# 3. Test di esecuzione via API Code Runner (:9000)
+curl -X POST http://localhost:9000/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code": "import sys, platform; print(f\"Sandbox attiva! OS: {platform.system()} - Python: {sys.version}\")",
+    "sandbox_ip": "<IP_SANDBOX>"
+  }'
+```
+
+---
+
+## 🎛️ Opzioni del Menu `manager.sh`
+
+Eseguendo `./manager.sh` si accederà al menu interattivo TUI:
+
+1. **`1) INSTALLA Servizi`**: Installazione automatica completa (Driver GPU, CUDA Toolkit, Unsloth, OpenCode AI, Code Runner API).
+2. **`2) VERIFICA Stato`**: Controllo dello stato dei servizi `systemd` e della disponibilità GPU via PyTorch/CUDA.
+3. **`3) AGGIORNA Componenti`**: Git pull e aggiornamento dipendenze per OpenCode AI e Unsloth.
+4. **`4) CONFIGURA Sandbox`**: Helper interattivo per la gestione ed il test dell'endpoint API remota.
+5. **`5) DISINSTALLA`**: Rimozione completa delle directory, configurazioni ed unità `systemd`.
+
+---
+
+## 💾 Gestione Storage e Modelli
+
+Per evitare di esaurire lo spazio sul disco root dell'LXC, le directory principali di lavoro e di cache dei modelli sono organizzate come segue:
+
+* **Cache Modelli HuggingFace / Unsloth**: `~/.cache/huggingface/hub`
+* **Ambiente Virtuale Python (`uv`)**: `/root/unsloth_env`
+* **Servizio Code Runner**: `/opt/code_runner/`
+
+---
+
+## 🔍 Verifica e Gestione Servizi
+
+Dopo il completamento dello script, puoi verificare il corretto riconoscimento della GPU e di CUDA eseguendo:
+
+```bash
+/root/unsloth_env/bin/python3 -c "import torch; print('CUDA disponibile:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0))"
+```
+
+### Gestione tramite Systemd
+
+Puoi controllare i singoli servizi tramite `systemctl`:
+
+* **Unsloth Studio**: `systemctl status unsloth-studio.service`
+* **OpenCode AI**: `systemctl status opencode.service`
+* **Code Runner API**: `systemctl status code-runner.service`
+
+---
+
+## ❓ Risoluzione Problemi (FAQ)
+
+<details>
+<summary><b><code>nvidia-smi</code> funziona nell'LXC ma PyTorch restituisce <code>CUDA available: False</code></b></summary>
+
+Assicurati che i permessi dei device `/dev/nvidia*` all'interno del container siano corretti. Esegui:
+```bash
+chmod 666 /dev/nvidia*
+```
+Se usi un container **Unprivileged**, verifica che i permessi UID/GID tra Host e LXC siano mappati correttamente per i nodi `/dev/nvidia*`.
+</details>
+
+<details>
+<summary><b>Errore di connessione SSH verso la Sandbox</b></summary>
+
+Verifica che lo script `sandbox_setup.sh` sia stato eseguito sul nodo Sandbox e che il servizio SSH sia attivo (`systemctl status ssh`). Assicurati che l'IP del nodo Sandbox sia raggiungibile dal Controller via ping/SSH.
+</details>
+
+<details>
+<summary><b>Errore di memoria durante il caricamento dei modelli LLM</b></summary>
+
+Per l'inferenza e il fine-tuning con Unsloth, assegna al container LXC almeno **16 GB di RAM** e abilita uno swap di almeno **8 GB** nelle impostazioni di Proxmox.
+</details>
+
+---
+
+## 🗺️ Roadmap & WIP Features
+
+- [x] Installatore automatico CUDA + NVIDIA Container Toolkit per LXC
+- [x] Integrazione Unsloth Studio + OpenCode AI
+- [x] API Runner isolato con SSH Sandbox execution
+- [x] Script di provisioning dedicato `sandbox_setup.sh` per nodi remoti
+- [ ] Supporto multi-node Sandbox (gestione di più container esecutori in pool)
+- [ ] Dashboard Web centralizzata per il monitoraggio GPU/RAM
+- [ ] Integrazione opzionale ComfyUI (Generative AI Image/Video)
+
+---
+
+## 🛠️ Requisiti di Sistema
+
+* **Sistema Operativo**: Debian 12 (Bookworm / Trixie) o Ubuntu 22.04 LTS / 24.04 LTS.
+* **Privilegi**: Accesso Root o utente con permessi `sudo`.
+* **Hardware GPU**: GPU NVIDIA supportata (consigliati almeno 12 GB VRAM per Fine-Tuning/Inferenza).
+* **Virtualizzazione**: Bare-Metal oppure Container **Proxmox LXC** (Unprivileged/Privileged con GPU Pass-Through attivo).
+
+---
+
+## 📁 Struttura della Repository
+
+* `manager.sh`: Script principale di installazione, configurazione e gestione del Controller AI.
+* `sandbox_setup.sh`: Script di provisioning autonomo per configurare rapidamente nodi Sandbox LXC/VM.
+* `sandbox.md`: Guida dettagliata sull'architettura, API, sicurezza e test della Sandbox.
+* `README.md`: Documentazione generale del progetto.
+
+---
+
+## 📄 Licenza
+
+Questo progetto è rilasciato sotto licenza [MIT](LICENSE).
