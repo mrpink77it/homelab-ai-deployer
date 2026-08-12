@@ -17,6 +17,7 @@ REPO_URL="https://github.com/mrpink77it/homelab-ai-deployer.git"
 TARGET_REPO_DIR="/root/homelab-ai-deployer"
 UNSLOTH_ENV="/root/unsloth_env"
 CODE_RUNNER_DIR="/opt/code_runner"
+CODE_RUNNER_ENV="/opt/code_runner/venv"
 OPENCODE_DIR="/opt/opencode"
 
 # Controllo Permessi Root
@@ -43,7 +44,7 @@ install_services() {
 
     setup_xdg_fix
 
-    # 1. Aggiornamento Pacchetti e Dipendenze di Sistema
+    # 1. Aggiornamento Pacchetti di Sistema
     echo -e "${YELLOW}[1/5] Installazione Dipendenze di Sistema, Node.js e Driver CUDA...${NC}"
     apt update && apt install -y curl wget git build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils nodejs npm
 
@@ -53,10 +54,6 @@ install_services() {
         echo -e "${YELLOW}[INFO] nvidia-smi non trovato. Tento l'installazione di nvidia-cuda-toolkit...${NC}"
         apt install -y nvidia-cuda-toolkit || echo -e "${YELLOW}[NOTE] Se sei dentro un LXC Proxmox, assicurati di aver fatto il passthrough GPU.${NC}"
     fi
-
-    # Dipendenze Python di SISTEMA (per Code Runner API)
-    echo -e "${YELLOW}Setup dipendenze Python di sistema per Code Runner API...${NC}"
-    pip3 install --break-system-packages fastapi uvicorn pydantic 2>/dev/null || pip3 install fastapi uvicorn pydantic
 
     # 2. Configurazione Unsloth Studio nel VENV (/root/unsloth_env)
     echo -e "${YELLOW}[2/5] Setup Unsloth Studio & PyTorch CUDA nel VENV dedicato...${NC}"
@@ -108,9 +105,15 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    # 4. Setup Code Runner API Service (Porta 9000 - Python Sistema)
-    echo -e "${YELLOW}[4/5] Setup Code Runner API Service...${NC}"
+    # 4. Setup Code Runner API Service nel suo VENV dedicato (/opt/code_runner/venv)
+    echo -e "${YELLOW}[4/5] Setup Code Runner API Service e relativo VENV...${NC}"
     mkdir -p "$CODE_RUNNER_DIR"
+
+    if [ ! -d "$CODE_RUNNER_ENV" ]; then
+        python3 -m venv "$CODE_RUNNER_ENV"
+    fi
+    "$CODE_RUNNER_ENV/bin/pip" install --upgrade pip setuptools wheel
+    "$CODE_RUNNER_ENV/bin/pip" install fastapi uvicorn pydantic
     
     cat <<EOF > "$CODE_RUNNER_DIR/code_runner_api.py"
 from fastapi import FastAPI, HTTPException
@@ -149,7 +152,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$CODE_RUNNER_DIR
-ExecStart=/usr/bin/python3 -m uvicorn code_runner_api:app --host 0.0.0.0 --port 9000
+ExecStart=$CODE_RUNNER_ENV/bin/uvicorn code_runner_api:app --host 0.0.0.0 --port 9000
 Restart=always
 RestartSec=5
 
@@ -223,7 +226,7 @@ if cuda_avail:
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 3: AGGIORNA COMPONENTI (ISOLATO E ALLINEATO)
+# OPZIONE 3: AGGIORNA COMPONENTI (ISOLATO NEI VENV)
 # ------------------------------------------------------------------------------
 update_components() {
     echo -e "${BLUE}====================================================${NC}"
@@ -255,11 +258,14 @@ update_components() {
         exec ./manager.sh
     fi
 
-    # 2. Aggiornamento Dipendenze di Sistema (Code Runner API)
-    echo -e "${YELLOW}---> Aggiornamento dipendenze Python di Sistema (Code Runner API)...${NC}"
-    pip3 install --break-system-packages --upgrade fastapi uvicorn pydantic 2>/dev/null || pip3 install --upgrade fastapi uvicorn pydantic
+    # 2. Aggiornamento Code Runner API (nel suo VENV)
+    echo -e "${YELLOW}---> Aggiornamento dipendenze Code Runner API nel relativo VENV...${NC}"
+    if [ ! -d "$CODE_RUNNER_ENV" ]; then
+        python3 -m venv "$CODE_RUNNER_ENV"
+    fi
+    "$CODE_RUNNER_ENV/bin/pip" install --upgrade fastapi uvicorn pydantic
 
-    # 3. Aggiornamento Virtualenv Unsloth (CUDA Mantenuto in Sintonia)
+    # 3. Aggiornamento Virtualenv Unsloth
     if [ -d "$UNSLOTH_ENV" ]; then
         echo -e "${YELLOW}---> Aggiornamento PyTorch + CUDA Wheels nel VENV Unsloth...${NC}"
         "$UNSLOTH_ENV/bin/pip" install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
@@ -278,7 +284,7 @@ update_components() {
     echo -e "${YELLOW}---> Riavvio dei servizi systemd...${NC}"
     systemctl daemon-reload
     systemctl restart unsloth-studio opencode code-runner
-    echo -e "${GREEN}[OK] Aggiornamento completato con successo e senza conflitti!${NC}"
+    echo -e "${GREEN}[OK] Aggiornamento completato con successo senza toccare il Python di sistema!${NC}"
 }
 
 # ------------------------------------------------------------------------------
@@ -355,7 +361,7 @@ show_menu() {
     echo -e "${BLUE}====================================================${NC}"
     echo -e " 1) ${GREEN}INSTALLA Servizi${NC}   (GPU Driver, CUDA, Unsloth, OpenCode, API)"
     echo -e " 2) ${YELLOW}VERIFICA Stato${NC}     (Check Servizi Systemd, Porte e GPU CUDA)"
-    echo -e " 3) ${BLUE}AGGIORNA Componenti${NC} (Git pull, VENV Unsloth, NPM OpenCode)"
+    echo -e " 3) ${BLUE}AGGIORNA Componenti${NC} (Git pull, VENV Unsloth, VENV CodeRunner)"
     echo -e " 4) ${YELLOW}CONFIGURA Sandbox${NC}   (Setup Chiavi SSH & Test Endpoint API)"
     echo -e " 5) ${RED}DISINSTALLA${NC}        (Rimozione Unità Systemd e Directory)"
     echo -e " 6) Uscita"
