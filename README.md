@@ -59,16 +59,7 @@ Apri il terminale ed esegui il comando:
 chmod +x manager.sh
 
 
-Lo script ti guiderà attraverso:
 
-La configurazione della localizzazione di sistema (en_US.UTF-8).
-
-La scelta se Installare o Disinstallare i servizi.
-
-La selezione dei singoli componenti (Unsloth Studio, OpenCode AI o entrambi).
-
-🧹 Rimozione (Disinstallazione)
-Eseguendo nuovamente lo script (sudo ./manager.sh) e selezionando l'opzione 2 (Disinstalla), potrai ripulire completamente il sistema rimuovendo ambienti virtuali, file di configurazione e servizi systemd associati in modo pulito.
 
 📄 Licenza
 Distribuito sotto licenza MIT. Sentiti libero di forkare, migliorare e adattare questo script alle tue esigenze.
