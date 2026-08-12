@@ -19,6 +19,4 @@ Per consentire la configurazione automatica delle chiavi SSH e l'esecuzione di c
 Apri la shell del tuo nodo Proxmox VE e incolla il seguente comando:
 
 ```bash
-wget -O setup.sh https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/proxmox_lxc_sandbox_setup.sh && bash setup.sh && rm setup.sh```
-
----
+wget -O setup.sh https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/proxmox_lxc_sandbox_setup.sh && bash setup.sh && rm setup.sh
