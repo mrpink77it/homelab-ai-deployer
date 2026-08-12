@@ -191,8 +191,11 @@ export LANGUAGE="en_US.UTF-8"
 run_guided_step "Aggiornamento e Pulizia Sistema" "Pulizia repository e full-upgrade." "rm -f /etc/crypto-policies/back-ends/apt-sequoia.config && apt update && apt full-upgrade -y"
 run_guided_step "Installazione Utility e Node.js" "Installazione strumenti base e Node.js." "apt install -y curl wget ca-certificates gnupg git build-essential netcat-openbsd mc nvtop htop pciutils python3-full python3-pip python3-venv && (command -v node &> /dev/null || (curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt install -y nodejs))"
 
-# Repository NVIDIA e Driver
-run_guided_step "Configurazione Repository NVIDIA" "Download chiave GPG e repo CUDA." "curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/3bf863cc.pub | gpg --dearmor --yes -o /etc/apt/keyrings/cuda-archive-keyring.gpg && echo 'deb [signed-by=/etc/apt/keyrings/cuda-archive-keyring.gpg] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /' > /etc/apt/sources.list.d/cuda-official.list && apt update"
+# Repository NVIDIA e Driver (Fix SHA1 policy su Debian Trixie/latest)
+run_guided_step \
+    "Configurazione Repository NVIDIA" \
+    "Aggiunta repo CUDA con trust esplicito per evitare errori di firme SHA1 deprecate." \
+    "echo 'deb [trusted=yes] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /' > /etc/apt/sources.list.d/cuda-official.list && apt update"
 
 if [ "$IS_CONTAINER" = true ]; then
     DRV_CMD='if [ -f "/proc/driver/nvidia/version" ]; then NVRM_VERSION=$(grep "Kernel Module" /proc/driver/nvidia/version | awk "{print \$8}"); MAJOR_VERSION=$(echo "$NVRM_VERSION" | cut -d"." -f1); apt install -y --allow-unauthenticated "nvidia-utils-${MAJOR_VERSION}" cuda-toolkit || true; else apt install -y --allow-unauthenticated cuda-toolkit; fi'
