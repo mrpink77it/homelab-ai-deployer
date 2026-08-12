@@ -217,10 +217,41 @@ Per l'inferenza e il fine-tuning con Unsloth, assegna al container LXC almeno **
 
 ## 📁 Struttura della Repository
 
-* `manager.sh`: Script principale di installazione, configurazione e gestione del Controller AI.
-* `sandbox_setup.sh`: Script di provisioning autonomo per configurare rapidamente nodi Sandbox LXC/VM.
-* `sandbox.md`: Guida dettagliata sull'architettura, API, sicurezza e test della Sandbox.
-* `README.md`: Documentazione generale del progetto.
+```text
+homelab-ai-deployer/
+├── README.md                     # Documentazione generale e guida rapida
+├── manager.sh                    # Script TUI principale per la gestione del Controller
+├── prepare_sandbox_baremetal.md  # Guida alla configurazione Sandbox su Bare Metal / VM
+├── prepare_sandbox_lxc.md        # Guida alla configurazione Sandbox LXC su Proxmox VE
+├── proxmox_lxc_sandbox_setup.sh  # Script Proxmox VE per la creazione automatica dell'LXC
+├── sandbox.md                    # Documentazione generale e requisiti delle Sandbox
+└── sandbox_setup.sh              # Script di setup interno alla Sandbox (UTF-8, SSH, Python)
+```
+
+---
+
+### 📄 Descrizione dei File
+
+* **`README.md`** *(Documentazione Generale)*  
+  La guida principale del progetto che illustra la visione d'insieme, l'architettura a due nodi (Controller + Sandbox), i requisiti e le istruzioni rapide per iniziare.
+
+* **`manager.sh`** *(Script di Gestione Controller)*  
+  Il cuore operativo da eseguire sulla macchina **Controller**. Offre un menu TUI interattivo per installare Unsloth Studio, OpenCode AI, configurare gli ambienti virtuali Python, scambiare le chiavi SSH con la Sandbox ed eseguire i test delle API.
+
+* **`prepare_sandbox_baremetal.md`** *(Guida Bare Metal / VM)*  
+  Guida passo-passo in formato Markdown per preparare una Sandbox su un PC/Server fisico dedicato o su hypervisor tradizionali (VirtualBox, ESXi, KVM, Hyper-V).
+
+* **`prepare_sandbox_lxc.md`** *(Guida LXC Proxmox)*  
+  Documentazione specifica con la procedura guidata per la creazione e la configurazione di una Sandbox isolata in ambiente Proxmox VE.
+
+* **`proxmox_lxc_sandbox_setup.sh`** *(Script Shell per Proxmox VE)*  
+  Script Bash interattivo da lanciare direttamente nella shell del nodo Proxmox: scarica il template OS (Debian/Ubuntu), crea il container LXC con le risorse allocate e configura automaticamente SSH, Python e i locale UTF-8.
+
+* **`sandbox.md`** *(Panoramica e Requisiti Sandbox)*  
+  File di riferimento generale che riassume le specifiche minime, la sicurezza e la struttura di rete necessarie per qualsiasi nodo Sandbox.
+
+* **`sandbox_setup.sh`** *(Script di Provisioning Sandbox)*  
+  Script da eseguire direttamente all'interno della macchina Sandbox (Bare Metal o VM generica) per installare Python 3, OpenSSH Server, configurare `PermitRootLogin yes` e applicare la localizzazione `en_US.UTF-8`.
 
 ---
 
