@@ -73,7 +73,7 @@ install_services() {
     fi
     "$UNSLOTH_ENV/bin/pip" install --upgrade pip setuptools wheel
     
-    # Installazione PyTorch con supporto CUDA e fallback automatizzato
+    # Installazione PyTorch con supporto CUDA (rimossa dipendenza torchaudio non disponibile su Py3.13 cu121)
     "$UNSLOTH_ENV/bin/pip" install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu121
     "$UNSLOTH_ENV/bin/pip" install jupyterlab unsloth trl xformers
 
@@ -109,10 +109,11 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root
-ExecStart=$OPENCODE_BIN web --port 8000 --host 0.0.0.0
+WorkingDirectory=$OPENCODE_DIR
+ExecStart=$OPENCODE_BIN web --port 8000 --hostname 0.0.0.0 --print-logs
 Restart=always
 RestartSec=5
+Environment=BROWSER=echo
 
 [Install]
 WantedBy=multi-user.target
