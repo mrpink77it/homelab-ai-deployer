@@ -1,45 +1,127 @@
-# Unsloth Suite Manager 🚀
+# 🦥 Homelab AI Deployer
 
-[![Shell Script](https://img.shields.io/badge/shell_script-bash-blue.svg)](https://www.gnu.org/software/bash/)
-[![Linux](https://img.shields.io/badge/OS-Debian_%2F_Ubuntu-orange.svg)](https://www.debian.org/)
-[![NVIDIA CUDA](https://img.shields.io/badge/NVIDIA-CUDA-green.svg)](https://developer.nvidia.com/cuda-toolkit)
+[![Status WIP](https://img.shields.io/badge/status-Work_in_Progress-yellow.svg)](https://github.com/mrpink77it/homelab-ai-deployer)
+[![shell script](https://img.shields.io/badge/shell_script-bash-1f425f.svg)](https://www.gnu.org/software/bash/)
+[![OS](https://img.shields.io/badge/OS-Debian_%2F_Ubuntu-orange.svg)](https://debian.org)
+[![NVIDIA CUDA](https://img.shields.io/badge/NVIDIA-CUDA-76B900.svg?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Unsloth Suite Manager è una suite avanzata progettata per automatizzare la configurazione di ambienti di intelligenza artificiale su distribuzioni Debian e Ubuntu, supportando nativamente sia macchine fisiche/VM (Bare-Metal) sia container LXC (es. Proxmox VE)[cite: 1, 2].
+> **`mrpink77it/homelab-ai-deployer`** è uno script Bash automatizzato ("zero-config") progettato per configurare, gestire e distribuire un ambiente completo di AI Generativa, LLM Fine-Tuning e sviluppo su macchine Linux e container **Proxmox LXC**.
 
-📐 Architettura di Automazione (Controller & Sandbox)
-Per garantire la massima sicurezza e stabilità durante la generazione autonoma di codice da parte dell'IA, il sistema adotta un'architettura distribuita a due nodi:
+> ⚠️ **Nota:** Questo progetto è attualmente in fase di sviluppo attivo (**Work in Progress**). Alcune funzionalità e configurazioni potrebbero subire variazioni.
 
-Il Controller (Nodo Principale):
+---
 
-Ospita Unsloth Studio (JupyterLab per il fine-tuning dei modelli) e OpenCode AI (l'interfaccia di sviluppo)[cite: 2].
+## 📸 Caratteristiche Principali
 
-Include la Code Runner API (un servizio basato su FastAPI in ascolto sulla porta 9000), che funge da coordinatore per smistare le richieste di esecuzione del codice[cite: 2].
+* ⚡ **Installazione Automatica**: Interfaccia TUI guidata in tempo reale con monitoraggio avanzato del log.
+* 🎮 **Stack GPU & CUDA Completo**: Installazione e configurazione automatica dei driver NVIDIA, CUDA Toolkit e NVIDIA Container Toolkit (con fix nativi per container LXC e gestione trust SHA1 per Debian 12 / Trixie).
+* 🦥 **Unsloth Studio**: Ambiente di sviluppo per Fine-Tuning & Inferenza LLM ad alte prestazioni via Astral `uv` con Jupyter Lab (`:8888`).
+* 🎨 **ComfyUI**: Piattaforma nodale per la generazione di immagini e video AI (`:8188`).
+* 💻 **OpenCode AI Web**: Piattaforma web di sviluppo assistito da intelligenza artificiale (`:8000`).
+* 🛡️ **Code Runner API (Sandbox Execution)**: Microservizio FastAPI (`:9000`) per eseguire codice generato dall'AI in un ambiente remoto isolato via SSH.
+* 🧹 **Gestione & Uninstall Pulito**: Script integrato per la rimozione selettiva o totale dei servizi e delle unità `systemd`.
 
-La Sandbox (Nodo di Esecuzione):
+---
 
-Una seconda macchina fisica o un container LXC isolato e "usa e getta"[cite: 2].
+## 📊 Servizi Esposti
 
-Esegue materialmente il codice generato dall'IA inviato tramite comandi SSH sicuri autenticati da chiavi RSA[cite: 2].
+| Servizio | Porta | Descrizione |
+| :--- | :---: | :--- |
+| **Unsloth Studio** | `8888` | Interfaccia Jupyter Lab per Fine-Tuning & Inferenza LLM |
+| **ComfyUI** | `8188` | Interfaccia grafica nodale per Generative AI (Images/Video) |
+| **OpenCode AI** | `8000` | Interfaccia Web OpenCode |
+| **Code Runner API** | `9000` | Endpoint REST FastAPI per l'esecuzione remota sicura in Sandbox |
 
-🔄 Il Processo di Installazione e Configurazione
-L'intero flusso operativo si suddivide in due fasi sequenziali:
+---
 
-Fase 1: Configurazione del Controller
-Lo script di installazione principale (manager.sh) analizza l'ambiente di esecuzione (rilevando se si tratta di un container o di un sistema Bare-Metal)[cite: 2].
+## 🚀 Avvio Rapido
 
-Configura i repository ufficiali NVIDIA e installa i driver CUDA necessari[cite: 2].
+### Clonazione ed Esecuzione
 
-Installa Astral UV come package manager Python ad alte prestazioni per configurare l'ambiente virtuale di Unsloth[cite: 2].
-
-Configura e attiva i servizi di sistema (systemd) per Unsloth Studio, OpenCode AI e l'API di Code Runner[cite: 2].
-
-Fase 2: Configurazione della Sandbox e dei Servizi
-Sulla seconda macchina o container designato a fare da Sandbox, viene eseguito lo script di supporto (setup_sandbox.sh), il quale installa i prerequisiti minimi (Python3 e dipendenze di base)[cite: 2].
-
-Viene effettuato lo scambio delle chiavi SSH tra il Controller e la Sandbox per consentire l'esecuzione remota automatica e senza interruzioni[cite: 2].
-
-📥 Esecuzione dell'Installazione
-Per procedere con l'installazione automatica sulla macchina Controller, apri il terminale ed esegui il comando seguente[cite: 2]:
-
-Bash
+```bash
+git clone [https://github.com/mrpink77it/homelab-ai-deployer.git](https://github.com/mrpink77it/homelab-ai-deployer.git)
+cd homelab-ai-deployer
+chmod +x manager.sh
 sudo ./manager.sh
+```
+
+---
+
+## 🧪 Architettura Sandbox & Execution
+
+L'architettura separa nettamente il **Controller AI** (dove girano i modelli, le interfacce e la GPU) dal **Nodo Sandbox** dove viene eseguito il codice generato.
+
+```text
++---------------------------------+             SSH             +---------------------------------+
+|         CONTROLLER AI           |---------------------------->|          SANDBOX LXC/VM         |
+|  - Unsloth Studio (Porta 8888)  |   Exec: python3 -c "..."    |  - Python 3                     |
+|  - ComfyUI        (Porta 8188)  |                             |  - Ambiente isolato             |
+|  - OpenCode AI    (Porta 8000)  |                             |  - Nessun accesso alla GPU Host  |
+|  - Code Runner    (Porta 9000)  |<----------------------------|  - Nessun accesso alla LAN      |
++---------------------------------+        stdout / stderr      +---------------------------------+
+```
+
+### Configurazione Autenticazione SSH (Controller ➔ Sandbox)
+
+1. **Genera la chiave SSH sul Controller** (se non presente):
+   ```bash
+   ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519
+   ```
+
+2. **Copia la chiave sulla Sandbox**:
+   ```bash
+   ssh-copy-id -i /root/.ssh/id_ed25519.pub root@<IP_SANDBOX>
+   ```
+
+3. **Invia una richiesta di test all'API Code Runner (`:9000`)**:
+   ```bash
+   curl -X POST http://localhost:9000/execute \
+     -H "Content-Type: application/json" \
+     -d '{
+       "code": "import sys; print(f\"Hello Sandbox! Python: {sys.version}\")",
+       "sandbox_ip": "<IP_SANDBOX>"
+     }'
+   ```
+
+---
+
+## 🔍 Verifica dell'Installazione
+
+Dopo il completamento dello script, puoi verificare il corretto riconoscimento della GPU e di CUDA eseguendo:
+
+```bash
+/root/unsloth_env/bin/python3 -c "import torch; print('CUDA disponibile:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0))"
+```
+
+### Gestione dei Servizi Systemd
+
+Puoi controllare i singoli servizi tramite `systemctl`:
+
+* **Unsloth Studio**: `systemctl status unsloth-studio.service`
+* **ComfyUI**: `systemctl status comfyui.service`
+* **OpenCode AI**: `systemctl status opencode.service`
+* **Code Runner API**: `systemctl status code-runner.service`
+
+---
+
+## 🛠️ Requisiti di Sistema
+
+* **Sistema Operativo**: Debian 12 (Bookworm / Trixie) o Ubuntu 22.04 LTS / 24.04 LTS.
+* **Privilegi**: Accesso Root o utente con permessi `sudo`.
+* **Hardware GPU**: GPU NVIDIA supportata (consigliati almeno 12 GB VRAM per Fine-Tuning o ComfyUI).
+* **Virtualizzazione**: Bare-Metal oppure Container **Proxmox LXC** (Unprivileged/Privileged con GPU Pass-Through attivo).
+
+---
+
+## 📁 Struttura della Repository
+
+* `manager.sh`: Script principale di installazione, configurazione e manutenzione.
+* `sandbox.md`: Guida dettagliata sull'architettura, API e configurazione della Sandbox.
+* `README.md`: Documentazione generale del progetto.
+
+---
+
+## 📄 Licenza
+
+Questo progetto è rilasciato sotto licenza [MIT](LICENSE).
