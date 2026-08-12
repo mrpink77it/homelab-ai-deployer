@@ -81,6 +81,62 @@ run_guided_step() {
     fi
 }
 
+# Funzione isolata per l'installazione di Code Runner API e documentazione
+install_code_runner() {
+    mkdir -p /opt/code_runner
+    apt install -y python3-uvicorn python3-fastapi
+
+    cat << 'PYEOF' > /opt/code_runner/code_runner_api.py
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import subprocess
+
+app = FastAPI()
+
+class CodeRequest(BaseModel):
+    code: str
+    sandbox_ip: str
+
+@app.post('/execute')
+async def execute_code(request: CodeRequest):
+    safe_code = request.code.replace('"', '\\"')
+    command = f'python3 -c "{safe_code}"'
+    try:
+        result = subprocess.run(
+            ['ssh', '-o', 'StrictHostKeyChecking=no', f'root@{request.sandbox_ip}', command],
+            capture_output=True, text=True, timeout=30
+        )
+        return {'stdout': result.stdout, 'stderr': result.stderr, 'exit_code': result.returncode}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+PYEOF
+
+    cat << 'SERVICEEOF' > /etc/systemd/system/code-runner.service
+[Unit]
+Description=AI Code Runner API Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/code_runner
+ExecStart=/usr/bin/python3 -m uvicorn code_runner_api:app --host 0.0.0.0 --port 9000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+SERVICEEOF
+
+    cat << READMDEOF > "${REAL_HOME}/README_AUTOMATION.md"
+# Guida all'Automazione: Architettura Controller-Sandbox
+Consulta la documentazione integrata per collegare una seconda macchina fisica o container LXC come esecutore isolato del codice.
+READMDEOF
+
+    systemctl daemon-reload
+    systemctl enable code-runner.service
+    systemctl restart code-runner.service
+    chown "${REAL_USER}:${REAL_USER}" "${REAL_HOME}/README_AUTOMATION.md"
+}
+
 # ------------------------------------------------------------------------------
 # 1. VERIFICA PRIVILEGI E RILEVAMENTO AMBIENTE
 # ------------------------------------------------------------------------------
@@ -187,7 +243,7 @@ export LANG="en_US.UTF-8"
 export LC_ALL="en_US.UTF-8"
 export LANGUAGE="en_US.UTF-8"
 
-# FASE 1-5: Sistema, Driver, UV e Servizi (Include la rimozione preventiva di vecchi file cuda.list corrotti)
+# FASE 1-5: Sistema, Driver, UV e Servizi
 run_guided_step "Aggiornamento e Pulizia Sistema" "Pulizia repository corrotto e full-upgrade." "rm -f /etc/apt/sources.list.d/cuda-official.list /etc/crypto-policies/back-ends/apt-sequoia.config && apt update && apt full-upgrade -y"
 run_guided_step "Installazione Utility e Node.js" "Installazione strumenti base e Node.js." "apt install -y curl wget ca-certificates gnupg git build-essential netcat-openbsd mc nvtop htop pciutils python3-full python3-pip python3-venv && (command -v node &> /dev/null || (curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt install -y nodejs))"
 
@@ -244,49 +300,11 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 
-# FASE 9: Code Runner API & Guida Automazione
+# Code Runner API & Guida Automazione
 run_guided_step \
     "Installazione Code Runner API e Documentazione" \
     "Configurazione dell'API FastAPI su porta 9000 e generazione della guida README_AUTOMATION.md" \
-    "mkdir -p /opt/code_runner && apt install -y python3-uvicorn python3-fastapi && \
-    cat <<'EOF' > /opt/code_runner/code_runner_api.py
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import subprocess
-app = FastAPI()
-class CodeRequest(BaseModel):
-    code: str
-    sandbox_ip: str
-@app.post('/execute')
-async def execute_code(request: CodeRequest):
-    command = f'python3 -c \\"{request.code.replace(\\"\\"\\", \\"\\\\\\"\\")}\\"'
-    try:
-        result = subprocess.run(
-            ['ssh', '-o', 'StrictHostKeyChecking=no', f'root@{request.sandbox_ip}', command],
-            capture_output=True, text=True, timeout=30
-        )
-        return {'stdout': result.stdout, 'stderr': result.stderr, 'exit_code': result.returncode}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-EOF
-    cat <<'EOF' > /etc/systemd/system/code-runner.service
-[Unit]
-Description=AI Code Runner API Service
-After=network.target
-[Service]
-Type=simple
-WorkingDirectory=/opt/code_runner
-ExecStart=/usr/bin/python3 -m uvicorn code_runner_api:app --host 0.0.0.0 --port 9000
-Restart=always
-[Install]
-WantedBy=multi-user.target
-EOF
-    cat <<'EOF' > ${REAL_HOME}/README_AUTOMATION.md
-# Guida all'Automazione: Architettura Controller-Sandbox
-Consulta la documentazione integrata per collegare una seconda macchina fisica o container LXC come esecutore isolato del codice.
-EOF
-    systemctl daemon-reload && systemctl enable code-runner.service && systemctl restart code-runner.service && \
-    chown ${REAL_USER}:${REAL_USER} ${REAL_HOME}/README_AUTOMATION.md"
+    "install_code_runner"
 
 chown -R "$REAL_USER":"$REAL_USER" "$REAL_HOME"
 systemctl daemon-reload && systemctl restart unsloth-studio.service opencode.service
