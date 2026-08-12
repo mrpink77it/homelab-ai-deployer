@@ -1,4 +1,10 @@
-bash -c '$(cat << "EOF"
+#!/usr/bin/env bash
+# ==============================================================================
+# Homelab AI Deployer - Proxmox LXC Sandbox Setup
+# ==============================================================================
+
+set -e
+
 pveam update > /dev/null 2>&1
 
 echo "===================================================="
@@ -79,5 +85,3 @@ echo -e "\n===================================================="
 echo -ne "✅ CONFIGURAZIONE COMPLETATA!\n👉 IP della Sandbox: "
 pct exec "$CT_ID" -- ip -4 addr show eth0 | grep inet | awk '{print $2}' | cut -d/ -f1
 echo "===================================================="
-EOF
-)'
