@@ -13,6 +13,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+REPO_URL="https://github.com/mrpink77it/homelab-ai-deployer.git"
+TARGET_REPO_DIR="/root/homelab-ai-deployer"
 UNSLOTH_ENV="/root/unsloth_env"
 CODE_RUNNER_DIR="/opt/code_runner"
 OPENCODE_DIR="/opt/opencode"
@@ -32,7 +34,7 @@ setup_xdg_fix() {
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 1: INSTALLA SERVIZI (GPU, CUDA, Unsloth, OpenCode AI, Code Runner)
+# OPZIONE 1: INSTALLA SERVIZI
 # ------------------------------------------------------------------------------
 install_services() {
     echo -e "${BLUE}====================================================${NC}"
@@ -41,19 +43,23 @@ install_services() {
 
     setup_xdg_fix
 
-    # 1. Aggiornamento Pacchetti, Driver GPU e CUDA Toolkit
-    echo -e "${YELLOW}[1/5] Installazione Driver GPU e CUDA Toolkit...${NC}"
-    apt update && apt install -y curl wget git build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils
+    # 1. Aggiornamento Pacchetti e Dipendenze di Sistema
+    echo -e "${YELLOW}[1/5] Installazione Dipendenze di Sistema, Node.js e Driver CUDA...${NC}"
+    apt update && apt install -y curl wget git build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils nodejs npm
 
     if command -v nvidia-smi &> /dev/null; then
         echo -e "${GREEN}[OK] GPU NVIDIA e Driver rilevati tramite nvidia-smi.${NC}"
     else
         echo -e "${YELLOW}[INFO] nvidia-smi non trovato. Tento l'installazione di nvidia-cuda-toolkit...${NC}"
-        apt install -y nvidia-cuda-toolkit || echo -e "${YELLOW}[NOTE] Se sei dentro un LXC Proxmox, assicurati di aver fatto il passthrough della GPU dall'host.${NC}"
+        apt install -y nvidia-cuda-toolkit || echo -e "${YELLOW}[NOTE] Se sei dentro un LXC Proxmox, assicurati di aver fatto il passthrough GPU.${NC}"
     fi
 
-    # 2. Configurazione Unsloth Studio & Jupyter Lab (Porta 8888)
-    echo -e "${YELLOW}[2/5] Setup Unsloth Studio, PyTorch CUDA & Jupyter Lab...${NC}"
+    # Dipendenze Python di SISTEMA (per Code Runner API)
+    echo -e "${YELLOW}Setup dipendenze Python di sistema per Code Runner API...${NC}"
+    pip3 install --break-system-packages fastapi uvicorn pydantic 2>/dev/null || pip3 install fastapi uvicorn pydantic
+
+    # 2. Configurazione Unsloth Studio nel VENV (/root/unsloth_env)
+    echo -e "${YELLOW}[2/5] Setup Unsloth Studio & PyTorch CUDA nel VENV dedicato...${NC}"
     if [ ! -d "$UNSLOTH_ENV" ]; then
         python3 -m venv "$UNSLOTH_ENV"
     fi
@@ -78,17 +84,10 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    # 3. Setup OpenCode AI Web Service (Porta 8000)
-    echo -e "${YELLOW}[3/5] Installazione OpenCode AI...${NC}"
+    # 3. Setup OpenCode AI Web Service via NPM
+    echo -e "${YELLOW}[3/5] Installazione OpenCode AI via NPM...${NC}"
     mkdir -p "$OPENCODE_DIR"
-
-    if ! command -v opencode &> /dev/null; then
-        echo -e "${YELLOW}Download e installazione binario OpenCode AI...${NC}"
-        curl -fsSL https://opencode.ai/install.sh | bash 2>/dev/null || {
-            echo -e "${YELLOW}Installazione alternativa OpenCode AI via npm/bun...${NC}"
-            apt install -y npm && npm install -g opencode-ai 2>/dev/null || true
-        }
-    fi
+    npm install -g opencode-ai 2>/dev/null || true
 
     OPENCODE_BIN=$(which opencode 2>/dev/null || echo "/usr/local/bin/opencode")
 
@@ -109,7 +108,7 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    # 4. Setup Code Runner API Service (Porta 9000)
+    # 4. Setup Code Runner API Service (Porta 9000 - Python Sistema)
     echo -e "${YELLOW}[4/5] Setup Code Runner API Service...${NC}"
     mkdir -p "$CODE_RUNNER_DIR"
     
@@ -158,7 +157,7 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    # 5. Ricarica Systemd, Abilitazione Permanente al Boot (ENABLE) ed Esecuzione
+    # 5. Ricarica Systemd e Abilita al Boot
     echo -e "${YELLOW}[5/5] Ricarico systemd, abilito ed avvio tutti i servizi...${NC}"
     systemctl daemon-reload
     
@@ -174,7 +173,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 2: VERIFICA STATO (Systemd, Porte e GPU/CUDA)
+# OPZIONE 2: VERIFICA STATO
 # ------------------------------------------------------------------------------
 check_status() {
     echo -e "${BLUE}====================================================${NC}"
@@ -224,34 +223,66 @@ if cuda_avail:
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 3: AGGIORNA COMPONENTI (Git pull, Unsloth, OpenCode)
+# OPZIONE 3: AGGIORNA COMPONENTI (ISOLATO E ALLINEATO)
 # ------------------------------------------------------------------------------
 update_components() {
     echo -e "${BLUE}====================================================${NC}"
     echo -e "${BLUE}               AGGIORNAMENTO COMPONENTI             ${NC}"
     echo -e "${BLUE}====================================================${NC}"
 
-    echo -e "${YELLOW}---> Aggiornamento Repository Git...${NC}"
-    git pull origin main || echo -e "${RED}Impossibile eseguire git pull.${NC}"
+    if ! command -v git &> /dev/null; then
+        apt update && apt install -y git
+    fi
 
+    # 1. Aggiornamento Repository Git
+    if [ -d ".git" ]; then
+        echo -e "${YELLOW}---> Aggiornamento Repository Git locale...${NC}"
+        git pull origin main || echo -e "${RED}Impossibile eseguire git pull.${NC}"
+    else
+        echo -e "${YELLOW}[INFO] Scarico/Aggiorno repository ufficiale da GitHub in $TARGET_REPO_DIR...${NC}"
+        if [ -d "$TARGET_REPO_DIR/.git" ]; then
+            cd "$TARGET_REPO_DIR"
+            git pull origin main
+        else
+            rm -rf "$TARGET_REPO_DIR"
+            git clone "$REPO_URL" "$TARGET_REPO_DIR"
+            cd "$TARGET_REPO_DIR"
+        fi
+        chmod +x manager.sh
+        echo -e "${GREEN}[OK] Repository aggiornata.${NC}"
+        echo -e "${YELLOW}---> Riavvio dello script aggiornato...${NC}"
+        sleep 2
+        exec ./manager.sh
+    fi
+
+    # 2. Aggiornamento Dipendenze di Sistema (Code Runner API)
+    echo -e "${YELLOW}---> Aggiornamento dipendenze Python di Sistema (Code Runner API)...${NC}"
+    pip3 install --break-system-packages --upgrade fastapi uvicorn pydantic 2>/dev/null || pip3 install --upgrade fastapi uvicorn pydantic
+
+    # 3. Aggiornamento Virtualenv Unsloth (CUDA Mantenuto in Sintonia)
     if [ -d "$UNSLOTH_ENV" ]; then
-        echo -e "${YELLOW}---> Aggiornamento dipendenze Unsloth & Jupyter...${NC}"
-        "$UNSLOTH_ENV/bin/pip" install --upgrade jupyterlab fastapi uvicorn torch unsloth trl xformers
+        echo -e "${YELLOW}---> Aggiornamento PyTorch + CUDA Wheels nel VENV Unsloth...${NC}"
+        "$UNSLOTH_ENV/bin/pip" install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+        
+        echo -e "${YELLOW}---> Aggiornamento Jupyter Lab, Unsloth, Trl, Xformers...${NC}"
+        "$UNSLOTH_ENV/bin/pip" install --upgrade jupyterlab unsloth trl xformers
     fi
 
-    if command -v opencode &> /dev/null; then
-        echo -e "${YELLOW}---> Aggiornamento OpenCode AI...${NC}"
-        curl -fsSL https://opencode.ai/install.sh | bash 2>/dev/null || true
+    # 4. Aggiornamento OpenCode AI via NPM
+    if command -v npm &> /dev/null; then
+        echo -e "${YELLOW}---> Aggiornamento OpenCode AI via NPM...${NC}"
+        npm install -g opencode-ai@latest 2>/dev/null || true
     fi
 
+    # 5. Riavvio Servizi
     echo -e "${YELLOW}---> Riavvio dei servizi systemd...${NC}"
     systemctl daemon-reload
     systemctl restart unsloth-studio opencode code-runner
-    echo -e "${GREEN}[OK] Aggiornamento completato e servizi riavviati.${NC}"
+    echo -e "${GREEN}[OK] Aggiornamento completato con successo e senza conflitti!${NC}"
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 4: CONFIGURA SANDBOX (Helper interattivo endpoint API remota)
+# OPZIONE 4: CONFIGURA SANDBOX
 # ------------------------------------------------------------------------------
 configure_sandbox() {
     echo -e "${BLUE}====================================================${NC}"
@@ -287,7 +318,7 @@ configure_sandbox() {
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 5: DISINSTALLA (Rimozione completa directory e unità systemd)
+# OPZIONE 5: DISINSTALLA
 # ------------------------------------------------------------------------------
 uninstall_services() {
     echo -e "${RED}====================================================${NC}"
@@ -306,7 +337,7 @@ uninstall_services() {
         systemctl daemon-reload
 
         echo -e "${YELLOW}---> Pulizia directory di lavoro e virtualenv...${NC}"
-        rm -rf "$CODE_RUNNER_DIR" "$OPENCODE_DIR" "$UNSLOTH_ENV"
+        rm -rf "$CODE_RUNNER_DIR" "$OPENCODE_DIR" "$UNSLOTH_ENV" "$TARGET_REPO_DIR"
 
         echo -e "${GREEN}[OK] Disinstallazione completata con successo.${NC}"
     else
@@ -324,7 +355,7 @@ show_menu() {
     echo -e "${BLUE}====================================================${NC}"
     echo -e " 1) ${GREEN}INSTALLA Servizi${NC}   (GPU Driver, CUDA, Unsloth, OpenCode, API)"
     echo -e " 2) ${YELLOW}VERIFICA Stato${NC}     (Check Servizi Systemd, Porte e GPU CUDA)"
-    echo -e " 3) ${BLUE}AGGIORNA Componenti${NC} (Git pull & upgrade Unsloth / OpenCode)"
+    echo -e " 3) ${BLUE}AGGIORNA Componenti${NC} (Git pull, VENV Unsloth, NPM OpenCode)"
     echo -e " 4) ${YELLOW}CONFIGURA Sandbox${NC}   (Setup Chiavi SSH & Test Endpoint API)"
     echo -e " 5) ${RED}DISINSTALLA${NC}        (Rimozione Unità Systemd e Directory)"
     echo -e " 6) Uscita"
