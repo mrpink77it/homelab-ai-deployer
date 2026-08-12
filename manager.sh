@@ -56,7 +56,6 @@ install_services() {
     echo -e "${YELLOW}[1/5] Installazione Dipendenze di Sistema, Node.js e Driver CUDA...${NC}"
     apt update || echo -e "${YELLOW}[NOTE] Ignorati warning minori di APT...${NC}"
     
-    # NOTA: Rimosso 'npm' da apt install per evitare conflitti con il pacchetto NodeSource
     apt install -y curl wget git build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils nodejs
 
     if command -v nvidia-smi &> /dev/null; then
@@ -73,7 +72,6 @@ install_services() {
     fi
     "$UNSLOTH_ENV/bin/pip" install --upgrade pip setuptools wheel
     
-    # Installazione PyTorch con supporto CUDA (rimossa dipendenza torchaudio non disponibile su Py3.13 cu121)
     "$UNSLOTH_ENV/bin/pip" install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu121
     "$UNSLOTH_ENV/bin/pip" install jupyterlab unsloth trl xformers
 
@@ -128,11 +126,12 @@ EOF
     fi
     "$CODE_RUNNER_ENV/bin/pip" install --upgrade pip setuptools wheel
     "$CODE_RUNNER_ENV/bin/pip" install fastapi uvicorn pydantic
-    
+
     cat <<EOF > "$CODE_RUNNER_DIR/code_runner_api.py"
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import subprocess
+import base64
 
 app = FastAPI(title="Code Runner API")
 
@@ -146,9 +145,13 @@ def health():
 
 @app.post("/execute")
 def execute_code(req: ExecutionRequest):
+    # Encoding Base64 per evitare qualsiasi errore di escaping Bash con apici/virgolette
+    b64_code = base64.b64encode(req.code.encode('utf-8')).decode('utf-8')
+    remote_cmd = f"echo {b64_code} | base64 -d | python3"
+    
     ssh_cmd = [
         "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
-        f"root@{req.sandbox_ip}", f"python3 -c '{req.code}'"
+        f"root@{req.sandbox_ip}", remote_cmd
     ]
     try:
         res = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
@@ -329,12 +332,23 @@ configure_sandbox() {
     ssh-copy-id -i /root/.ssh/id_ed25519.pub "root@$SANDBOX_IP"
 
     echo -e "${YELLOW}[3/3] Test di esecuzione remota tramite API Code Runner (:9000)...${NC}"
-    curl -X POST http://localhost:9000/execute \
+    
+    # Assicuriamo che il servizio Code Runner sia riavviato prima del test
+    systemctl restart code-runner.service 2>/dev/null || true
+    sleep 2
+
+    TEST_PAYLOAD=$(cat <<EOF
+{
+  "code": "import sys, platform; print(f'Sandbox OK! Node: {platform.node()} - Python: {sys.version}')",
+  "sandbox_ip": "$SANDBOX_IP"
+}
+EOF
+)
+
+    curl -s -X POST http://localhost:9000/execute \
       -H "Content-Type: application/json" \
-      -d "{
-        \"code\": \"import sys, platform; print(f'Sandbox OK! Node: {platform.node()} - Python: {sys.version}')\",
-        \"sandbox_ip\": \"$SANDBOX_IP\"
-      }"
+      -d "$TEST_PAYLOAD"
+    
     echo -e "\n${GREEN}[OK] Configurazione Sandbox completata.${NC}"
 }
 
