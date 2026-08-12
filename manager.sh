@@ -44,9 +44,10 @@ install_services() {
 
     setup_xdg_fix
 
-    # 1. Aggiornamento Pacchetti di Sistema
+    # 1. Aggiornamento Pacchetti di Sistema (con gestione tollerante errori repo)
     echo -e "${YELLOW}[1/5] Installazione Dipendenze di Sistema, Node.js e Driver CUDA...${NC}"
-    apt update && apt install -y curl wget git build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils nodejs npm
+    apt update || echo -e "${YELLOW}[NOTE] Alcuni repository di terze parti hanno restituito warning/errori, proseguo con l'installazione dei pacchetti...${NC}"
+    apt install -y curl wget git build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils nodejs npm
 
     if command -v nvidia-smi &> /dev/null; then
         echo -e "${GREEN}[OK] GPU NVIDIA e Driver rilevati tramite nvidia-smi.${NC}"
@@ -61,7 +62,9 @@ install_services() {
         python3 -m venv "$UNSLOTH_ENV"
     fi
     "$UNSLOTH_ENV/bin/pip" install --upgrade pip setuptools wheel
-    "$UNSLOTH_ENV/bin/pip" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    
+    # Sostituito torchaudio con torch + torchvision ed usata --extra-index-url per la massima compatibilità Python 3.13
+    "$UNSLOTH_ENV/bin/pip" install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu121
     "$UNSLOTH_ENV/bin/pip" install jupyterlab unsloth trl xformers
 
     cat <<EOF > /etc/systemd/system/unsloth-studio.service
@@ -234,7 +237,8 @@ update_components() {
     echo -e "${BLUE}====================================================${NC}"
 
     if ! command -v git &> /dev/null; then
-        apt update && apt install -y git
+        apt update || true
+        apt install -y git
     fi
 
     # 1. Aggiornamento Repository Git
@@ -268,7 +272,7 @@ update_components() {
     # 3. Aggiornamento Virtualenv Unsloth
     if [ -d "$UNSLOTH_ENV" ]; then
         echo -e "${YELLOW}---> Aggiornamento PyTorch + CUDA Wheels nel VENV Unsloth...${NC}"
-        "$UNSLOTH_ENV/bin/pip" install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+        "$UNSLOTH_ENV/bin/pip" install --upgrade torch torchvision --extra-index-url https://download.pytorch.org/whl/cu121
         
         echo -e "${YELLOW}---> Aggiornamento Jupyter Lab, Unsloth, Trl, Xformers...${NC}"
         "$UNSLOTH_ENV/bin/pip" install --upgrade jupyterlab unsloth trl xformers
