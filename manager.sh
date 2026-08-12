@@ -34,6 +34,13 @@ setup_xdg_fix() {
     fi
 }
 
+# Fix per repository APT corrotti o non validi
+fix_apt_repos() {
+    echo -e "${YELLOW}[FIX] Pulizia eventuali repository APT obsoleti/non validi...${NC}"
+    rm -f /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    rm -f /etc/apt/sources.list.d/cuda*.list
+}
+
 # ------------------------------------------------------------------------------
 # OPZIONE 1: INSTALLA SERVIZI
 # ------------------------------------------------------------------------------
@@ -43,11 +50,14 @@ install_services() {
     echo -e "${BLUE}====================================================${NC}"
 
     setup_xdg_fix
+    fix_apt_repos
 
-    # 1. Aggiornamento Pacchetti di Sistema (con gestione tollerante errori repo)
+    # 1. Aggiornamento Pacchetti di Sistema
     echo -e "${YELLOW}[1/5] Installazione Dipendenze di Sistema, Node.js e Driver CUDA...${NC}"
-    apt update || echo -e "${YELLOW}[NOTE] Alcuni repository di terze parti hanno restituito warning/errori, proseguo con l'installazione dei pacchetti...${NC}"
-    apt install -y curl wget git build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils nodejs npm
+    apt update || echo -e "${YELLOW}[NOTE] Ignorati warning minori di APT...${NC}"
+    
+    # NOTA: Rimosso 'npm' da apt install per evitare conflitti con il pacchetto NodeSource
+    apt install -y curl wget git build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils nodejs
 
     if command -v nvidia-smi &> /dev/null; then
         echo -e "${GREEN}[OK] GPU NVIDIA e Driver rilevati tramite nvidia-smi.${NC}"
@@ -63,7 +73,7 @@ install_services() {
     fi
     "$UNSLOTH_ENV/bin/pip" install --upgrade pip setuptools wheel
     
-    # Sostituito torchaudio con torch + torchvision ed usata --extra-index-url per la massima compatibilità Python 3.13
+    # Installazione PyTorch con supporto CUDA e fallback automatizzato
     "$UNSLOTH_ENV/bin/pip" install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu121
     "$UNSLOTH_ENV/bin/pip" install jupyterlab unsloth trl xformers
 
