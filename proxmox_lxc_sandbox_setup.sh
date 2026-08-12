@@ -21,35 +21,43 @@ done
 read -p "2) Nome Container / Hostname [default: sandbox-ai]: " HOSTNAME
 HOSTNAME=${HOSTNAME:-sandbox-ai}
 
-# 3. Sistema Operativo
-echo -e "\n3) Scegli il Sistema Operativo:"
+# 3. Password di Root
+read -sp "3) Imposta Password di ROOT per il Container: " ROOT_PASS
+echo ""
+while [ -z "$ROOT_PASS" ]; do
+  read -sp "   --> La password non può essere vuota. Reinserisci: " ROOT_PASS
+  echo ""
+done
+
+# 4. Sistema Operativo
+echo -e "\n4) Scegli il Sistema Operativo:"
 echo "   1) Debian 13 (Trixie)"
 echo "   2) Ubuntu 24.04 (Noble)"
 read -p "   Selezione [1-2, default: 1]: " OS_CHOICE
 OS_CHOICE=${OS_CHOICE:-1}
 
-# 4. Risorse Hardware
-read -p "4) CPU Cores [default: 2]: " CORES
+# 5. Risorse Hardware
+read -p "5) CPU Cores [default: 2]: " CORES
 CORES=${CORES:-2}
 
-read -p "5) Memoria RAM in MB [default: 2048]: " RAM
+read -p "6) Memoria RAM in MB [default: 2048]: " RAM
 RAM=${RAM:-2048}
 
-read -p "6) Memoria SWAP in MB [default: 512]: " SWAP
+read -p "7) Memoria SWAP in MB [default: 512]: " SWAP
 SWAP=${SWAP:-512}
 
-read -p "7) Dimensione Disco in GB [default: 8]: " DISK
+read -p "8) Dimensione Disco in GB [default: 8]: " DISK
 DISK=${DISK:-8}
 
-# 5. Storage Proxmox
-read -p "8) Storage Proxmox [default: local-lvm]: " STORAGE
+# 6. Storage Proxmox
+read -p "9) Storage Proxmox [default: local-lvm]: " STORAGE
 STORAGE=${STORAGE:-local-lvm}
 
-# 6. Configurazione Rete
-read -p "9) Bridge di Rete [default: vmbr0]: " BRIDGE
+# 7. Configurazione Rete
+read -p "10) Bridge di Rete [default: vmbr0]: " BRIDGE
 BRIDGE=${BRIDGE:-vmbr0}
 
-echo -e "\n10) Modalità Indirizzo IP:"
+echo -e "\n11) Modalità Indirizzo IP:"
 echo "   1) DHCP (Automatico)"
 echo "   2) Statico (Manuale)"
 read -p "   Selezione [1-2, default: 1]: " NET_CHOICE
@@ -103,17 +111,33 @@ pct create "$CT_ID" "local:vztmpl/$TEMPLATE_NAME" \
   --storage "$STORAGE" \
   --rootfs "$STORAGE:$DISK" \
   --net0 "$NET_PARAM" \
+  --nameserver "8.8.8.8 1.1.1.1" \
+  --features nesting=1 \
+  --password "$ROOT_PASS" \
   --unprivileged 0 \
   --onboot 1
 
 echo "▶️ Avvio Container LXC $CT_ID..."
 pct start "$CT_ID"
 
-echo "⏳ Attesa avvio rete e configurazione SSH/Python/UTF-8..."
-sleep 5
+echo "⏳ Attesa assegnazione rete e IP (fino a 20 secondi)..."
+IP=""
+for i in {1..20}; do
+  IP=$(pct exec "$CT_ID" -- ip -4 addr show eth0 2>/dev/null | grep inet | awk '{print $2}' | cut -d/ -f1 || true)
+  if [ -n "$IP" ]; then
+    break
+  fi
+  sleep 1
+done
+
+echo "⚙️ Configurazione SSH, Python3 e Locales..."
 pct exec "$CT_ID" -- bash -c "apt update && apt install -y openssh-server python3 locales && sed -i '/^# *en_US.UTF-8 UTF-8/s/^# //' /etc/locale.gen && locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 && sed -i 's/#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && systemctl restart ssh"
 
 echo -e "\n===================================================="
-echo -ne "✅ CONFIGURAZIONE COMPLETATA!\n👉 IP della Sandbox: "
-pct exec "$CT_ID" -- ip -4 addr show eth0 | grep inet | awk '{print $2}' | cut -d/ -f1
+echo -e "✅ CONFIGURAZIONE COMPLETATA!"
+if [ -n "$IP" ]; then
+    echo "👉 IP della Sandbox: $IP"
+else
+    echo "⚠️ Non è stato possibile rilevare l'IP automaticamente. Verificare il server DHCP."
+fi
 echo "===================================================="
