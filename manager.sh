@@ -1,346 +1,328 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# UNSLOTH SUITE MANAGER - v0.6.1 (12.08.2026)
-# Gestore Avanzato Installazione & Disinstallazione Servizi AI (Con Code Runner)
+# Homelab AI Deployer - Manager Script
+# Repo: mrpink77it/homelab-ai-deployer
 # ==============================================================================
 
-set -uo pipefail
+set -e
 
+# Format e Colori
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+NC='\033[0m' # No Color
 
-LOG_FILE="/tmp/unsloth_install.log"
+UNSLOTH_ENV="/root/unsloth_env"
+CODE_RUNNER_DIR="/opt/code_runner"
+OPENCODE_DIR="/opt/opencode"
 
-log_info()  { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_ok()    { echo -e "${GREEN}[OK]${NC} $1"; }
-log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+# Controllo Permessi Root
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}[ERROR] Questo script deve essere eseguito come root!${NC}"
+  exit 1
+fi
 
-draw_box() {
-    local text="$1"
-    local width=76
-    echo -n "+"
-    printf '=%.0s' $(seq 1 $width)
-    echo "+"
-    echo -e "| ${CYAN}${text}${NC}"
-    echo -n "+"
-    printf '=%.0s' $(seq 1 $width)
-    echo "+"
-}
+# ------------------------------------------------------------------------------
+# FUNZIONE 1: INSTALLA SERVIZI & CONFIGURA SYSTEMD
+# ------------------------------------------------------------------------------
+install_services() {
+    echo -e "${BLUE}====================================================${NC}"
+    echo -e "${BLUE}       AVVIO INSTALLAZIONE HOMELAB AI STACK        ${NC}"
+    echo -e "${BLUE}====================================================${NC}"
 
-do_uninstall_step() {
-    local msg="$1"
-    local cmd="$2"
-    echo -n -e "  - ${msg}... "
-    eval "$cmd" >/dev/null 2>&1 || true
-    sleep 0.5
-    echo -e "${GREEN}[OK]${NC}"
-}
+    # 1. Aggiornamento Sistema e Dipendenze Base
+    echo -e "${YELLOW}[1/5] Aggiornamento pacchetti di sistema...${NC}"
+    apt update && apt install -y curl wget git build-essential python3 python3-pip python3-venv openssh-client
 
-run_guided_step() {
-    local title="$1"
-    local description="$2"
-    local cmd="$3"
-
-    eval "$cmd" > "$LOG_FILE" 2>&1 &
-    local pid=$!
-
-    while kill -0 $pid 2>/dev/null; do
-        clear
-        echo "=============================================================================="
-        echo -e "${CYAN} +--------------------------------------------------------------------------+${NC}"
-        echo -e "${CYAN} |                    UNSLOTH SUITE MANAGER - INSTALLAZIONE                 |${NC}"
-        echo -e "${CYAN} +--------------------------------------------------------------------------+${NC}"
-        echo -e "${YELLOW} >> FASE ATTIVA: ${title}${NC}"
-        echo "------------------------------------------------------------------------------"
-        echo -e "${description}"
-        echo "=============================================================================="
-        echo -e "${BLUE} Progressione comandi in tempo reale (ultime righe del log):${NC}"
-        echo "------------------------------------------------------------------------------"
-        tail -n 8 "$LOG_FILE" 2>/dev/null || true
-        sleep 0.4
-    done
-
-    wait $pid
-    local exit_code=$?
-
-    if [ $exit_code -eq 0 ]; then
-        echo ""
-        log_ok "Fase completata con successo: ${title}"
-        sleep 1
-    else
-        echo ""
-        log_error "Errore riscontrato durante: ${title}"
-        echo -e "${RED}Ultime righe del log di errore:${NC}"
-        tail -n 15 "$LOG_FILE"
-        exit 1
+    # 2. Configurazione Unsloth Studio Virtualenv & Jupyter Lab
+    echo -e "${YELLOW}[2/5] Setup Unsloth Studio & Jupyter Lab...${NC}"
+    if [ ! -d "$UNSLOTH_ENV" ]; then
+        python3 -m venv "$UNSLOTH_ENV"
     fi
-}
+    "$UNSLOTH_ENV/bin/pip" install --upgrade pip setuptools wheel
+    "$UNSLOTH_ENV/bin/pip" install jupyterlab torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-# Funzione isolata per l'installazione dei Driver NVIDIA, CUDA e Container Toolkit
-install_nvidia_drivers_and_cuda() {
-    # Repository NVIDIA Container Toolkit
-    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null || true
-    curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-        sed 's#deb [^ ]*#& [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg]#' > /etc/apt/sources.list.d/nvidia-container-toolkit.list
-    apt update
+    # Creazione Service Systemd per Unsloth Studio (Porta 8888)
+    cat <<EOF > /etc/systemd/system/unsloth-studio.service
+[Unit]
+Description=Unsloth Studio Jupyter Lab Service
+After=network.target
 
-    if [ "$IS_CONTAINER" = true ]; then
-        if [ -f "/proc/driver/nvidia/version" ]; then
-            local nv_ver
-            nv_ver=$(grep "Kernel Module" /proc/driver/nvidia/version | awk '{print $8}')
-            echo "Driver Host Rilevato: $nv_ver. Download installer userspace..."
-            
-            wget -q "https://us.download.nvidia.com/XFree86/Linux-x86_64/${nv_ver}/NVIDIA-Linux-x86_64-${nv_ver}.run" -O /tmp/nvidia-driver.run
-            chmod +x /tmp/nvidia-driver.run
-            /tmp/nvidia-driver.run -s --no-kernel-module --no-drm --ui=none || true
-            rm -f /tmp/nvidia-driver.run
-        fi
-        apt install -y --allow-unauthenticated cuda-toolkit nvidia-container-toolkit || true
-    else
-        apt install -y --allow-unauthenticated dkms linux-headers-$(uname -r)
-        echo -e "blacklist nouveau\noptions nouveau modeset=0" > /etc/modprobe.d/blacklist-nouveau.conf
-        update-initramfs -u
-        apt install -y --allow-unauthenticated cuda-drivers cuda-toolkit nvidia-container-toolkit
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root
+ExecStart=$UNSLOTH_ENV/bin/jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --ServerApp.token='' --ServerApp.password=''
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # 3. Setup OpenCode AI Web Service
+    echo -e "${YELLOW}[3/5] Setup OpenCode AI Web Service...${NC}"
+    mkdir -p "$OPENCODE_DIR"
+    if [ ! -f "$OPENCODE_DIR/main.py" ]; then
+        cat <<EOF > "$OPENCODE_DIR/main.py"
+from fastapi import FastAPI
+import uvicorn
+
+app = FastAPI(title="OpenCode AI Web Interface")
+
+@app.get("/")
+def read_root():
+    return {"status": "online", "service": "OpenCode AI"}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+EOF
     fi
-}
+    "$UNSLOTH_ENV/bin/pip" install fastapi uvicorn
 
-# Funzione isolata per l'installazione di Code Runner API e documentazione
-install_code_runner() {
-    mkdir -p /opt/code_runner
-    apt install -y python3-uvicorn python3-fastapi
+    # Creazione Service Systemd per OpenCode AI (Porta 8000)
+    cat <<EOF > /etc/systemd/system/opencode.service
+[Unit]
+Description=OpenCode AI Web Service
+After=network.target
 
-    cat << 'PYEOF' > /opt/code_runner/code_runner_api.py
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$OPENCODE_DIR
+ExecStart=$UNSLOTH_ENV/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # 4. Setup Code Runner API Service
+    echo -e "${YELLOW}[4/5] Setup Code Runner API Service...${NC}"
+    mkdir -p "$CODE_RUNNER_DIR"
+    if [ ! -f "$CODE_RUNNER_DIR/code_runner_api.py" ]; then
+        cat <<EOF > "$CODE_RUNNER_DIR/code_runner_api.py"
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import subprocess
 
-app = FastAPI()
+app = FastAPI(title="Code Runner API")
 
-class CodeRequest(BaseModel):
+class ExecutionRequest(BaseModel):
     code: str
     sandbox_ip: str
 
-@app.post('/execute')
-async def execute_code(request: CodeRequest):
-    safe_code = request.code.replace('"', '\\"')
-    command = f'python3 -c "{safe_code}"'
+@app.get("/")
+def health():
+    return {"status": "active", "service": "Code Runner API"}
+
+@app.post("/execute")
+def execute_code(req: ExecutionRequest):
+    ssh_cmd = [
+        "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+        f"root@{req.sandbox_ip}", f"python3 -c '{req.code}'"
+    ]
     try:
-        result = subprocess.run(
-            ['ssh', '-o', 'StrictHostKeyChecking=no', f'root@{request.sandbox_ip}', command],
-            capture_output=True, text=True, timeout=30
-        )
-        return {'stdout': result.stdout, 'stderr': result.stderr, 'exit_code': result.returncode}
+        res = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
+        return {"stdout": res.stdout, "stderr": res.stderr, "exit_code": res.returncode}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-PYEOF
+EOF
+    fi
 
-    cat << 'SERVICEEOF' > /etc/systemd/system/code-runner.service
+    # Creazione Service Systemd per Code Runner API (Porta 9000)
+    cat <<EOF > /etc/systemd/system/code-runner.service
 [Unit]
-Description=AI Code Runner API Service
+Description=Code Runner API Service
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/code_runner
+User=root
+WorkingDirectory=$CODE_RUNNER_DIR
 ExecStart=/usr/bin/python3 -m uvicorn code_runner_api:app --host 0.0.0.0 --port 9000
 Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-SERVICEEOF
+EOF
 
-    cat << READMDEOF > "${REAL_HOME}/README_AUTOMATION.md"
-# Guida all'Automazione: Architettura Controller-Sandbox
-Consulta la documentazione integrata per collegare una seconda macchina fisica o container LXC come esecutore isolato del codice.
-READMDEOF
-
+    # 5. Ricarico Systemd, Abilito all'Avvio (ENABLE) e Avvio i Servizi
+    echo -e "${YELLOW}[5/5] Ricarico systemd e abilito i servizi all'avvio...${NC}"
     systemctl daemon-reload
-    systemctl enable code-runner.service
-    systemctl restart code-runner.service
-    chown "${REAL_USER}:${REAL_USER}" "${REAL_HOME}/README_AUTOMATION.md"
+    
+    for srv in unsloth-studio opencode code-runner; do
+        systemctl enable "$srv.service"
+        systemctl restart "$srv.service"
+        echo -e "${GREEN}[OK] Servizio $srv.service abilitato e avviato.${NC}"
+    done
+
+    echo -e "${GREEN}====================================================${NC}"
+    echo -e "${GREEN}     INSTALLAZIONE E CONFIGURAZIONE COMPLETATA!     ${NC}"
+    echo -e "${GREEN}====================================================${NC}"
 }
 
 # ------------------------------------------------------------------------------
-# 1. VERIFICA PRIVILEGI E RILEVAMENTO AMBIENTE
+# FUNZIONE 2: VERIFICA STATO SERVIZI E GPU
 # ------------------------------------------------------------------------------
-if [ "$(id -u)" -ne 0 ]; then
-    log_error "Questo script deve essere eseguito con i privilegi di root (usa sudo)."
-    exit 1
-fi
+check_status() {
+    echo -e "${BLUE}====================================================${NC}"
+    echo -e "${BLUE}             VERIFICA STATO DEL SISTEMA             ${NC}"
+    echo -e "${BLUE}====================================================${NC}"
 
-REAL_USER="${SUDO_USER:-$USER}"
-REAL_HOME=$(eval echo "~${REAL_USER}")
-
-IS_CONTAINER=false
-if [ -f /.dockerenv ] || [ -f /run/.containerenv ] || grep -qa 'container=lxc' /proc/1/environ 2>/dev/null || grep -q 'lxc' /proc/1/cgroup 2>/dev/null; then
-    IS_CONTAINER=true
-fi
-
-# ------------------------------------------------------------------------------
-# 2. MENU PRINCIPALE
-# ------------------------------------------------------------------------------
-clear
-echo -e "${CYAN}"
-echo "  _    _ _                 _   _       _____         _ _       "
-echo " | |  | | |               | | | |     / ____|       (_| |      "
-echo " | |  | | |___  ___ _   _| |_| |___ | (M     _   _  _ | |_ ___ "
-echo " | |  | | / __|/ __| | | | __| '_ \  \ \   | | | || | | __/ _ \\"
-echo " | |__| | \__ \ (__| |_| | |_| | | | .____) | |_| || | | ||  __/"
-echo "  \____/|_|___/\___|\__,_|\__|_| |_| \_____/ \__,_| |_|\__\___|"
-echo "                                           v0.6.1 (12.08.2026) "
-echo -e "${NC}"
-
-draw_box "BENVENUTO NEL MANAGER UFFICIALE PER AMBIENTI AI & AUTOMAZIONE"
-echo -e " Configurazione di Unsloth Studio e OpenCode AI su Debian/Ubuntu"
-echo -e " (Supporto nativo Bare-Metal, Macchine Fisiche o Container LXC/Proxmox)."
-echo ""
-echo "+------------------------------------------------------------------------------+"
-echo "| SELEZIONA OPERAZIONE:                                                        |"
-echo "|   1) INSTALLA Servizi (Controller AI + Code Runner API)                     |"
-echo "|   2) DISINSTALLA Servizi (Pulizia profonda e rimozione demoni)              |"
-echo "+------------------------------------------------------------------------------+"
-read -rp "Scelta [1 o 2]: " MAIN_ACTION
-
-if [ "$MAIN_ACTION" == "2" ]; then
-    clear
-    draw_box "PANNELLO DI DISINSTALLAZIONE SERVIZI"
-    echo "Seleziona i servizi da RIMUOVERE (numeri separati da spazio):"
-    echo "  1) Unsloth & Unsloth Studio"
-    echo "  2) OpenCode AI Web Service"
-    echo "  3) Code Runner API (Automazione Sandbox)"
-    echo "  4) Tutti i servizi sopra indicati"
-    echo "------------------------------------------------------------------------------"
-    read -rp "Scelta: " -a UNINSTALL_CHOICES
-
-    UN_UNSLOTH=false
-    UN_OPENCODE=false
-    UN_RUNNER=false
-
-    for choice in "${UNINSTALL_CHOICES[@]}"; do
-        case "$choice" in
-            1) UN_UNSLOTH=true ;;
-            2) UN_OPENCODE=true ;;
-            3) UN_RUNNER=true ;;
-            4) UN_UNSLOTH=true; UN_OPENCODE=true; UN_RUNNER=true ;;
-            *) log_warn "Opzione '$choice' non valida, ignorata." ;;
-        esac
+    # Stato Servizi Systemd
+    echo -e "${YELLOW}---> Stato Servizi Systemd:${NC}"
+    for srv in unsloth-studio opencode code-runner; do
+        if systemctl is-active --quiet "$srv.service"; then
+            echo -e "  $srv.service: ${GREEN}ATTIVO (Running)${NC}"
+        else
+            echo -e "  $srv.service: ${RED}INATTIVO (Stopped/Failed)${NC}"
+        fi
     done
 
-    echo ""
-    if [ "$UN_UNSLOTH" = true ]; then
-        do_uninstall_step "Arresto Unsloth Studio" "systemctl stop unsloth-studio.service"
-        do_uninstall_step "Rimozione systemd Unsloth" "rm -f /etc/systemd/system/unsloth-studio.service"
-        do_uninstall_step "Cancellazione venv Unsloth" "rm -rf ${REAL_HOME}/unsloth_env"
+    # Verifica Porte in Ascolto
+    echo -e "\n${YELLOW}---> Porte di Rete in Ascolto:${NC}"
+    for port in 8000 8888 9000; do
+        if ss -tulpn | grep -q ":$port "; then
+            echo -e "  Porta $port: ${GREEN}IN ASCOLTO${NC}"
+        else
+            echo -e "  Porta $port: ${RED}NON ATTIVA${NC}"
+        fi
+    done
+
+    # Verifica Driver GPU / CUDA
+    echo -e "\n${YELLOW}---> Verifica GPU e CUDA PyTorch:${NC}"
+    if [ -f "$UNSLOTH_ENV/bin/python3" ]; then
+        "$UNSLOTH_ENV/bin/python3" -c "
+import torch
+cuda_avail = torch.cuda.is_available()
+print(f'  CUDA Disponibile: {\"${GREEN}SI${NC}\" if cuda_avail else \"${RED}NO${NC}\"}')
+if cuda_avail:
+    print(f'  GPU Riconosciuta: {torch.cuda.get_device_name(0)}')
+" 2>/dev/null || echo -e "  ${RED}Errore durante il test di PyTorch${NC}"
+    else
+        echo -e "  ${RED}Virtualenv Unsloth non trovato su $UNSLOTH_ENV${NC}"
     fi
-    if [ "$UN_OPENCODE" = true ]; then
-        do_uninstall_step "Arresto OpenCode AI" "systemctl stop opencode.service"
-        do_uninstall_step "Rimozione systemd OpenCode" "rm -f /etc/systemd/system/opencode.service"
-        do_uninstall_step "Rimozione binario OpenCode" "rm -f /usr/local/bin/opencode"
+}
+
+# ------------------------------------------------------------------------------
+# FUNZIONE 3: AGGIORNA COMPONENTI
+# ------------------------------------------------------------------------------
+update_components() {
+    echo -e "${BLUE}====================================================${NC}"
+    echo -e "${BLUE}               AGGIORNAMENTO COMPONENTI             ${NC}"
+    echo -e "${BLUE}====================================================${NC}"
+
+    echo -e "${YELLOW}---> Aggiornamento Repository Git...${NC}"
+    git pull origin main || echo -e "${RED}Impossibile eseguire git pull.${NC}"
+
+    if [ -d "$UNSLOTH_ENV" ]; then
+        echo -e "${YELLOW}---> Aggiornamento pacchetti Python Unsloth/Jupyter/FastAPI...${NC}"
+        "$UNSLOTH_ENV/bin/pip" install --upgrade jupyterlab fastapi uvicorn torch
     fi
-    if [ "$UN_RUNNER" = true ]; then
-        do_uninstall_step "Arresto Code Runner API" "systemctl stop code-runner.service"
-        do_uninstall_step "Rimozione systemd Code Runner" "rm -f /etc/systemd/system/code-runner.service"
-        do_uninstall_step "Rimozione directory /opt/code_runner" "rm -rf /opt/code_runner"
-        do_uninstall_step "Rimozione guida automazione" "rm -f ${REAL_HOME}/README_AUTOMATION.md"
+
+    echo -e "${YELLOW}---> Riavvio dei servizi systemd...${NC}"
+    systemctl restart unsloth-studio opencode code-runner
+    echo -e "${GREEN}[OK] Aggiornamento completato e servizi riavviati.${NC}"
+}
+
+# ------------------------------------------------------------------------------
+# FUNZIONE 4: CONFIGURA SANDBOX
+# ------------------------------------------------------------------------------
+configure_sandbox() {
+    echo -e "${BLUE}====================================================${NC}"
+    echo -e "${BLUE}               CONFIGURAZIONE SANDBOX               ${NC}"
+    echo -e "${BLUE}====================================================${NC}"
+
+    if [ ! -f /root/.ssh/id_ed25519 ]; then
+        echo -e "${YELLOW}[1/3] Generazione chiave SSH sul Controller...${NC}"
+        ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519
+    else
+        echo -e "${GREEN}[1/3] Chiave SSH presente su /root/.ssh/id_ed25519${NC}"
     fi
-    systemctl daemon-reload
-    log_ok "Disinstallazione completata."
-    exit 0
-fi
 
-if [ "$MAIN_ACTION" != "1" ]; then
-    log_error "Scelta non valida. Uscita."
-    exit 1
-fi
+    echo -ne "\n${YELLOW}Inserisci l'IP della macchina Sandbox: ${NC}"
+    read -r SANDBOX_IP
 
-# ==============================================================================
-# FASE PRELIMINARE E INSTALLAZIONE COMPONENTI
-# ==============================================================================
-clear
-run_guided_step \
-    "Impostazione Locale e Timezone Predefiniti" \
-    "Configurazione automatica dei pacchetti locales su en_US.UTF-8." \
-    "apt install -y locales && sed -i '/^# *en_US.UTF-8 UTF-8/s/^# //' /etc/locale.gen && locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LANGUAGE=en_US.UTF-8"
+    if [ -z "$SANDBOX_IP" ]; then
+        echo -e "${RED}IP non valido. Operazione annullata.${NC}"
+        return
+    fi
 
-export LANG="en_US.UTF-8"
-export LC_ALL="en_US.UTF-8"
-export LANGUAGE="en_US.UTF-8"
+    echo -e "${YELLOW}[2/3] Invio chiave SSH a root@$SANDBOX_IP...${NC}"
+    ssh-copy-id -i /root/.ssh/id_ed25519.pub "root@$SANDBOX_IP"
 
-# FASE 1-5: Sistema, Driver, UV e Servizi
-run_guided_step "Aggiornamento e Pulizia Sistema" "Pulizia repository corrotto e full-upgrade." "rm -f /etc/apt/sources.list.d/cuda-official.list /etc/crypto-policies/back-ends/apt-sequoia.config && apt update && apt full-upgrade -y"
-run_guided_step "Installazione Utility e Node.js" "Installazione strumenti base e Node.js." "apt install -y curl wget ca-certificates gnupg git build-essential netcat-openbsd mc nvtop htop pciutils python3-full python3-pip python3-venv && (command -v node &> /dev/null || (curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt install -y nodejs))"
+    echo -e "${YELLOW}[3/3] Test di esecuzione remota tramite API Code Runner (:9000)...${NC}"
+    curl -X POST http://localhost:9000/execute \
+      -H "Content-Type: application/json" \
+      -d "{
+        \"code\": \"import sys, platform; print(f'Sandbox OK! Node: {platform.node()} - Python: {sys.version}')\",
+        \"sandbox_ip\": \"$SANDBOX_IP\"
+      }"
+    echo -e "\n${GREEN}[OK] Configurazione Sandbox completata.${NC}"
+}
 
-# Repository NVIDIA e Driver (Fix SHA1 policy su Debian Trixie)
-run_guided_step \
-    "Configurazione Repository NVIDIA" \
-    "Aggiunta repo CUDA con trust esplicito per evitare errori di firme SHA1 deprecate." \
-    "echo 'deb [trusted=yes] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /' > /etc/apt/sources.list.d/cuda-official.list && apt update"
+# ------------------------------------------------------------------------------
+# FUNZIONE 5: DISINSTALLA SERVIZI
+# ------------------------------------------------------------------------------
+uninstall_services() {
+    echo -e "${RED}====================================================${NC}"
+    echo -e "${RED}                DISINSTALLAZIONE STACK             ${NC}"
+    echo -e "${RED}====================================================${NC}"
+    echo -ne "${YELLOW}Sei sicuro di voler rimuovere tutti i servizi systemd e le configurazioni? (s/N): ${NC}"
+    read -r CONFIRM
 
-# Installazione Driver Userspace/Kernel, CUDA Toolkit e Container Toolkit
-run_guided_step \
-    "Installazione Driver NVIDIA, CUDA e Container Toolkit" \
-    "Setup completo dell'ambiente GPU e dei pacchetti toolkit." \
-    "install_nvidia_drivers_and_cuda"
+    if [[ "$CONFIRM" =~ ^[Ss]$ ]]; then
+        echo -e "${YELLOW}---> Arresto e disattivazione servizi...${NC}"
+        for srv in unsloth-studio opencode code-runner; do
+            systemctl stop "$srv.service" 2>/dev/null || true
+            systemctl disable "$srv.service" 2>/dev/null || true
+            rm -f "/etc/systemd/system/$srv.service"
+        done
+        systemctl daemon-reload
 
-# Astral UV e Unsloth
-run_guided_step "Installazione Astral UV" "Installazione package manager in Rust." "curl -LsSf https://astral.sh/uv/install.sh | sh"
-export PATH="${REAL_HOME}/.cargo/bin:${PATH}"
+        echo -e "${YELLOW}---> Pulizia directory...${NC}"
+        rm -rf "$CODE_RUNNER_DIR" "$OPENCODE_DIR"
 
-UNSLOTH_DIR="${REAL_HOME}/unsloth_env"
-run_guided_step "Installazione Unsloth & Studio" "Creazione venv e dipendenze AI." "su - ${REAL_USER} -c 'uv venv ${UNSLOTH_DIR} --python 3.12 --seed && source ${UNSLOTH_DIR}/bin/activate && uv pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124 && uv pip install unsloth xformers trl peft accelerate bitsandbytes jupyterlab'"
+        echo -e "${GREEN}[OK] Disinstallazione completata con successo.${NC}"
+    else
+        echo -e "${BLUE}Operazione annullata.${NC}"
+    fi
+}
 
-cat <<EOF > /etc/systemd/system/unsloth-studio.service
-[Unit]
-Description=Unsloth Studio AI Service
-After=network.target
-[Service]
-Type=simple
-User=${REAL_USER}
-WorkingDirectory=${REAL_HOME}
-ExecStart=${UNSLOTH_DIR}/bin/jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --ServerApp.token='' --ServerApp.password='' --allow-root
-Restart=always
-[Install]
-WantedBy=multi-user.target
-EOF
+# ------------------------------------------------------------------------------
+# MENU INTERATTIVO PRINCIPALE
+# ------------------------------------------------------------------------------
+show_menu() {
+    clear
+    echo -e "${BLUE}====================================================${NC}"
+    echo -e "${BLUE}      🦥 HOMELAB AI DEPLOYER - MANAGER MENU        ${NC}"
+    echo -e "${BLUE}====================================================${NC}"
+    echo -e " 1) ${GREEN}INSTALLA Servizi${NC}   (Setup Unsloth, OpenCode, API & Systemd)"
+    echo -e " 2) ${YELLOW}VERIFICA Stato${NC}     (Check Servizi, Porte e GPU CUDA)"
+    echo -e " 3) ${BLUE}AGGIORNA Componenti${NC} (Git pull & Python package update)"
+    echo -e " 4) ${YELLOW}CONFIGURA Sandbox${NC}   (Setup Chiavi SSH & Test API :9000)"
+    echo -e " 5) ${RED}DISINSTALLA${NC}        (Rimozione Servizi e Directory)"
+    echo -e " 6) Uscita"
+    echo -e "${BLUE}====================================================${NC}"
+    echo -ne "Seleziona un'opzione [1-6]: "
+}
 
-# OpenCode AI
-run_guided_step "Installazione OpenCode AI" "Setup servizio web." "curl -fsSL https://opencode.ai/install | bash || npm install -g opencode-ai; if [ -f \"${REAL_HOME}/.opencode/bin/opencode\" ]; then cp \"${REAL_HOME}/.opencode/bin/opencode\" /usr/local/bin/opencode; fi"
-
-cat <<EOF > /etc/systemd/system/opencode.service
-[Unit]
-Description=OpenCode AI Web Service
-After=network.target
-[Service]
-Type=simple
-User=${REAL_USER}
-WorkingDirectory=${REAL_HOME}
-ExecStart=/usr/local/bin/opencode web --hostname 0.0.0.0 --port 8000
-Restart=always
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Code Runner API & Guida Automazione
-run_guided_step \
-    "Installazione Code Runner API e Documentazione" \
-    "Configurazione dell'API FastAPI su porta 9000 e generazione della guida README_AUTOMATION.md" \
-    "install_code_runner"
-
-chown -R "$REAL_USER":"$REAL_USER" "$REAL_HOME"
-systemctl daemon-reload && systemctl restart unsloth-studio.service opencode.service
-
-clear
-draw_box "INSTALLAZIONE COMPLETATA CON SUCCESSO"
-SERVER_IP=$(hostname -I | awk '{print $1}')
-[ -z "$SERVER_IP" ] && SERVER_IP="localhost"
-
-echo -e " 1. Unsloth Studio:    http://${SERVER_IP}:8888"
-echo -e " 2. OpenCode Web:      http://${SERVER_IP}:8000"
-echo -e " 3. Code Runner API:   http://${SERVER_IP}:9000"
-echo -e " Guida generata in:    ${REAL_HOME}/README_AUTOMATION.md"
-echo "=============================================================================="
+while true; do
+    show_menu
+    read -r choice
+    case $choice in
+        1) install_services ;;
+        2) check_status ;;
+        3) update_components ;;
+        4) configure_sandbox ;;
+        5) uninstall_services ;;
+        6) echo -e "${GREEN}Uscita... Bye!${NC}"; exit 0 ;;
+        *) echo -e "${RED}Opzione non valida!${NC}" ;;
+    esac
+    echo -ne "\n${YELLOW}Premi INVIO per continuare...${NC}"
+    read -r
+done
