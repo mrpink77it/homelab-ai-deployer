@@ -5,17 +5,18 @@
 
 set -e
 
-# Aggiornamento database dei template Proxmox
-echo "🔄 Aggiornamento elenco template Proxmox..."
-pveam update > /dev/null 2>&1 || true
-
 echo "===================================================="
 echo "      🚀 CREAZIONE CONTAINER LXC SANDBOX           "
 echo "===================================================="
 
+# 🔄 Aggiornamento database template Proxmox
+echo "🔄 Aggiornamento elenco template Proxmox..."
+pveam update > /dev/null 2>&1 || true
+
 # 1. Controllo e Richiesta ID Container LXC
+echo -e "\n1) Identificativo Container (ID):"
 while true; do
-  read -p "1) ID Container LXC [es. 100, 200]: " CT_ID
+  read -p "   Inserisci ID LXC [es. 100, 200]: " CT_ID
   if [[ -z "$CT_ID" || ! "$CT_ID" =~ ^[0-9]+$ ]]; then
     echo "   ⚠️ Inserisci un numero di ID valido (es. 200)."
   elif pct status "$CT_ID" >/dev/null 2>&1 || qm status "$CT_ID" >/dev/null 2>&1; then
@@ -26,53 +27,53 @@ while true; do
 done
 
 # 2. Hostname / Nome Container
-read -p "2) Nome Container / Hostname [default: sandbox-ai]: " HOSTNAME
+echo -e "\n2) Nome Container / Hostname:"
+read -p "   Nome [default: sandbox-ai]: " HOSTNAME
 HOSTNAME=${HOSTNAME:-sandbox-ai}
 
-# 3. Password di Root (con conferma)
+# 3. Password di Root con Verifica Doppia
+echo -e "\n3) Impostazione Password di ROOT:"
 while true; do
-  read -sp "3) Imposta Password di ROOT per il Container: " ROOT_PASS
+  read -sp "   Inserisci Password ROOT per il container: " ROOT_PASS
   echo ""
   if [ -z "$ROOT_PASS" ]; then
     echo "   ⚠️ La password non può essere vuota."
     continue
   fi
-  read -sp "   Riconferma Password di ROOT: " ROOT_PASS_CONFIRM
+  read -sp "   Conferma Password ROOT: " ROOT_PASS_CONFIRM
   echo ""
   if [ "$ROOT_PASS" != "$ROOT_PASS_CONFIRM" ]; then
-    echo "   ❌ Le password non coincidono. Riprova."
+    echo "   ❌ Le password non coincidono! Riprova."
   else
+    echo "   ✅ Password impostata correttamente."
     break
   fi
 done
 
 # 4. Sistema Operativo
-echo -e "\n4) Scegli il Sistema Operativo:"
+echo -e "\n4) Sistema Operativo:"
 echo "   1) Debian 13 (Trixie)"
 echo "   2) Ubuntu 24.04 (Noble)"
 read -p "   Selezione [1-2, default: 1]: " OS_CHOICE
 OS_CHOICE=${OS_CHOICE:-1}
 
 # 5. Risorse Hardware
-read -p "5) CPU Cores [default: 2]: " CORES
+echo -e "\n5) Configurazione Risorse Hardware:"
+read -p "   CPU Cores [default: 2]: " CORES
 CORES=${CORES:-2}
 
-read -p "6) Memoria RAM in MB [default: 2048]: " RAM
+read -p "   Memoria RAM in MB [default: 2048]: " RAM
 RAM=${RAM:-2048}
 
-read -p "7) Memoria SWAP in MB [default: 512]: " SWAP
+read -p "   Memoria SWAP in MB [default: 512]: " SWAP
 SWAP=${SWAP:-512}
 
-read -p "8) Dimensione Disco in GB [default: 8]: " DISK
+read -p "   Dimensione Disco in GB [default: 8]: " DISK
 DISK=${DISK:-8}
 
-# 6. Selezione Dinamica dello Storage Proxmox
-echo -e "\n9) Seleziona lo Storage Proxmox:"
-STORAGES=($(pvesm status --content rootdir 2>/dev/null | awk 'NR>1 && $3=="active" {print $1}'))
-
-if [ ${#STORAGES[@]} -eq 0 ]; then
-    STORAGES=($(pvesm status 2>/dev/null | awk 'NR>1 && $3=="active" {print $1}'))
-fi
+# 6. Rilevamento e Selezione Storage Proxmox
+echo -e "\n6) Seleziona lo Storage Proxmox per il Disco:"
+mapfile -t STORAGES < <(pvesm status 2>/dev/null | awk 'NR>1 && $3=="active" {print $1}')
 
 if [ ${#STORAGES[@]} -eq 0 ]; then
     echo "❌ Nessuno storage attivo rilevato sul nodo Proxmox! Impossibile procedere."
@@ -88,19 +89,21 @@ for i in "${!STORAGES[@]}"; do
     fi
 done
 
-read -p "   Selezione [1-${#STORAGES[@]}, default: $DEFAULT_STORAGE_IDX]: " STORAGE_CHOICE
-STORAGE_CHOICE=${STORAGE_CHOICE:-$DEFAULT_STORAGE_IDX}
-
-if ! [[ "$STORAGE_CHOICE" =~ ^[0-9]+$ ]] || [ "$STORAGE_CHOICE" -lt 1 ] || [ "$STORAGE_CHOICE" -gt "${#STORAGES[@]}" ]; then
-    STORAGE="${STORAGES[$((DEFAULT_STORAGE_IDX-1))]}"
-    echo "   ⚠️ Scelta non valida, impostato storage predefinito: $STORAGE"
-else
+while true; do
+  read -p "   Selezione [1-${#STORAGES[@]}, default: $DEFAULT_STORAGE_IDX]: " STORAGE_CHOICE
+  STORAGE_CHOICE=${STORAGE_CHOICE:-$DEFAULT_STORAGE_IDX}
+  if [[ "$STORAGE_CHOICE" =~ ^[0-9]+$ ]] && [ "$STORAGE_CHOICE" -ge 1 ] && [ "$STORAGE_CHOICE" -le "${#STORAGES[@]}" ]; then
     STORAGE="${STORAGES[$((STORAGE_CHOICE-1))]}"
-fi
+    break
+  else
+    echo "   ⚠️ Selezione non valida. Scegli un numero tra 1 e ${#STORAGES[@]}."
+  fi
+done
+echo "   👉 Storage selezionato: $STORAGE"
 
-# 7. Selezione Dinamica del Bridge di Rete
-echo -e "\n10) Seleziona il Bridge di Rete:"
-BRIDGES=($(ip -o link show type bridge 2>/dev/null | awk -F': ' '{print $2}'))
+# 7. Rilevamento e Selezione Bridge di Rete
+echo -e "\n7) Seleziona il Bridge di Rete:"
+mapfile -t BRIDGES < <(ip -o link show type bridge 2>/dev/null | awk -F': ' '{print $2}')
 
 if [ ${#BRIDGES[@]} -eq 0 ]; then
     BRIDGES=("vmbr0")
@@ -112,17 +115,20 @@ for i in "${!BRIDGES[@]}"; do
     echo "   $idx) ${BRIDGES[$i]}"
 done
 
-read -p "   Selezione [1-${#BRIDGES[@]}, default: $DEFAULT_BRIDGE_IDX]: " BRIDGE_CHOICE
-BRIDGE_CHOICE=${BRIDGE_CHOICE:-$DEFAULT_BRIDGE_IDX}
-
-if ! [[ "$BRIDGE_CHOICE" =~ ^[0-9]+$ ]] || [ "$BRIDGE_CHOICE" -lt 1 ] || [ "$BRIDGE_CHOICE" -gt "${#BRIDGES[@]}" ]; then
-    BRIDGE="${BRIDGES[0]}"
-else
+while true; do
+  read -p "   Selezione [1-${#BRIDGES[@]}, default: $DEFAULT_BRIDGE_IDX]: " BRIDGE_CHOICE
+  BRIDGE_CHOICE=${BRIDGE_CHOICE:-$DEFAULT_BRIDGE_IDX}
+  if [[ "$BRIDGE_CHOICE" =~ ^[0-9]+$ ]] && [ "$BRIDGE_CHOICE" -ge 1 ] && [ "$BRIDGE_CHOICE" -le "${#BRIDGES[@]}" ]; then
     BRIDGE="${BRIDGES[$((BRIDGE_CHOICE-1))]}"
-fi
+    break
+  else
+    echo "   ⚠️ Selezione non valida. Scegli un numero tra 1 e ${#BRIDGES[@]}."
+  fi
+done
+echo "   👉 Bridge selezionato: $BRIDGE"
 
 # 8. Configurazione Indirizzo IP
-echo -e "\n11) Modalità Indirizzo IP:"
+echo -e "\n8) Modalità Indirizzo IP:"
 echo "   1) DHCP (Automatico)"
 echo "   2) Statico (Manuale)"
 read -p "   Selezione [1-2, default: 1]: " NET_CHOICE
@@ -142,6 +148,7 @@ else
     NET_PARAM="name=eth0,bridge=$BRIDGE,ip=dhcp"
 fi
 
+# 9. Selezione e Download Template
 if [ "$OS_CHOICE" -eq "2" ]; then
     OS_TYPE="ubuntu"
     SEARCH_KEY="ubuntu-24.04"
@@ -166,7 +173,8 @@ fi
 echo "⬇️ Downloading template: $TEMPLATE_NAME..."
 pveam download local "$TEMPLATE_NAME"
 
-echo "📦 Creazione Container LXC ID $CT_ID ($HOSTNAME) sullo storage '$STORAGE'..."
+# 10. Creazione Container LXC
+echo -e "\n📦 Creazione Container LXC ID $CT_ID ($HOSTNAME) sullo storage '$STORAGE'..."
 pct create "$CT_ID" "local:vztmpl/$TEMPLATE_NAME" \
   --ostype "$OS_TYPE" \
   --hostname "$HOSTNAME" \
