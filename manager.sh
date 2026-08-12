@@ -23,6 +23,14 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# Fix preventivo per xdg-open su ambienti headless LXC/Server
+setup_xdg_fix() {
+    if ! command -v xdg-open &> /dev/null; then
+        echo -e "${YELLOW}[FIX] Creazione symlink xdg-open -> /bin/true per headless server...${NC}"
+        ln -sf /bin/true /usr/local/bin/xdg-open
+    fi
+}
+
 # ------------------------------------------------------------------------------
 # FUNZIONE 1: INSTALLA SERVIZI & CONFIGURA SYSTEMD
 # ------------------------------------------------------------------------------
@@ -31,11 +39,14 @@ install_services() {
     echo -e "${BLUE}       AVVIO INSTALLAZIONE HOMELAB AI STACK        ${NC}"
     echo -e "${BLUE}====================================================${NC}"
 
-    # 1. Aggiornamento Sistema e Dipendenze Base
-    echo -e "${YELLOW}[1/5] Aggiornamento pacchetti di sistema...${NC}"
-    apt update && apt install -y curl wget git build-essential python3 python3-pip python3-venv openssh-client
+    # Fix per xdg-open (evita crash ENOENT su Bun/OpenCode in LXC/Server)
+    setup_xdg_fix
 
-    # 2. Configurazione Unsloth Studio Virtualenv & Jupyter Lab
+    # 1. Aggiornamento Sistema e Dipendenze Base
+    echo -e "${YELLOW}[1/5] Aggiornamento pacchetti di sistema e dipendenze...${NC}"
+    apt update && apt install -y curl wget git build-essential python3 python3-pip python3-venv openssh-client net-tools
+
+    # 2. Configurazione Unsloth Studio Virtualenv & Jupyter Lab (Porta 8888)
     echo -e "${YELLOW}[2/5] Setup Unsloth Studio & Jupyter Lab...${NC}"
     if [ ! -d "$UNSLOTH_ENV" ]; then
         python3 -m venv "$UNSLOTH_ENV"
@@ -43,10 +54,9 @@ install_services() {
     "$UNSLOTH_ENV/bin/pip" install --upgrade pip setuptools wheel
     "$UNSLOTH_ENV/bin/pip" install jupyterlab torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-    # Creazione Service Systemd per Unsloth Studio (Porta 8888)
     cat <<EOF > /etc/systemd/system/unsloth-studio.service
 [Unit]
-Description=Unsloth Studio Jupyter Lab Service
+Description=Unsloth Studio AI Service
 After=network.target
 
 [Service]
@@ -61,10 +71,12 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    # 3. Setup OpenCode AI Web Service
+    # 3. Setup OpenCode AI Web Service (Porta 8000)
     echo -e "${YELLOW}[3/5] Setup OpenCode AI Web Service...${NC}"
     mkdir -p "$OPENCODE_DIR"
-    if [ ! -f "$OPENCODE_DIR/main.py" ]; then
+    
+    # Se il binario opencode non è presente in PATH, crea uno stub Python FastAPI
+    if ! command -v opencode &> /dev/null && [ ! -f "$OPENCODE_DIR/main.py" ]; then
         cat <<EOF > "$OPENCODE_DIR/main.py"
 from fastapi import FastAPI
 import uvicorn
@@ -78,11 +90,30 @@ def read_root():
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
 EOF
+        "$UNSLOTH_ENV/bin/pip" install fastapi uvicorn
     fi
-    "$UNSLOTH_ENV/bin/pip" install fastapi uvicorn
 
-    # Creazione Service Systemd per OpenCode AI (Porta 8000)
-    cat <<EOF > /etc/systemd/system/opencode.service
+    # Configura service systemd per OpenCode
+    if command -v opencode &> /dev/null; then
+        OPENCODE_BIN=$(which opencode)
+        cat <<EOF > /etc/systemd/system/opencode.service
+[Unit]
+Description=OpenCode AI Web Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root
+ExecStart=$OPENCODE_BIN web --port 8000 --host 0.0.0.0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    else
+        cat <<EOF > /etc/systemd/system/opencode.service
 [Unit]
 Description=OpenCode AI Web Service
 After=network.target
@@ -98,8 +129,9 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+    fi
 
-    # 4. Setup Code Runner API Service
+    # 4. Setup Code Runner API Service (Porta 9000)
     echo -e "${YELLOW}[4/5] Setup Code Runner API Service...${NC}"
     mkdir -p "$CODE_RUNNER_DIR"
     if [ ! -f "$CODE_RUNNER_DIR/code_runner_api.py" ]; then
@@ -132,7 +164,6 @@ def execute_code(req: ExecutionRequest):
 EOF
     fi
 
-    # Creazione Service Systemd per Code Runner API (Porta 9000)
     cat <<EOF > /etc/systemd/system/code-runner.service
 [Unit]
 Description=Code Runner API Service
@@ -150,8 +181,8 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    # 5. Ricarico Systemd, Abilito all'Avvio (ENABLE) e Avvio i Servizi
-    echo -e "${YELLOW}[5/5] Ricarico systemd e abilito i servizi all'avvio...${NC}"
+    # 5. Ricarico Systemd, Abilito PERMANENTEMENTE all'Avvio (ENABLE) e Avvio i Servizi
+    echo -e "${YELLOW}[5/5] Ricarico systemd, abilito ed avvio tutti i servizi...${NC}"
     systemctl daemon-reload
     
     for srv in unsloth-studio opencode code-runner; do
@@ -174,19 +205,30 @@ check_status() {
     echo -e "${BLUE}====================================================${NC}"
 
     # Stato Servizi Systemd
-    echo -e "${YELLOW}---> Stato Servizi Systemd:${NC}"
+    echo -e "${YELLOW}---> Stato Servizi Systemd (is-enabled & is-active):${NC}"
     for srv in unsloth-studio opencode code-runner; do
-        if systemctl is-active --quiet "$srv.service"; then
-            echo -e "  $srv.service: ${GREEN}ATTIVO (Running)${NC}"
+        EN_STATE=$(systemctl is-enabled "$srv.service" 2>/dev/null || echo "not-found")
+        ACT_STATE=$(systemctl is-active "$srv.service" 2>/dev/null || echo "inactive")
+        
+        if [ "$ACT_STATE" = "active" ]; then
+            ACT_STR="${GREEN}ATTIVO (Running)${NC}"
         else
-            echo -e "  $srv.service: ${RED}INATTIVO (Stopped/Failed)${NC}"
+            ACT_STR="${RED}INATTIVO ($ACT_STATE)${NC}"
         fi
+
+        if [ "$EN_STATE" = "enabled" ]; then
+            EN_STR="${GREEN}ENABLED${NC}"
+        else
+            EN_STR="${RED}DISABLED ($EN_STATE)${NC}"
+        fi
+
+        echo -e "  $srv.service -> Boot: [$EN_STR] | Stato: [$ACT_STR]"
     done
 
     # Verifica Porte in Ascolto
     echo -e "\n${YELLOW}---> Porte di Rete in Ascolto:${NC}"
     for port in 8000 8888 9000; do
-        if ss -tulpn | grep -q ":$port "; then
+        if ss -tulpn 2>/dev/null | grep -q ":$port " || netstat -tulpn 2>/dev/null | grep -q ":$port "; then
             echo -e "  Porta $port: ${GREEN}IN ASCOLTO${NC}"
         else
             echo -e "  Porta $port: ${RED}NON ATTIVA${NC}"
@@ -202,7 +244,7 @@ cuda_avail = torch.cuda.is_available()
 print(f'  CUDA Disponibile: {\"${GREEN}SI${NC}\" if cuda_avail else \"${RED}NO${NC}\"}')
 if cuda_avail:
     print(f'  GPU Riconosciuta: {torch.cuda.get_device_name(0)}')
-" 2>/dev/null || echo -e "  ${RED}Errore durante il test di PyTorch${NC}"
+" 2>/dev/null || echo -e "  ${RED}Errore durante il test di PyTorch/CUDA${NC}"
     else
         echo -e "  ${RED}Virtualenv Unsloth non trovato su $UNSLOTH_ENV${NC}"
     fi
@@ -220,11 +262,12 @@ update_components() {
     git pull origin main || echo -e "${RED}Impossibile eseguire git pull.${NC}"
 
     if [ -d "$UNSLOTH_ENV" ]; then
-        echo -e "${YELLOW}---> Aggiornamento pacchetti Python Unsloth/Jupyter/FastAPI...${NC}"
+        echo -e "${YELLOW}---> Aggiornamento pacchetti Python...${NC}"
         "$UNSLOTH_ENV/bin/pip" install --upgrade jupyterlab fastapi uvicorn torch
     fi
 
     echo -e "${YELLOW}---> Riavvio dei servizi systemd...${NC}"
+    systemctl daemon-reload
     systemctl restart unsloth-studio opencode code-runner
     echo -e "${GREEN}[OK] Aggiornamento completato e servizi riavviati.${NC}"
 }
@@ -284,7 +327,7 @@ uninstall_services() {
         done
         systemctl daemon-reload
 
-        echo -e "${YELLOW}---> Pulizia directory...${NC}"
+        echo -e "${YELLOW}---> Pulizia directory di lavoro...${NC}"
         rm -rf "$CODE_RUNNER_DIR" "$OPENCODE_DIR"
 
         echo -e "${GREEN}[OK] Disinstallazione completata con successo.${NC}"
@@ -302,7 +345,7 @@ show_menu() {
     echo -e "${BLUE}      🦥 HOMELAB AI DEPLOYER - MANAGER MENU        ${NC}"
     echo -e "${BLUE}====================================================${NC}"
     echo -e " 1) ${GREEN}INSTALLA Servizi${NC}   (Setup Unsloth, OpenCode, API & Systemd)"
-    echo -e " 2) ${YELLOW}VERIFICA Stato${NC}     (Check Servizi, Porte e GPU CUDA)"
+    echo -e " 2) ${YELLOW}VERIFICA Stato${NC}     (Check Servizi, Boot state, Porte e GPU)"
     echo -e " 3) ${BLUE}AGGIORNA Componenti${NC} (Git pull & Python package update)"
     echo -e " 4) ${YELLOW}CONFIGURA Sandbox${NC}   (Setup Chiavi SSH & Test API :9000)"
     echo -e " 5) ${RED}DISINSTALLA${NC}        (Rimozione Servizi e Directory)"
