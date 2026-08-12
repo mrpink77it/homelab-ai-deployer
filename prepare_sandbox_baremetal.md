@@ -26,7 +26,7 @@ Per consentire la configurazione automatica delle chiavi SSH e l'esecuzione di c
 Accedi alla console del server Bare Metal (o tramite SSH) come utente **root** (oppure passa a root con `sudo su`) ed esegui questo comando unificato:
 
 ```bash
-apt update && apt install -y openssh-server python3 && sed -i 's/#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && systemctl restart ssh
+apt update && apt install -y openssh-server python3 locales && sed -i '/^# *en_US.UTF-8 UTF-8/s/^# //' /etc/locale.gen && locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 && sed -i 's/#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && systemctl restart ssh
 ```
 
 ### 3. Recupero dell'Indirizzo IP
