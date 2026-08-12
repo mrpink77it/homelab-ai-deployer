@@ -5,28 +5,45 @@
 
 set -e
 
-pveam update > /dev/null 2>&1
+# Aggiornamento database dei template Proxmox
+echo "🔄 Aggiornamento elenco template Proxmox..."
+pveam update > /dev/null 2>&1 || true
 
 echo "===================================================="
 echo "      🚀 CREAZIONE CONTAINER LXC SANDBOX           "
 echo "===================================================="
 
-# 1. ID Container
-read -p "1) ID Container LXC [es. 100]: " CT_ID
-while [ -z "$CT_ID" ]; do
-  read -p "   --> Inserisci un ID valido: " CT_ID
+# 1. Controllo e Richiesta ID Container LXC
+while true; do
+  read -p "1) ID Container LXC [es. 100, 200]: " CT_ID
+  if [[ -z "$CT_ID" || ! "$CT_ID" =~ ^[0-9]+$ ]]; then
+    echo "   ⚠️ Inserisci un numero di ID valido (es. 200)."
+  elif pct status "$CT_ID" >/dev/null 2>&1 || qm status "$CT_ID" >/dev/null 2>&1; then
+    echo "   ❌ L'ID $CT_ID è già in uso su questo nodo! Scegli un altro ID."
+  else
+    break
+  fi
 done
 
 # 2. Hostname / Nome Container
 read -p "2) Nome Container / Hostname [default: sandbox-ai]: " HOSTNAME
 HOSTNAME=${HOSTNAME:-sandbox-ai}
 
-# 3. Password di Root
-read -sp "3) Imposta Password di ROOT per il Container: " ROOT_PASS
-echo ""
-while [ -z "$ROOT_PASS" ]; do
-  read -sp "   --> La password non può essere vuota. Reinserisci: " ROOT_PASS
+# 3. Password di Root (con conferma)
+while true; do
+  read -sp "3) Imposta Password di ROOT per il Container: " ROOT_PASS
   echo ""
+  if [ -z "$ROOT_PASS" ]; then
+    echo "   ⚠️ La password non può essere vuota."
+    continue
+  fi
+  read -sp "   Riconferma Password di ROOT: " ROOT_PASS_CONFIRM
+  echo ""
+  if [ "$ROOT_PASS" != "$ROOT_PASS_CONFIRM" ]; then
+    echo "   ❌ Le password non coincidono. Riprova."
+  else
+    break
+  fi
 done
 
 # 4. Sistema Operativo
@@ -49,14 +66,62 @@ SWAP=${SWAP:-512}
 read -p "8) Dimensione Disco in GB [default: 8]: " DISK
 DISK=${DISK:-8}
 
-# 6. Storage Proxmox
-read -p "9) Storage Proxmox [default: local-lvm]: " STORAGE
-STORAGE=${STORAGE:-local-lvm}
+# 6. Selezione Dinamica dello Storage Proxmox
+echo -e "\n9) Seleziona lo Storage Proxmox:"
+STORAGES=($(pvesm status --content rootdir 2>/dev/null | awk 'NR>1 && $3=="active" {print $1}'))
 
-# 7. Configurazione Rete
-read -p "10) Bridge di Rete [default: vmbr0]: " BRIDGE
-BRIDGE=${BRIDGE:-vmbr0}
+if [ ${#STORAGES[@]} -eq 0 ]; then
+    STORAGES=($(pvesm status 2>/dev/null | awk 'NR>1 && $3=="active" {print $1}'))
+fi
 
+if [ ${#STORAGES[@]} -eq 0 ]; then
+    echo "❌ Nessuno storage attivo rilevato sul nodo Proxmox! Impossibile procedere."
+    exit 1
+fi
+
+DEFAULT_STORAGE_IDX=1
+for i in "${!STORAGES[@]}"; do
+    idx=$((i+1))
+    echo "   $idx) ${STORAGES[$i]}"
+    if [[ "${STORAGES[$i]}" == "local-lvm" ]]; then
+        DEFAULT_STORAGE_IDX=$idx
+    fi
+done
+
+read -p "   Selezione [1-${#STORAGES[@]}, default: $DEFAULT_STORAGE_IDX]: " STORAGE_CHOICE
+STORAGE_CHOICE=${STORAGE_CHOICE:-$DEFAULT_STORAGE_IDX}
+
+if ! [[ "$STORAGE_CHOICE" =~ ^[0-9]+$ ]] || [ "$STORAGE_CHOICE" -lt 1 ] || [ "$STORAGE_CHOICE" -gt "${#STORAGES[@]}" ]; then
+    STORAGE="${STORAGES[$((DEFAULT_STORAGE_IDX-1))]}"
+    echo "   ⚠️ Scelta non valida, impostato storage predefinito: $STORAGE"
+else
+    STORAGE="${STORAGES[$((STORAGE_CHOICE-1))]}"
+fi
+
+# 7. Selezione Dinamica del Bridge di Rete
+echo -e "\n10) Seleziona il Bridge di Rete:"
+BRIDGES=($(ip -o link show type bridge 2>/dev/null | awk -F': ' '{print $2}'))
+
+if [ ${#BRIDGES[@]} -eq 0 ]; then
+    BRIDGES=("vmbr0")
+fi
+
+DEFAULT_BRIDGE_IDX=1
+for i in "${!BRIDGES[@]}"; do
+    idx=$((i+1))
+    echo "   $idx) ${BRIDGES[$i]}"
+done
+
+read -p "   Selezione [1-${#BRIDGES[@]}, default: $DEFAULT_BRIDGE_IDX]: " BRIDGE_CHOICE
+BRIDGE_CHOICE=${BRIDGE_CHOICE:-$DEFAULT_BRIDGE_IDX}
+
+if ! [[ "$BRIDGE_CHOICE" =~ ^[0-9]+$ ]] || [ "$BRIDGE_CHOICE" -lt 1 ] || [ "$BRIDGE_CHOICE" -gt "${#BRIDGES[@]}" ]; then
+    BRIDGE="${BRIDGES[0]}"
+else
+    BRIDGE="${BRIDGES[$((BRIDGE_CHOICE-1))]}"
+fi
+
+# 8. Configurazione Indirizzo IP
 echo -e "\n11) Modalità Indirizzo IP:"
 echo "   1) DHCP (Automatico)"
 echo "   2) Statico (Manuale)"
@@ -101,7 +166,7 @@ fi
 echo "⬇️ Downloading template: $TEMPLATE_NAME..."
 pveam download local "$TEMPLATE_NAME"
 
-echo "📦 Creazione Container LXC ID $CT_ID ($HOSTNAME)..."
+echo "📦 Creazione Container LXC ID $CT_ID ($HOSTNAME) sullo storage '$STORAGE'..."
 pct create "$CT_ID" "local:vztmpl/$TEMPLATE_NAME" \
   --ostype "$OS_TYPE" \
   --hostname "$HOSTNAME" \
