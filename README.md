@@ -1,5 +1,12 @@
 # 🦥 Homelab AI Deployer
 
+[![Status WIP](https://img.shields.io/badge/status-Work_in_Progress-yellow.svg)](https://github.com/mrpink77it/homelab-ai-deployer)
+[![shell script](https://img.shields.io/badge/shell_script-bash-1f425f.svg)](https://www.gnu.org/software/bash/)
+[![OS](https://img.shields.io/badge/OS-Debian_%2F_Ubuntu-orange.svg)](https://debian.org)
+[![NVIDIA CUDA](https://img.shields.io/badge/NVIDIA-CUDA-76B900.svg?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+> **`mrpink77it/homelab-ai-deployer`** è uno script Bash automatizzato ("zero-config") progettato per configurare, gestire e distribuire un ambiente completo di AI Generativa, LLM Fine-Tuning e sviluppo su macchine Linux e container **Proxmox LXC**.
 > **La tua suite AI per l'Homelab: genera ed esegue codice automaticamente in totale sicurezza.**
 
 Benvenuto in **Homelab AI Deployer**! Questo progetto nasce per mettere a tua disposizione un assistente AI avanzato in grado di **scrivere ed eseguire automaticamente codice** direttamente nel tuo laboratorio domestico (Homelab) o ambiente **Proxmox VE**.
@@ -18,13 +25,7 @@ Il sistema sfrutta un'architettura a due componenti per unire **automazione tota
 2. **🛡️ Sandbox (L'Esecutore Sicuro):** 
    È un container LXC o macchina virtuale isolata dal resto della rete. Quando l'IA genera uno script o un comando, **lo invia ed esegue automaticamente all'interno della Sandbox**. L'IA riceve il risultato dell'esecuzione (o eventuali errori) e può correggerlo da sola, il tutto senza toccare né rischiare di danneggiare il tuo server principale.
 
-[![Status WIP](https://img.shields.io/badge/status-Work_in_Progress-yellow.svg)](https://github.com/mrpink77it/homelab-ai-deployer)
-[![shell script](https://img.shields.io/badge/shell_script-bash-1f425f.svg)](https://www.gnu.org/software/bash/)
-[![OS](https://img.shields.io/badge/OS-Debian_%2F_Ubuntu-orange.svg)](https://debian.org)
-[![NVIDIA CUDA](https://img.shields.io/badge/NVIDIA-CUDA-76B900.svg?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-> **`mrpink77it/homelab-ai-deployer`** è uno script Bash automatizzato ("zero-config") progettato per configurare, gestire e distribuire un ambiente completo di AI Generativa, LLM Fine-Tuning e sviluppo su macchine Linux e container **Proxmox LXC**.
 
 > ⚠️ **Nota:** Questo progetto è attualmente in fase di sviluppo attivo (**Work in Progress**). Alcune funzionalità e configurazioni potrebbero subire variazioni.
 
