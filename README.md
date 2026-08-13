@@ -15,14 +15,14 @@ Non dovrai più copiare e incollare manualmente gli script generati dall'IA: il 
 
 ---
 
-### 💡 Come funziona? (Generazione ed Esecuzione Automatica)
+### Come funziona? (Generazione ed Esecuzione Automatica)
 
 Il sistema sfrutta un'architettura a due componenti per unire **automazione totale** e **massima sicurezza**:
 
-1. **🧠 Controller (L'Ingegneria ed Elaborazione AI - con GPU):** 
+1. ** Controller (L'Ingegneria ed Elaborazione AI - con GPU):** 
    È il "cervello" della tua infrastruttura. Qui girano i modelli AI (tramite OpenCode AI e Unsloth Studio) che analizzano le tue richieste, **ragionano e generano il codice** sfruttando la potenza della tua scheda video.
 
-2. **🛡️ Sandbox (L'Esecutore Sicuro):** 
+2. ** Sandbox (L'Esecutore Sicuro):** 
    È un container LXC o macchina virtuale isolata dal resto della rete. Quando l'IA genera uno script o un comando, **lo invia ed esegue automaticamente all'interno della Sandbox**. L'IA riceve il risultato dell'esecuzione (o eventuali errori) e può correggerlo da sola, il tutto senza toccare né rischiare di danneggiare il tuo server principale.
 
 
@@ -31,7 +31,7 @@ Il sistema sfrutta un'architettura a due componenti per unire **automazione tota
 
 ---
 
-## 📸 Caratteristiche Principali
+## Caratteristiche Principali
 
 * ⚡ **Installazione Automatica Controller**: Interfaccia TUI guidata in tempo reale con monitoraggio avanzato del log via `manager.sh`.
 * 🛡️ **Setup Automatizzato Sandbox**: Script helper dedicato (`sandbox_setup.sh`) per la preparazione lampo di nodi esecutori LXC/VM remoti.
@@ -43,7 +43,7 @@ Il sistema sfrutta un'architettura a due componenti per unire **automazione tota
 
 ---
 
-## 📊 Servizi Esposti
+## Servizi Esposti
 
 | Servizio | Porta | Descrizione |
 | :--- | :---: | :--- |
@@ -53,23 +53,23 @@ Il sistema sfrutta un'architettura a due componenti per unire **automazione tota
 
 ---
 
-## 🔌 Pre-requisiti Proxmox Host (GPU Passthrough)
+## Pre-requisiti Proxmox Host (GPU Passthrough)
 
 Se stai eseguendo lo script all'interno di un container **Proxmox LXC**, assicurati che l'Host Proxmox abbia i driver NVIDIA installati e che il file di configurazione del container (`/etc/pve/lxc/<CONTAINER_ID>.conf`) contenga le regole per il passthrough dei device NVIDIA:
 
 ```ini
 # Aggiungere a /etc/pve/lxc/<CONTAINER_ID>.conf sull'host Proxmox:
-lxc.cgroup2.devices.allow: c 195:* rwm
-lxc.cgroup2.devices.allow: c 508:* rwm
-lxc.mount.entry: /dev/nvidia0 dev/nvidia0 none bind,optional,create=file
-lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
-lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
-lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,create=file
+dev0: /dev/nvidia0,gid=44
+dev1: /dev/nvidiactl,gid=44
+dev2: /dev/nvidia-uvm,gid=44
+dev3: /dev/nvidia-uvm-tools,gid=44
+dev4: /dev/nvidia-caps/nvidia-cap1,gid=44
+dev5: /dev/nvidia-caps/nvidia-cap2,gid=44
 ```
 
 ---
 
-## 🚀 Avvio Rapido
+## Avvio Rapido
 
 ### Setup del Controller AI (Host Principale)
 
@@ -82,7 +82,7 @@ sudo ./manager.sh
 
 ---
 
-## 🧪 Architettura Sandbox & Provisioning (`sandbox_setup.sh`)
+## Architettura Sandbox & Provisioning (`sandbox_setup.sh`)
 
 L'architettura separa nettamente il **Controller AI** (dove girano i modelli, le interfacce e la GPU) dal **Nodo Sandbox** (LXC/VM separata) dove viene eseguito il codice generato dall'AI in un contesto confinato.
 
@@ -128,7 +128,7 @@ curl -X POST http://localhost:9000/execute \
 
 ---
 
-## 🎛️ Opzioni del Menu `manager.sh`
+## Opzioni del Menu `manager.sh`
 
 Eseguendo `./manager.sh` si accederà al menu interattivo TUI:
 
@@ -150,7 +150,7 @@ Per evitare di esaurire lo spazio sul disco root dell'LXC, le directory principa
 
 ---
 
-## 🔍 Verifica e Gestione Servizi
+## Verifica e Gestione Servizi
 
 Dopo il completamento dello script, puoi verificare il corretto riconoscimento della GPU e di CUDA eseguendo:
 
@@ -168,7 +168,7 @@ Puoi controllare i singoli servizi tramite `systemctl`:
 
 ---
 
-## ❓ Risoluzione Problemi (FAQ)
+## Risoluzione Problemi (FAQ)
 
 <details>
 <summary><b><code>nvidia-smi</code> funziona nell'LXC ma PyTorch restituisce <code>CUDA available: False</code></b></summary>
@@ -194,7 +194,7 @@ Per l'inferenza e il fine-tuning con Unsloth, assegna al container LXC almeno **
 
 ---
 
-## 🗺️ Roadmap & WIP Features
+## Roadmap & WIP Features
 
 - [x] Installatore automatico CUDA + NVIDIA Container Toolkit per LXC
 - [x] Integrazione Unsloth Studio + OpenCode AI
@@ -206,7 +206,7 @@ Per l'inferenza e il fine-tuning con Unsloth, assegna al container LXC almeno **
 
 ---
 
-## 🛠️ Requisiti di Sistema
+## Requisiti di Sistema
 
 * **Sistema Operativo**: Debian 12 (Bookworm / Trixie) o Ubuntu 22.04 LTS / 24.04 LTS.
 * **Privilegi**: Accesso Root o utente con permessi `sudo`.
@@ -215,7 +215,7 @@ Per l'inferenza e il fine-tuning con Unsloth, assegna al container LXC almeno **
 
 ---
 
-## 📁 Struttura della Repository
+## Struttura della Repository
 
 ```text
 homelab-ai-deployer/
@@ -230,7 +230,7 @@ homelab-ai-deployer/
 
 ---
 
-### 📄 Descrizione dei File
+### Descrizione dei File
 
 * **`README.md`** *(Documentazione Generale)*  
   La guida principale del progetto che illustra la visione d'insieme, l'architettura a due nodi (Controller + Sandbox), i requisiti e le istruzioni rapide per iniziare.
@@ -255,6 +255,6 @@ homelab-ai-deployer/
 
 ---
 
-## 📄 Licenza
+## Licenza
 
 Questo progetto è rilasciato sotto licenza [MIT](LICENSE).
