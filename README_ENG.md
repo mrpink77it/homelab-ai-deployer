@@ -156,7 +156,7 @@ For inference and fine-tuning with Unsloth, allocate at least **16 GB RAM** and 
 
 ## System Requirements
 
-* **Operating System**: Debian 12 (Bookworm / Trixie) or Ubuntu 22.04 LTS / 24.04 LTS.
+* **Operating System**: Debian 12+ (Bookworm / Trixie) or Ubuntu 22.04 LTS / 24.04 LTS.
 * **Privileges**: Root access or a user with `sudo` privileges.
 * **GPU Hardware**: Supported NVIDIA GPU (at least 12 GB VRAM recommended for Fine-Tuning/Inference).
 * **Virtualization**: Bare-Metal or **Proxmox LXC** Container (Unprivileged/Privileged with active GPU Pass-Through).
