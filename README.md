@@ -17,27 +17,6 @@ sudo ./manager.sh
 
 ---
 
-## Gestione ed Installazione JupyterLab (`setup_jupyter.sh`)
-
-Lo script `setup_jupyter.sh` fornisce una procedura di configurazione e verifica intelligente per **JupyterLab**, eseguibile in modo autonomo sia su container LXC che su macchine virtuali o Baremetal.
-
-### Funzionamento dello Script (Idempotente):
-1. **Controllo Presenza**: Verifica se JupyterLab è già presente nell'ambiente `/opt/jupyter_env` e se il servizio `systemd` esiste.
-2. **Se Già Installato**: Assicura che il demone `jupyter.service` sia attivo (lo riavvia se fermo), recupera l'IP della macchina e il token di autenticazione corrente e stampa a schermo le istruzioni di collegamento.
-3. **Se Non Installato**:
-   * Crea un ambiente virtuale Python dedicato in `/opt/jupyter_env`.
-   * Installa le dipendenze e l'ultima versione di JupyterLab.
-   * Crea e abilita il servizio `systemd` (`jupyter.service`) impostando come cartella di lavoro `/root/notebooks`.
-   * Avvia il servizio e genera l'URL completo di token per il primo accesso.
-
-```bash
-# Esecuzione diretta dello script di gestione JupyterLab:
-chmod +x setup_jupyter.sh
-sudo ./setup_jupyter.sh
-```
-
----
-
 ## Architettura Sandbox & Provisioning (`sandbox_setup.sh`)
 
 L'architettura separa nettamente il **Controller AI** (dove girano i modelli, le interfacce e la GPU) dal **Nodo Sandbox** (LXC/VM separata) dove viene eseguito il codice generato dall'AI in un contesto confinato.
@@ -144,4 +123,4 @@ Se usi un container **Unprivileged**, verifica che i permessi UID/GID tra Host e
 
 Ti basterà rieseguire lo script `./setup_jupyter.sh` oppure lanciare direttamente il comando:
 ```bash
-/opt/jupyter_env/bin/jupyter server list
+/opt/jupyter_env/bin
