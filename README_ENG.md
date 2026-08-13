@@ -17,27 +17,6 @@ sudo ./manager.sh
 
 ---
 
-## JupyterLab Management & Installation (`setup_jupyter.sh`)
-
-The `setup_jupyter.sh` script provides a smart configuration and verification procedure for **JupyterLab**, which can be run independently on LXC containers, virtual machines, or bare-metal servers.
-
-### Script Behavior (Idempotent):
-1. **Presence Check**: Checks if JupyterLab is already installed in `/opt/jupyter_env` and if the `systemd` service exists.
-2. **If Already Installed**: Ensures the `jupyter.service` daemon is active (restarts it if stopped), retrieves the machine's IP address and current authentication token, and prints connection instructions to the terminal.
-3. **If Not Installed**:
-   * Creates a dedicated Python virtual environment in `/opt/jupyter_env`.
-   * Installs dependencies and the latest version of JupyterLab.
-   * Creates and enables the `systemd` service (`jupyter.service`), setting `/root/notebooks` as the working directory.
-   * Starts the service and generates the full URL with the access token for initial login.
-
-```bash
-# Direct execution of the JupyterLab management script:
-chmod +x setup_jupyter.sh
-sudo ./setup_jupyter.sh
-```
-
----
-
 ## Sandbox Architecture & Provisioning (`sandbox_setup.sh`)
 
 The architecture clearly separates the **AI Controller** (where AI models, web interfaces, and GPU resources reside) from the **Sandbox Node** (an isolated LXC/VM) where AI-generated code is executed safely in a confined environment.
@@ -196,38 +175,3 @@ homelab-ai-deployer/
 ├── sandbox.md                    # General documentation & Sandbox requirements
 ├── sandbox_setup.sh              # Sandbox internal setup script (UTF-8, SSH, Python)
 └── setup_jupyter.sh              # Installation, verification, and management script for JupyterLab
-```
-
----
-
-## File Descriptions
-
-* **`README.md`** *(General Documentation)*  
-  The main project guide outlining the overview, two-node architecture (Controller + Sandbox), system requirements, and quick start instructions.
-
-* **`manager.sh`** *(Controller Management Script)*  
-  The core operational tool executed on the Controller node. Offers an interactive TUI menu to install Unsloth Studio, OpenCode AI, configure Python virtual environments, exchange SSH keys with the Sandbox, and run API tests.
-
-* **`setup_jupyter.sh`** *(JupyterLab Management Script)*  
-  Standalone script for any Linux environment (LXC, VM, or Bare-metal). Detects if JupyterLab is already installed: if present, ensures it runs via `systemd` and outputs the access URL with authentication token; if absent, sets up an isolated Python environment in `/opt/jupyter_env`, installs JupyterLab, configures `jupyter.service`, and outputs login details.
-
-* **`prepare_sandbox_baremetal.md`** *(Bare Metal / VM Guide)*  
-  Guide for setting up a Sandbox on dedicated physical hardware or traditional hypervisors (VirtualBox, ESXi, KVM, Hyper-V).
-
-* **`prepare_sandbox_lxc.md`** *(Proxmox LXC Guide)*  
-  Step-by-step documentation for creating and configuring an isolated Sandbox container in Proxmox VE.
-
-* **`proxmox_lxc_sandbox_setup.sh`** *(Proxmox VE Shell Script)*  
-  Interactive Bash script run directly on the Proxmox host shell: downloads OS templates (Debian/Ubuntu), creates the LXC container with allocated resources, and automatically configures SSH, Python, and UTF-8 locales.
-
-* **`sandbox.md`** *(Sandbox Overview & Requirements)*  
-  General reference document summarizing minimum hardware specs, security guidelines, and network setup required for any Sandbox node.
-
-* **`sandbox_setup.sh`** *(Sandbox Provisioning Script)*  
-  Script executed directly inside the Sandbox node (Bare Metal or generic VM) to install Python 3, OpenSSH Server, configure `PermitRootLogin yes`, and set `en_US.UTF-8` locale.
-
----
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).
