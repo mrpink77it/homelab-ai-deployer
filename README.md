@@ -239,7 +239,7 @@ homelab-ai-deployer/
   Il cuore operativo da eseguire sulla macchina **Controller**. Offre un menu TUI interattivo per installare Unsloth Studio, OpenCode AI, configurare gli ambienti virtuali Python, scambiare le chiavi SSH con la Sandbox ed eseguire i test delle API.
 
 * **`prepare_sandbox_baremetal.md`** *(Guida Bare Metal / VM)*  
-  Guida passo-passo in formato Markdown per preparare una Sandbox su un PC/Server fisico dedicato o su hypervisor tradizionali (VirtualBox, ESXi, KVM, Hyper-V).
+  Guida per preparare una Sandbox su un PC/Server fisico dedicato o su hypervisor tradizionali (VirtualBox, ESXi, KVM, Hyper-V).
 
 * **`prepare_sandbox_lxc.md`** *(Guida LXC Proxmox)*  
   Documentazione specifica con la procedura guidata per la creazione e la configurazione di una Sandbox isolata in ambiente Proxmox VE.
