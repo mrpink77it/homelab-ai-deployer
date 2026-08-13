@@ -1,72 +1,147 @@
 # Homelab AI Deployer
 
-[![Status WIP](https://img.shields.io/badge/status-Work_in_Progress-yellow.svg)](https://github.com/mrpink77it/homelab-ai-deployer)
-[![shell script](https://img.shields.io/badge/shell_script-bash-1f425f.svg)](https://www.gnu.org/software/bash/)
-[![OS](https://img.shields.io/badge/OS-Debian_%2F_Ubuntu-orange.svg)](https://debian.org)
-[![NVIDIA CUDA](https://img.shields.io/badge/NVIDIA-CUDA-76B900.svg?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-
 > **`mrpink77it/homelab-ai-deployer`** è uno script Bash automatizzato ("zero-config") progettato per configurare, gestire e distribuire un ambiente completo di AI Generativa, LLM Fine-Tuning e sviluppo su macchine Linux e container **Proxmox LXC**.
-> **La tua suite AI per l'Homelab: genera ed esegue codice automaticamente in totale sicurezza.**
-
-Benvenuto in **Homelab AI Deployer**! Questo progetto nasce per mettere a tua disposizione un assistente AI avanzato in grado di **scrivere ed eseguire automaticamente codice** direttamente nel tuo laboratorio domestico (Homelab) o ambiente **Proxmox VE**.
-
-Non dovrai più copiare e incollare manualmente gli script generati dall'IA: il sistema permette all'Intelligenza Artificiale di creare il codice, inviarlo ed eseguirlo in autonomia, gestendo al contempo tutta la configurazione complessa di driver NVIDIA, CUDA e ambienti Python.
 
 ---
 
-### Come funziona? (Generazione ed Esecuzione Automatica)
+## Avvio Rapido
 
-Il sistema sfrutta un'architettura a due componenti per unire **automazione totale** e **massima sicurezza**:
+### Setup del Controller AI (Host Principale)
 
-1. **Controller (L'Ingegneria ed Elaborazione AI - con GPU):**  
-   È il "cervello" della tua infrastruttura. Qui girano i modelli AI (tramite OpenCode AI e Unsloth Studio) che analizzano le tue richieste, **ragionano e generano il codice** sfruttando la potenza della tua scheda video.
-
-2. **Sandbox (L'Esecutore Sicuro):**  
-   È un container LXC o macchina virtuale isolata dal resto della rete. Quando l'IA genera uno script o un comando, **lo invia ed esegue automaticamente all'interno della Sandbox**. L'IA riceve il risultato dell'esecuzione (o eventuali errori) e può correggerlo da sola, il tutto senza toccare né rischiare di danneggiare il tuo server principale.
-
-> **Nota:** Questo progetto è attualmente in fase di sviluppo attivo (**Work in Progress**). Alcune funzionalità e configurazioni potrebbero subire variazioni.
-
----
-
-## Caratteristiche Principali
-
-* **Installazione Automatica Controller**: Interfaccia TUI guidata in tempo reale con monitoraggio avanzato del log via `manager.sh`.
-* **Setup Automatizzato Sandbox**: Script helper dedicato (`sandbox_setup.sh`) per la preparazione lampo di nodi esecutori LXC/VM remoti.
-* **Stack GPU & CUDA Completo**: Installazione e configurazione automatica dei driver NVIDIA, CUDA Toolkit e NVIDIA Container Toolkit (con fix nativi per container LXC e gestione trust SHA1 per Debian 12 / Trixie).
-* **Unsloth Studio**: Ambiente di sviluppo per Fine-Tuning & Inferenza LLM ad alte prestazioni via Astral `uv` con Jupyter Lab (`:8888`).
-* **OpenCode AI Web**: Piattaforma web di sviluppo assistito da intelligenza artificiale (`:8000`).
-* **Code Runner API (Sandbox Execution)**: Microservizio FastAPI (`:9000`) per eseguire codice generato dall'AI in un ambiente remoto isolato via SSH.
-* **Gestione & Uninstall Pulito**: Script integrato per la rimozione selettiva o totale dei servizi e delle unità `systemd`.
+```bash
+git clone [https://github.com/mrpink77it/homelab-ai-deployer.git](https://github.com/mrpink77it/homelab-ai-deployer.git)
+cd homelab-ai-deployer
+chmod +x manager.sh sandbox_setup.sh setup_jupyter.sh
+sudo ./manager.sh
+```
 
 ---
 
-## Servizi Esposti
+## Gestione ed Installazione JupyterLab (`setup_jupyter.sh`)
 
-| Servizio | Porta | Descrizione |
-| :--- | :---: | :--- |
-| **Unsloth Studio** | `8888` | Interfaccia Jupyter Lab per Fine-Tuning & Inferenza LLM |
-| **OpenCode AI** | `8000` | Interfaccia Web OpenCode |
-| **Code Runner API** | `9000` | Endpoint REST FastAPI per l'esecuzione remota sicura in Sandbox |
+Lo script `setup_jupyter.sh` fornisce una procedura di configurazione e verifica intelligente per **JupyterLab**, eseguibile in modo autonomo sia su container LXC che su macchine virtuali o Baremetal.
+
+### Funzionamento dello Script (Idempotente):
+1. **Controllo Presenza**: Verifica se JupyterLab è già presente nell'ambiente `/opt/jupyter_env` e se il servizio `systemd` esiste.
+2. **Se Già Installato**: Assicura che il demone `jupyter.service` sia attivo (lo riavvia se fermo), recupera l'IP della macchina e il token di autenticazione corrente e stampa a schermo le istruzioni di collegamento.
+3. **Se Non Installato**:
+   * Crea un ambiente virtuale Python dedicato in `/opt/jupyter_env`.
+   * Installa le dipendenze e l'ultima versione di JupyterLab.
+   * Crea e abilita il servizio `systemd` (`jupyter.service`) impostando come cartella di lavoro `/root/notebooks`.
+   * Avvia il servizio e genera l'URL completo di token per il primo accesso.
+
+```bash
+# Esecuzione diretta dello script di gestione JupyterLab:
+chmod +x setup_jupyter.sh
+sudo ./setup_jupyter.sh
+```
 
 ---
 
-## Pre-requisiti Proxmox Host (GPU Passthrough)
+## Architettura Sandbox & Provisioning (`sandbox_setup.sh`)
 
-Se stai eseguendo lo script all'interno di un container **Proxmox LXC**, assicurati che l'Host Proxmox abbia i driver NVIDIA installati e che il file di configurazione del container (`/etc/pve/lxc/<CONTAINER_ID>.conf`) contenga le regole per il passthrough dei nodi di device NVIDIA.
+L'architettura separa nettamente il **Controller AI** (dove girano i modelli, le interfacce e la GPU) dal **Nodo Sandbox** (LXC/VM separata) dove viene eseguito il codice generato dall'AI in un contesto confinato.
 
-**Importante:** In Proxmox LXC, ogni risorsa hardware passata al container deve essere dichiarata specificando i device con un indice numerico progressivo e consecutivo (`dev0`, `dev1`, `dev2`, e così via). Se nel tuo sistema sono presenti più schede video o ulteriori nodi `/dev/nvidia*`, devi continuare ad aggiungere i dispositivi incrementando progressivamente il prefisso numerico (`dev6`, `dev7`, ecc.) senza saltare alcun indice.
+```text
++---------------------------------+             SSH             +---------------------------------+
+|         CONTROLLER AI           |---------------------------->|          SANDBOX LXC/VM         |
+|  - Unsloth Studio (Porta 8888)  |   Exec: python3 -c "..."    |  - Configurato da               |
+|  - OpenCode AI    (Porta 8000)  |                             |    sandbox_setup.sh             |
+|  - Code Runner    (Porta 9000)  |<----------------------------|  - Python 3 / OpenSSH            |
++---------------------------------+       stdout / stderr       +---------------------------------+
+```
 
-```ini
-# Aggiungere al file /etc/pve/lxc/<CONTAINER_ID>.conf sull'host Proxmox.
-# I device devono essere aggiunti in ordine numerico progressivo e consecutivo:
-dev0: /dev/nvidia0,gid=44
-dev1: /dev/nvidiactl,gid=44
-dev2: /dev/nvidia-uvm,gid=44
-dev3: /dev/nvidia-uvm-tools,gid=44
-dev4: /dev/nvidia-caps/nvidia-cap1,gid=44
-dev5: /dev/nvidia-caps/nvidia-cap2,gid=44
+### Configurazione del Nodo Sandbox (In 2 Passaggi)
 
-# Se sono presenti ulteriori GPU o nodi di sistema, prosegui la numerazione consecutivamente:
-# dev6: /dev/nvidia1,gid=44
-# dev7: /dev/nvidia2,gid=44
+Per predisporre un nuovo container LXC o VM da utilizzare come Sandbox isolata:
+
+#### 1. Prepara il Nodo Sandbox
+Esegui lo script `sandbox_setup.sh` all'interno del container/VM destinato a fare da Sandbox per installare le dipendenze minimali (Python 3, OpenSSH Server) e configurare le regole SSH:
+
+```bash
+# Esegui sulla macchina Sandbox:
+curl -fsSL [https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/sandbox_setup.sh](https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/sandbox_setup.sh) | sudo bash
+```
+
+#### 2. Associa Controller -> Sandbox
+Dal Controller AI, genera ed invia la chiave SSH verso l'IP della Sandbox:
+
+```bash
+# 1. Genera la chiave SSH sul Controller (se non presente)
+ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519
+
+# 2. Autorizza la chiave sul nodo Sandbox
+ssh-copy-id -i /root/.ssh/id_ed25519.pub root@<IP_SANDBOX>
+
+# 3. Test di esecuzione via API Code Runner (:9000)
+curl -X POST http://localhost:9000/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code": "import sys, platform; print(f\"Sandbox attiva! OS: {platform.system()} - Python: {sys.version}\")",
+    "sandbox_ip": "<IP_SANDBOX>"
+  }'
+```
+
+---
+
+## Opzioni del Menu `manager.sh`
+
+Eseguendo `./manager.sh` si accederà al menu interattivo TUI:
+
+* **`1) INSTALLA Servizi`**: Installazione automatica completa (Driver GPU, CUDA Toolkit, Unsloth, OpenCode AI, Code Runner API).
+* **`2) VERIFICA Stato`**: Controllo dello stato dei servizi `systemd` e della disponibilità GPU via PyTorch/CUDA.
+* **`3) AGGIORNA Componenti`**: Git pull e aggiornamento dipendenze per OpenCode AI e Unsloth.
+* **`4) CONFIGURA Sandbox`**: Helper interattivo per la gestione ed il test dell'endpoint API remota.
+* **`5) DISINSTALLA`**: Rimozione completa delle directory, configurazioni ed unità `systemd`.
+
+---
+
+## Gestione Storage e Modelli
+
+Per evitare di esaurire lo spazio sul disco root dell'LXC, le directory principali di lavoro e di cache dei modelli sono organizzate come segue:
+
+* **Cache Modelli HuggingFace / Unsloth**: `~/.cache/huggingface/hub`
+* **Ambiente Virtuale Python (`uv`)**: `/root/unsloth_env`
+* **Ambiente Virtuale JupyterLab**: `/opt/jupyter_env/`
+* **Cartella di Lavoro Notebook**: `/root/notebooks/`
+* **Servizio Code Runner**: `/opt/code_runner/`
+
+---
+
+## Verifica e Gestione Servizi
+
+Dopo il completamento dello script, puoi verificare il corretto riconoscimento della GPU e di CUDA eseguendo:
+
+```bash
+/root/unsloth_env/bin/python3 -c "import torch; print('CUDA disponibile:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0))"
+```
+
+### Gestione tramite Systemd
+
+Puoi controllare i singoli servizi tramite `systemctl`:
+
+* **JupyterLab Server**: `systemctl status jupyter.service`
+* **Unsloth Studio**: `systemctl status unsloth-studio.service`
+* **OpenCode AI**: `systemctl status opencode.service`
+* **Code Runner API**: `systemctl status code-runner.service`
+
+---
+
+## Risoluzione Problemi (FAQ)
+
+<details>
+<summary><b><code>nvidia-smi</code> funziona nell'LXC ma PyTorch restituisce <code>CUDA available: False</code></b></summary>
+
+Assicurati che i permessi dei device `/dev/nvidia*` all'interno del container siano corretti. Esegui:
+```bash
+chmod 666 /dev/nvidia*
+```
+Se usi un container **Unprivileged**, verifica che i permessi UID/GID tra Host e LXC siano mappati correttamente per i nodi `/dev/nvidia*`.
+</details>
+
+<details>
+<summary><b>Come recuperare il token di JupyterLab se smarrito?</b></summary>
+
+Ti basterà rieseguire lo script `./setup_jupyter.sh` oppure lanciare direttamente il comando:
+```bash
+/opt/jupyter_env/bin/jupyter server list
