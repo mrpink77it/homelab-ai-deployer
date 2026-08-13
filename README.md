@@ -1,4 +1,4 @@
-# 🦥 Homelab AI Deployer
+# Homelab AI Deployer
 
 [![Status WIP](https://img.shields.io/badge/status-Work_in_Progress-yellow.svg)](https://github.com/mrpink77it/homelab-ai-deployer)
 [![shell script](https://img.shields.io/badge/shell_script-bash-1f425f.svg)](https://www.gnu.org/software/bash/)
