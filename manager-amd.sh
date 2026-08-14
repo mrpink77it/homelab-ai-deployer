@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager_amd.sh
-#Descrizione: Gestore deployment e ciclo di vita AI per GPU AMD
-#Ambienti: Bare-Metal & Proxmox LXC
+# Descrizione: Gestore deployment e ciclo di vita AI per GPU AMD
+# Ambienti: Bare-Metal & Proxmox LXC
 # ==============================================================================
 
 set -euo pipefail
 
 # ------------------------------------------------------------------------------
-# Configurazione Variabili Globale e Log
+# Configurazione Variabili Globali e Log
 # ------------------------------------------------------------------------------
 LOG_FILE="/var/log/homelab-ai-amd.log"
 INSTALL_DIR="/opt/homelab-ai"
@@ -235,7 +235,37 @@ update_components() {
 }
 
 # ------------------------------------------------------------------------------
-# Disinstallazione e Pulizia
+# Pulizia File Temporanei e Cache di Sistema
+# ------------------------------------------------------------------------------
+clean_system_cache() {
+    log_info "Avvio pulizia cache di sistema e file temporanei..."
+
+    # 1. Pulizia pacchetti APT
+    apt-get clean -y
+    apt-get autoremove --purge -y
+
+    # 2. Pulizia ccache (se presente)
+    if command -v ccache &>/dev/null; then
+        ccache -C
+    fi
+
+    # 3. Pulizia cache shader GPU (Vulkan/AMD)
+    rm -rf /root/.cache/vulkan /root/.cache/AMD ~/.cache/vulkan ~/.cache/AMD
+
+    # 4. Pulizia cartelle temporanee
+    rm -rf /tmp/* /var/tmp/*
+
+    # 5. Pulizia journal logs (limita a 100M)
+    if command -v journalctl &>/dev/null; then
+        journalctl --vacuum-size=100M || true
+    fi
+
+    log_info "Pulizia completata con successo."
+    whiptail --msgbox "Cache pacchetti, shader e file temporanei rimossi con successo!" 10 60
+}
+
+# ------------------------------------------------------------------------------
+# Disinstallazione e Pulizia Completa
 # ------------------------------------------------------------------------------
 uninstall_environment() {
     if whiptail --title "Conferma Rimozione" --yesno "Sei sicuro di voler rimuovere completamente l'ambiente Homelab-AI e llama.cpp?" 10 60; then
@@ -254,14 +284,15 @@ main_menu() {
     while true; do
         local choice
         choice=$(whiptail --title "Homelab AI - AMD Management Console" \
-            --menu "Ambiente: $(detect_environment)\nScegli un'operazione:" 18 70 7 \
+            --menu "Ambiente: $(detect_environment)\nScegli un'operazione:" 19 70 8 \
             "1" "Verifica Stato Hardware e Servizi" \
             "2" "Seleziona/Compila Backend (ROCm / Vulkan)" \
             "3" "Configura Nodo SSH Sandbox" \
             "4" "Aggiorna Componenti (llama.cpp)" \
             "5" "Visualizza Log di Sistema" \
-            "6" "Disinstalla Ambiente AI" \
-            "7" "Esci" \
+            "6" "Pulizia Cache e File Temporanei" \
+            "7" "Disinstalla Ambiente AI" \
+            "8" "Esci" \
             3>&1 1>&2 2>&3)
 
         case "$choice" in
@@ -270,8 +301,9 @@ main_menu() {
             3) setup_sandbox_ssh ;;
             4) update_components ;;
             5) clear; tail -n 50 "${LOG_FILE}"; read -rp "Premere invio per continuare..." ;;
-            6) uninstall_environment ;;
-            7) echo -e "${GREEN}Uscita.${NC}"; break ;;
+            6) clean_system_cache ;;
+            7) uninstall_environment ;;
+            8) echo -e "${GREEN}Uscita.${NC}"; break ;;
             *) break ;;
         esac
     done
