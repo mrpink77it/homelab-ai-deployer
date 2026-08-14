@@ -13,11 +13,9 @@ UNSLOTH_ENV="/root/unsloth_env"
 CODE_RUNNER_DIR="/opt/code_runner"
 LLAMA_CPP_DIR="${INSTALL_DIR}/llama.cpp"
 
-# --- Palette Colori ANSI (16/256 Color Safe) ---
+# --- Palette Colori ANSI ---
 BOLD='\033[1m'
-DIM='\033[2m'
 RESET='\033[0m'
-
 C_CYAN='\033[38;5;39m'
 C_BLUE='\033[38;5;33m'
 C_GREEN='\033[38;5;42m'
@@ -36,7 +34,6 @@ show_header() {
     echo ""
 }
 
-# Check root privileges
 if [ "$EUID" -ne 0 ]; then
     show_header
     echo -e "  ${C_RED}𐄂 PERMESSI INSUFFICIENTI${RESET}"
@@ -45,9 +42,9 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 install_vulkan_dependencies() {
-    echo -e "  ${C_YELLOW}[+] Installazione dipendenze di sistema, SDK Vulkan, Shaderc e SPIR-V Headers...${RESET}"
-    apt-get update -qq
-    apt-get install -y -qq \
+    echo -e "  ${C_YELLOW}[+] Aggiornamento repository ed installazione SDK Vulkan / SPIR-V...${RESET}"
+    apt-get update
+    apt-get install -y \
         build-essential \
         cmake \
         git \
@@ -62,15 +59,14 @@ install_vulkan_dependencies() {
         glslang-tools \
         glslang-dev \
         spirv-headers \
+        libspirv-cross-c-shared-dev \
         python3 \
         python3-pip \
         python3-venv \
         clinfo \
-        rocm-smi-lib 2>/dev/null || true
+        rocm-smi-lib
 
-    # Verifica ed export del path di glslc
     if ! command -v glslc &> /dev/null; then
-        echo -e "  ${C_YELLOW}[!] Attenzione: 'glslc' non trovato direttamente nel PATH standard.${RESET}"
         if [ -f "/usr/bin/glslc" ]; then
             export PATH=$PATH:/usr/bin
         fi
@@ -94,14 +90,14 @@ install_services() {
     case $amd_choice in
         1)
             echo -e "\n  ${C_BLUE}[+] Installazione stack ROCm Ufficiale...${RESET}"
-            apt-get install -y -qq rocm-hip-sdk
+            apt-get install -y rocm-hip-sdk
             mkdir -p "${UNSLOTH_ENV}"
             python3 -m venv "${UNSLOTH_ENV}"
             "${UNSLOTH_ENV}/bin/pip" install --upgrade pip
             "${UNSLOTH_ENV}/bin/pip" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.0
             ;;
         2)
-            echo -e "\n  ${C_GREEN}[+] Compilazione nativa di llama.cpp con accelerazione Vulkan (RADV)...${RESET}"
+            echo -e "\n  ${C_GREEN}[+] Compilazione nativa di llama.cpp con accelerazione Vulkan...${RESET}"
             cd "${INSTALL_DIR}"
             if [ -d "${LLAMA_CPP_DIR}" ]; then
                 echo -e "  ${C_YELLOW}[*] Aggiornamento sorgenti llama.cpp esistenti...${RESET}"
@@ -112,6 +108,8 @@ install_services() {
                 cd "${LLAMA_CPP_DIR}"
             fi
 
+            # Pulizia della cache CMake per evitare riferimenti obsoleti
+            rm -rf build/CMakeCache.txt build/CMakeFiles
             mkdir -p build
             cd build
 
@@ -127,7 +125,7 @@ install_services() {
             ;;
         3)
             echo -e "\n  ${C_BLUE}[+] Configurazione ROCm Sperimentale con GFX Override (gfx1030)...${RESET}"
-            apt-get install -y -qq rocm-hip-sdk
+            apt-get install -y rocm-hip-sdk
             mkdir -p "${UNSLOTH_ENV}"
             python3 -m venv "${UNSLOTH_ENV}"
             "${UNSLOTH_ENV}/bin/pip" install --upgrade pip
@@ -153,21 +151,18 @@ check_status() {
     show_header
     echo -e "  ${C_PURPLE}=== Verifico Stato Hardware & Servizi AMD ===${RESET}\n"
 
-    # Controllo Vulkan
     if command -v vulkaninfo &> /dev/null; then
         echo -e "  ${C_GREEN}[✔ Vulkan]${RESET} Supporto runtime e strumenti rilevati nel sistema."
     else
         echo -e "  ${C_RED}[✖ Vulkan]${RESET} Strumenti non installati."
     fi
 
-    # Controllo glslc e spirv-headers
     if command -v glslc &> /dev/null; then
         echo -e "  ${C_GREEN}[✔ Shaderc]${RESET} Compilatore glslc disponibile ($(which glslc))."
     else
         echo -e "  ${C_YELLOW}[! Shaderc]${RESET} Compilatore glslc non trovato nel PATH."
     fi
 
-    # Controllo ROCm
     if command -v rocm-smi &> /dev/null; then
         echo -e "  ${C_GREEN}[✔ ROCm]${RESET} Utility ROCm SMI disponibile:"
         rocm-smi --showid || true
@@ -175,9 +170,8 @@ check_status() {
         echo -e "  ${C_YELLOW}[! ROCm]${RESET} Driver o utility ROCm non rilevati."
     fi
 
-    # Controllo llama.cpp
     if [ -f "${LLAMA_CPP_DIR}/build/bin/llama-cli" ] || [ -f "${LLAMA_CPP_DIR}/build/bin/main" ] || [ -f "${LLAMA_CPP_DIR}/build/bin/llama-server" ]; then
-        echo -e "  ${C_GREEN}[✔ llama.cpp]${RESET} Binario compilato con supporto Vulkan presente in ${LLAMA_CPP_DIR}/build/bin"
+        echo -e "  ${C_GREEN}[✔ llama.cpp]${RESET} Binario compilato presente in ${LLAMA_CPP_DIR}/build/bin"
     fi
 
     echo ""
@@ -190,6 +184,7 @@ update_components() {
     if [ -d "${LLAMA_CPP_DIR}" ]; then
         cd "${LLAMA_CPP_DIR}"
         git pull
+        rm -rf build/CMakeCache.txt build/CMakeFiles
         mkdir -p build
         cd build
         cmake .. -DGGML_VULKAN=ON
@@ -205,10 +200,6 @@ update_components() {
 configure_sandbox() {
     show_header
     echo -e "  ${C_PURPLE}=== Helper Configurazione Sandbox ===${RESET}\n"
-    if [ -f "./sandbox_setup.sh" ]; then
-        echo -e "  Per configurare un nodo remoto LXC/VM Sandbox, esegui al suo interno:"
-        echo -e "  ${C_CYAN}curl -fsSL https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/sandbox_setup.sh | sudo bash${RESET}\n"
-    fi
     read -p "  Inserisci l'IP della Sandbox da associare via SSH (oppure premi INVIO per annullare): " sandbox_ip
     if [ -n "$sandbox_ip" ]; then
         if [ ! -f /root/.ssh/id_ed25519 ]; then
@@ -232,7 +223,6 @@ uninstall_all() {
     read -p "  Premi [INVIO] per tornare al menu principale..."
 }
 
-# --- Main Menu Loop ---
 while true; do
     show_header
     echo -e "  ${C_GRAY}┌────────────────────────────────────────────────────────┐${RESET}"
