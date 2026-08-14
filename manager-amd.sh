@@ -108,16 +108,21 @@ install_vulkan_dependencies() {
 select_log_mode() {
     echo -e "  ${BOLD}${C_PURPLE}❖ SELEZIONE MODALITÀ DI LOGGING${RESET}"
     echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}"
-    echo -e "  ${BOLD}${C_CYAN}[1] all${RESET}  ${C_WHITE}Log Completo${RESET}  · Salva stdout + stderr in build_all.log"
-    echo -e "  ${BOLD}${C_YELLOW}[2] err${RESET}  ${C_WHITE}Solo Errori${RESET}   · Isola le eccezioni in build_errors.log"
-    echo -e "  ${BOLD}${C_GRAY}[3] none${RESET} ${C_WHITE}Nessun Log${RESET}    · Compilazione standard a video"
+    echo -e "  ${BOLD}${C_CYAN}[1] all${RESET}      ${C_WHITE}Log Completo File${RESET}  · Solo file build_all.log (Silenzioso)"
+    echo -e "  ${BOLD}${C_CYAN}[2] all+video${RESET}${C_WHITE} Log Completo Video${RESET} · Salva in build_all.log + Mostra a video"
+    echo -e "  ${BOLD}${C_YELLOW}[3] err${RESET}      ${C_WHITE}Solo Errori File${RESET}   · Solo file build_errors.log (Silenzioso)"
+    echo -e "  ${BOLD}${C_YELLOW}[4] err+video${RESET}${C_WHITE} Log Errori Video${RESET}  · Salva in build_errors.log + Mostra a video"
+    echo -e "  ${BOLD}${C_GRAY}[5] none${RESET}     ${C_WHITE}Nessun Log File${RESET}   · Solo output standard a video"
     echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}\n"
 
-    read -p "  Seleziona opzione [1-3] (default: 1): " log_choice
+    read -p "  Seleziona opzione [1-5] (default: 2): " log_choice
     case $log_choice in
-        2) LOG_MODE="err" ;;
-        3) LOG_MODE="none" ;;
-        *) LOG_MODE="all" ;;
+        1) LOG_MODE="all" ;;
+        2) LOG_MODE="all_tee" ;;
+        3) LOG_MODE="err" ;;
+        4) LOG_MODE="err_tee" ;;
+        5) LOG_MODE="none" ;;
+        *) LOG_MODE="all_tee" ;;
     esac
 }
 
@@ -139,7 +144,7 @@ build_llama_vulkan() {
         cd "${LLAMA_CPP_DIR}"
     fi
 
-    # Pulizia profonda della build precedente per eliminare artifact errati
+    # Pulizia profonda della build precedente
     rm -rf build
     mkdir -p build
     cd build
@@ -157,7 +162,6 @@ build_llama_vulkan() {
 
     echo -e "  ${C_CYAN}➜ Configurazione ambiente CMake (Release - Bypass Shader Gen)...${RESET}"
 
-    # Flag specifici per disattivare la rigenerazione dinamica via glslc/shaderc
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_STANDARD=20 \
@@ -171,15 +175,28 @@ build_llama_vulkan() {
 
     case $LOG_MODE in
         all)
-            echo -e "  ${C_GRAY}[i] Registrazione log completo in: ${C_WHITE}${LOG_DIR}/build_all.log${RESET}\n"
-            cmake --build . --config Release -j$(nproc) 2>&1 | tee "${all_log_file}" | grep -iE 'error|cannot compile|failed|fatal' > "${err_log_file}" || true
+            echo -e "  ${C_GRAY}[i] Registrazione log completo (silenzioso) in: ${C_WHITE}${all_log_file}${RESET}\n"
+            cmake --build . --config Release -j$(nproc) > "${all_log_file}" 2>&1 || true
+            grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}" > "${err_log_file}" || true
+            echo -e "  ${C_GREEN}✔ Log Completo :${RESET} ${all_log_file}"
+            echo -e "  ${C_GREEN}✔ Log Errori   :${RESET} ${err_log_file}"
+            ;;
+        all_tee)
+            echo -e "  ${C_GRAY}[i] Output a video + Registrazione log completo in: ${C_WHITE}${all_log_file}${RESET}\n"
+            cmake --build . --config Release -j$(nproc) 2>&1 | tee "${all_log_file}"
+            grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}" > "${err_log_file}" || true
             echo -e "\n  ${C_GREEN}✔ Log Completo :${RESET} ${all_log_file}"
             echo -e "  ${C_GREEN}✔ Log Errori   :${RESET} ${err_log_file}"
             ;;
         err)
-            echo -e "  ${C_GRAY}[i] Registrazione dei soli errori in: ${C_WHITE}${LOG_DIR}/build_errors.log${RESET}\n"
+            echo -e "  ${C_GRAY}[i] Registrazione dei soli errori (silenziosa) in: ${C_WHITE}${err_log_file}${RESET}\n"
             cmake --build . --config Release -j$(nproc) 2>&1 | grep -iE 'error|cannot compile|failed|fatal' > "${err_log_file}" || true
             echo -e "  ${C_GREEN}✔ Log Errori :${RESET} ${err_log_file}"
+            ;;
+        err_tee)
+            echo -e "  ${C_GRAY}[i] Output a video + Isolamento errori in: ${C_WHITE}${err_log_file}${RESET}\n"
+            cmake --build . --config Release -j$(nproc) 2>&1 | tee >(grep -iE 'error|cannot compile|failed|fatal' > "${err_log_file}")
+            echo -e "\n  ${C_GREEN}✔ Log Errori :${RESET} ${err_log_file}"
             ;;
         none)
             cmake --build . --config Release -j$(nproc)
