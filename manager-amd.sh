@@ -91,10 +91,10 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 install_vulkan_dependencies() {
-    echo -e "  ${C_CYAN}➜ Aggiornamento repository ed installazione dipendenze di sistema...${RESET}"
+    echo -e "  ${C_CYAN}➜ Verifica e installazione dipendenze di sistema...${RESET}"
     apt-get update -qq
 
-    # Pacchetti essenziali per Debian 13 e Ubuntu 24.04 (glslang-tools/dev per glslc con CMake 3.31+)
+    # Inclusi glslang-tools e glslang-dev per garantire la presenza di /usr/bin/glslc (richiesto da CMake 3.31+)
     BASE_PACKAGES=(
         build-essential cmake ccache git curl wget zstd
         pkg-config libssl-dev libvulkan-dev vulkan-tools
@@ -102,7 +102,7 @@ install_vulkan_dependencies() {
         python3 python3-pip python3-venv clinfo nodejs npm
     )
 
-    echo -e "  ${C_BLUE}➜ Garantita presenza pacchetti base e toolchain di sviluppo...${RESET}"
+    echo -e "  ${C_BLUE}➜ Installazione pacchetti base e toolchain Vulkan/C++...${RESET}"
     apt-get install -y "${BASE_PACKAGES[@]}"
 }
 
@@ -128,12 +128,15 @@ select_log_mode() {
 }
 
 build_llama_vulkan() {
-    # Garanzia creazione cartella Log prima di qualsiasi operazione
+    # Garanzia assoluta creazione cartella Log prima di qualsiasi elaborazione
     mkdir -p "${LOG_DIR}"
     chmod 755 "${LOG_DIR}"
 
-    # Installazione automatica dipendenze (sblocca glslc sia su installazioni pulite che esistenti)
-    install_vulkan_dependencies
+    # Auto-healing: garantisce la presenza di glslc prima di lanciare CMake
+    if ! command -v glslc &> /dev/null; then
+        echo -e "  ${C_YELLOW}[!] Binario 'glslc' non trovato. Esecuzione installazione dipendenze...${RESET}"
+        install_vulkan_dependencies
+    fi
 
     select_log_mode
 
