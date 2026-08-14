@@ -99,7 +99,6 @@ install_dependencies() {
 # ------------------------------------------------------------------------------
 select_backend() {
     local choice
-    # Dimensioni aumentate (18 righe x 78 colonne) per evitare sovrapposizioni dei pulsanti
     choice=$(whiptail --title "Selezione Backend Inferenza AMD" \
         --menu "\nScegli il backend di accelerazione hardware per llama.cpp:" 18 78 3 \
         "1" "ROCm Ufficiale (Consigliato per GPU Instinct/Radeon Pro)" \
@@ -280,7 +279,6 @@ uninstall_environment() {
 main_menu() {
     while true; do
         local choice
-        # Dimensioni ottimizzate (20 righe x 78 colonne)
         choice=$(whiptail --title "Homelab AI - AMD Management Console" \
             --menu "\nAmbiente Rilevato: $(detect_environment)\nScegli un'operazione:" 20 78 8 \
             "1" "Verifica Stato Hardware e Servizi" \
