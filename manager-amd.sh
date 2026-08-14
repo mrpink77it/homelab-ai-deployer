@@ -98,18 +98,12 @@ install_vulkan_dependencies() {
     BASE_PACKAGES=(
         build-essential cmake ccache git curl wget zstd
         pkg-config libssl-dev libvulkan-dev vulkan-tools
-        mesa-vulkan-drivers glslang-tools glslang-dev
-        spirv-tools spirv-headers python3 python3-pip
-        python3-venv clinfo nodejs npm
+        mesa-vulkan-drivers python3 python3-pip python3-venv
+        clinfo nodejs npm
     )
 
     echo -e "  ${C_BLUE}➜ Installazione pacchetti di sistema...${RESET}"
     apt-get install -y -qq "${BASE_PACKAGES[@]}" > /dev/null
-
-    echo -e "  ${C_BLUE}➜ Ottimizzazione pacchetti SPIR-V...${RESET}"
-    apt-get install -y -qq spirv-tools-dev 2>/dev/null || \
-    apt-get install -y -qq libspirv-tools-dev 2>/dev/null || true
-    apt-get install -y -qq libspirv-cross-c-shared-dev 2>/dev/null || true
 }
 
 select_log_mode() {
@@ -146,6 +140,7 @@ build_llama_vulkan() {
         cd "${LLAMA_CPP_DIR}"
     fi
 
+    # Pulizia profonda dell'ambiente di build fallito
     rm -rf build
     mkdir -p build
     cd build
@@ -155,23 +150,19 @@ build_llama_vulkan() {
 * GPU  : Vulkan (Driver RADV)
 * Mode : [${LOG_MODE}]"
 
-    local right_info="* Opt  : Disabilitazione FP16/CoopMat
-* Logs : ${LOG_DIR}/"
+    local right_info="* Shaders : Pre-compilati (No GLSLC)
+* Logs    : ${LOG_DIR}/"
 
     show_split_screen_guide "Compilazione Nativa llama.cpp" "$left_info" "$right_info"
 
-    echo -e "  ${C_CYAN}➜ Configurazione ambiente CMake (Release)...${RESET}"
+    echo -e "  ${C_CYAN}➜ Configurazione ambiente CMake (Release - Shader Precompilati)...${RESET}"
 
-    # Output di CMake silenziato per non interrompere il flusso visuale
+    # -DGGML_VULKAN_SHADERS_GEN=OFF evita glslc e usa gli shader pre-compilati
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DGGML_VULKAN=ON \
-        -DVulkan_GLSLC_EXECUTABLE=/usr/bin/glslc \
+        -DGGML_VULKAN_SHADERS_GEN=OFF \
         -DGGML_VULKAN_SHADERC=OFF \
-        -DGGML_VULKAN_COOPMAT=OFF \
-        -DGGML_VULKAN_COOPMAT2=OFF \
-        -DGGML_VULKAN_FP16=OFF \
-        -DGGML_VULKAN_VK_QUALIFIERS=OFF \
         -DCMAKE_C_FLAGS="-DGGML_VK_DISABLE_F16" \
         -DCMAKE_CXX_FLAGS="-DGGML_VK_DISABLE_F16" > /dev/null 2>&1
 
@@ -253,12 +244,6 @@ check_status() {
         echo -e "  ${C_GREEN}[ OK ]${RESET} ${BOLD}Vulkan Runtime${RESET}     · Presente nel sistema"
     else
         echo -e "  ${C_RED}[FAIL]${RESET} ${BOLD}Vulkan Runtime${RESET}     · Non installato"
-    fi
-
-    if command -v glslc &> /dev/null; then
-        echo -e "  ${C_GREEN}[ OK ]${RESET} ${BOLD}Compiler glslc${RESET}     · $(which glslc)"
-    else
-        echo -e "  ${C_YELLOW}[WARN]${RESET} ${BOLD}Compiler glslc${RESET}     · Assente nel PATH"
     fi
 
     if [ -f "${LOG_DIR}/build_errors.log" ]; then
