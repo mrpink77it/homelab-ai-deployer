@@ -98,16 +98,16 @@ build_llama_vulkan() {
     mkdir -p build
     cd build
 
-    echo -e "  ${C_YELLOW}[*] Configurazione CMake con backend Vulkan (forzando glslc ed evitando Shaderc)...${RESET}"
+    echo -e "  ${C_YELLOW}[*] Configurazione CMake con backend Vulkan e supporto FP16 in glslc...${RESET}"
 
-    # Forziamo l'uso del binario glslc e disabilitiamo il wrapper SHADERC e CoopMat
     cmake .. \
         -DGGML_VULKAN=ON \
         -DVulkan_GLSLC_EXECUTABLE=/usr/bin/glslc \
         -DGGML_VULKAN_SHADERC=OFF \
         -DGGML_VULKAN_COOPMAT=OFF \
         -DGGML_VULKAN_COOPMAT2=OFF \
-        -DGGML_VULKAN_FP16=OFF
+        -DGGML_VULKAN_VK_QUALIFIERS=ON \
+        -DCMAKE_GLSL_FLAGS="-f16"
 
     echo -e "  ${C_YELLOW}[*] Compilazione in corso...${RESET}"
     cmake --build . --config Release -j$(nproc)
