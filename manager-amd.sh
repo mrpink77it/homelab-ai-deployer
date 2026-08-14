@@ -123,19 +123,18 @@ install_services() {
                 cd "${LLAMA_CPP_DIR}"
             fi
 
-            # Pulizia radicale della directory di build
+            # Pulizia radicale della directory di build per forzare la nuova configurazione CMake
             rm -rf build
             mkdir -p build
             cd build
 
             GLSLC_PATH=$(which glslc || echo "/usr/bin/glslc")
 
-            echo -e "  ${C_YELLOW}[*] Configurazione CMake sicura per gli Shader Vulkan...${RESET}"
-            
-            # Disattiviamo il supporto Cooperative Matrix e feature sperimentali che causano l'errore di glslc
+            echo -e "  ${C_YELLOW}[*] Configurazione CMake con GGML_VULKAN=ON (Senza FP16 hardcoded)...${RESET}"
             cmake .. \
                 -DGGML_VULKAN=ON \
                 -DVulkan_GLSLC_EXECUTABLE="${GLSLC_PATH}" \
+                -DGGML_VULKAN_FP16=OFF \
                 -DGGML_VULKAN_COOPMAT=OFF \
                 -DGGML_VULKAN_UNROLL=OFF
 
@@ -224,6 +223,7 @@ update_components() {
         cmake .. \
             -DGGML_VULKAN=ON \
             -DVulkan_GLSLC_EXECUTABLE="${GLSLC_PATH}" \
+            -DGGML_VULKAN_FP16=OFF \
             -DGGML_VULKAN_COOPMAT=OFF \
             -DGGML_VULKAN_UNROLL=OFF
         cmake --build . --config Release -j$(nproc)
