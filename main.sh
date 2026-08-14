@@ -139,18 +139,21 @@ echo -e "  ${GPU_STATUS}  ${BOLD}GPU [${GPU_TYPE}]${RESET}: ${C_WHITE}${GPU_INFO
 echo -e "     ${C_GRAY}└─ Stack Supportato: ${C_CYAN}${GPU_STACK}${RESET}"
 echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}\n"
 
-# --- SELEZIONE MODALITA' / CASO D'USO ---
+# --- SELEZIONE MODALITA' DINAMICA ---
 echo -e "  ${BOLD}${C_YELLOW}❖ SELEZIONA OBIETTIVO DEL NODO AI${RESET}"
 echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}"
-echo -e "  ${BOLD}${C_CYAN}[1] Local AI Inference & Serving Node${RESET} ${C_GRAY}(Consigliato per uso quotidiano)${RESET}"
+echo -e "  ${BOLD}${C_CYAN}[1] Local AI Inference & Serving Node${RESET} ${C_GRAY}(Consigliato per ${GPU_TYPE})${RESET}"
 echo -e "      ${C_WHITE}└─ Esecuzione modelli LLM (GGUF), Chat Web UI, API OpenAI-compatibile,${RESET}"
-echo -e "         ${C_WHITE}assistenti di codice per VS Code e agenti locali.${RESET}"
-echo -e "         ${C_GRAY}Hardware target: NVIDIA (CUDA), AMD (Vulkan/ROCm), CPU.${RESET}\n"
+echo -e "         ${C_WHITE}assistenti di codice per VS Code e agenti locali.${RESET}\n"
 
-echo -e "  ${BOLD}${C_PURPLE}[2] Model Fine-Tuning & Training Node${RESET} ${C_GRAY}(Sviluppo & Addestramento)${RESET}"
-echo -e "      ${C_WHITE}└─ Ambiente di addestramento avanzato (QLoRA/LoRA) con Unsloth & PyTorch.${RESET}"
-echo -e "         ${C_WHITE}Permette di personalizzare LLM sui tuoi dati ed esportare in GGUF.${RESET}"
-echo -e "         ${C_GRAY}Hardware target: Richiede GPU NVIDIA (CUDA + Triton).${RESET}\n"
+if [ "$GPU_TYPE" = "NVIDIA" ]; then
+    echo -e "  ${BOLD}${C_PURPLE}[2] Model Fine-Tuning & Training Node${RESET} ${C_GRAY}(Sviluppo & Addestramento)${RESET}"
+    echo -e "      ${C_WHITE}└─ Ambiente di addestramento avanzato (QLoRA/LoRA) con Unsloth & PyTorch.${RESET}"
+    echo -e "         ${C_WHITE}Permette di personalizzare LLM sui tuoi dati ed esportare in GGUF.${RESET}\n"
+else
+    echo -e "  ${BOLD}${C_GRAY}[2] Model Fine-Tuning & Training Node${RESET} ${C_RED}[NON DISPONIBILE SU $GPU_TYPE - RICHIEDE NVIDIA]${RESET}"
+    echo -e "      ${C_GRAY}└─ Unsloth/Triton non supportano GPU AMD/CPU. Selezionandolo verrai reindirizzato all'Inference.${RESET}\n"
+fi
 
 echo -e "  ${BOLD}${C_RED}[3] Esci${RESET}\n"
 
@@ -160,7 +163,7 @@ TARGET_SCRIPT=""
 
 case "$WORKLOAD_CHOICE" in
     1)
-        echo -e "\n  ${C_GREEN}➜ Selezionata Modalità: INFERENZA LOCALE & SERVING${RESET}"
+        echo -e "\n  ${C_GREEN}➜ Selezionata Modalità: INFERENZA LOCALE & SERVING [${GPU_TYPE}]${RESET}"
         if [ "$GPU_TYPE" = "NVIDIA" ]; then
             TARGET_SCRIPT="${SCRIPT_DIR}/manager-nvidia.sh"
         elif [ "$GPU_TYPE" = "AMD" ]; then
@@ -171,12 +174,12 @@ case "$WORKLOAD_CHOICE" in
         ;;
 
     2)
-        echo -e "\n  ${C_PURPLE}➜ Selezionata Modalità: FINE-TUNING & ADDESTRAMENTO (UNSLOTH)${RESET}"
         if [ "$GPU_TYPE" = "NVIDIA" ]; then
+            echo -e "\n  ${C_PURPLE}➜ Selezionata Modalità: FINE-TUNING & ADDESTRAMENTO (UNSLOTH)${RESET}"
             TARGET_SCRIPT="${SCRIPT_DIR}/manager-fine-tuning-nvidia.sh"
         else
-            echo -e "\n  ${C_RED}⚠️  ATTENZIONE: Nessuna GPU NVIDIA rilevata!${RESET}"
-            echo -e "  ${C_WHITE}Impossibile effettuare il training/fine-tuning su questo hardware.${RESET}"
+            echo -e "\n  ${C_RED}⚠️  ATTENZIONE: Hardware $GPU_TYPE non supportato per Fine-Tuning locale!${RESET}"
+            echo -e "  ${C_WHITE}Impossibile effettuare il training con Unsloth su GPU AMD/CPU.${RESET}"
             echo -e "  ${C_GRAY}Unsloth & Triton richiedono architettura NVIDIA CUDA.${RESET}"
             echo -e "  ${C_GRAY}Consiglio: esegui il training su Cloud (Colab/RunPod) ed esporta il file GGUF.${RESET}\n"
             
