@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Script: manager_amd.sh
+# Script: manager-amd.sh
 # Descrizione: Gestore deployment, servizi systemd e ciclo di vita AI per GPU AMD
 # Ambienti: Bare-Metal & Proxmox LXC
 # ==============================================================================
@@ -410,16 +410,23 @@ uninstall_environment() {
         rm -rf "${INSTALL_DIR}"
         rm -rf /root/.cache/vulkan /root/.cache/AMD
 
-        # 3. Pulizia opzionale delle dipendenze APT di sistema
+        # 3. Richiesta conferma per rimozione dipendenze PRIMA di rimuovere whiptail
+        local remove_deps=0
         if whiptail --title "Rimozione Dipendenze di Sistema" --yesno "Vuoi rimuovere anche le dipendenze di pacchetto (build-essential, cmake, libvulkan-dev, ecc.) installate per questo progetto?" 12 70; then
+            remove_deps=1
+        fi
+
+        log_info "Ambiente disinstallato completamente."
+
+        # 4. Esecuzione purge APT solo dopo la chiusura di whiptail
+        if [[ $remove_deps -eq 1 ]]; then
             log_info "Rimozione pacchetti APT di sviluppo..."
             apt-get purge -y "${DEP_PACKAGES[@]}" || true
             apt-get autoremove --purge -y
             apt-get clean -y
         fi
 
-        log_info "Ambiente disinstallato completamente."
-        whiptail --msgbox "Disinstallazione e pulizia completate con successo." 10 60
+        echo -e "${GREEN}Disinstallazione e pulizia completate con successo.${NC}"
         exit 0
     fi
 }
@@ -449,10 +456,11 @@ main_menu() {
             3) manage_service_menu ;;
             4) setup_sandbox_ssh ;;
             5) update_components ;;
-            6) clear; tail -n 50 "${LOG_FILE}"; read -rp "Premere invio per continuare..." ;;
+            6) clear; tail -n 50 "${LOG_FILE}"; read -rp "Premere invio per tornare al menu..." ;;
             7) clean_system_cache ;;
             8) uninstall_environment ;;
             9) echo -e "${GREEN}Uscita.${NC}"; break ;;
+            *) break ;;
         esac
     done
 }
