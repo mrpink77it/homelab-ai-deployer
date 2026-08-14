@@ -46,7 +46,7 @@ Il progetto supporta un'architettura **Multi-Backend** in grado di rilevare auto
 Copiare ed incollare questo comando per eseguire l'installazione
 
 ```bash
-wget -q https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/clean_install.sh && chmod +x clean_install.sh && ./clean_install.sh
+wget -q https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/install.sh && chmod +x install.sh && ./install.sh
 ```
 
 
