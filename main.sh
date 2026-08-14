@@ -175,12 +175,19 @@ case "$WORKLOAD_CHOICE" in
         if [ "$GPU_TYPE" = "NVIDIA" ]; then
             TARGET_SCRIPT="${SCRIPT_DIR}/manager-fine-tuning-nvidia.sh"
         else
-            echo -e "\n  ${C_RED}✖ ERRORE REQUISITI HARDWARE:${RESET}"
-            echo -e "  ${C_WHITE}Unsloth & Triton richiedono architettura NVIDIA CUDA.${RESET}"
-            echo -e "  ${C_GRAY}Su hardware AMD/CPU si consiglia di usare la Modalità Inferenza [1]${RESET}"
-            echo -e "  ${C_GRAY}o eseguire il fine-tuning Unsloth su istanza cloud NVIDIA (Google Colab/RunPod)${RESET}"
-            echo -e "  ${C_GRAY}ed esportare il file GGUF per l'esecuzione su questo server.${RESET}\n"
-            exit 1
+            echo -e "\n  ${C_RED}⚠️  ATTENZIONE: Nessuna GPU NVIDIA rilevata!${RESET}"
+            echo -e "  ${C_WHITE}Impossibile effettuare il training/fine-tuning su questo hardware.${RESET}"
+            echo -e "  ${C_GRAY}Unsloth & Triton richiedono architettura NVIDIA CUDA.${RESET}"
+            echo -e "  ${C_GRAY}Consiglio: esegui il training su Cloud (Colab/RunPod) ed esporta il file GGUF.${RESET}\n"
+            
+            echo -e "  ${BOLD}${C_CYAN}➜ PREMERE UN TASTO PER PROSEGUIRE CON L'INSTALLAZIONE AMD / INFERENZA...${RESET}"
+            read -n 1 -s -r
+
+            if [ "$GPU_TYPE" = "AMD" ]; then
+                TARGET_SCRIPT="${SCRIPT_DIR}/manager-amd.sh"
+            else
+                TARGET_SCRIPT="${SCRIPT_DIR}/manager-cpu.sh"
+            fi
         fi
         ;;
 
@@ -201,7 +208,7 @@ if [ ! -f "$TARGET_SCRIPT" ]; then
     exit 1
 fi
 
-echo -e "  ${C_GRAY}Avvio controller: ${C_WHITE}$(basename "$TARGET_SCRIPT")${RESET}...\n"
+echo -e "\n  ${C_GRAY}Avvio controller: ${C_WHITE}$(basename "$TARGET_SCRIPT")${RESET}...\n"
 sleep 1
 
 # Handoff al controller specifico
