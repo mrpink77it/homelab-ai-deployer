@@ -73,7 +73,6 @@ install_dependencies() {
     log_info "Verifica e installazione pacchetti di sistema..."
     apt-get update -qq
     
-    # "shaderc" è stato sostituito da "glslc" e "libshaderc-dev" per compatibilità Debian/Ubuntu
     apt-get install -y -qq \
         build-essential \
         cmake \
@@ -100,10 +99,11 @@ install_dependencies() {
 # ------------------------------------------------------------------------------
 select_backend() {
     local choice
+    # Dimensioni aumentate (18 righe x 78 colonne) per evitare sovrapposizioni dei pulsanti
     choice=$(whiptail --title "Selezione Backend Inferenza AMD" \
-        --menu "Scegli il backend di accelerazione hardware per llama.cpp:" 15 65 3 \
+        --menu "\nScegli il backend di accelerazione hardware per llama.cpp:" 18 78 3 \
         "1" "ROCm Ufficiale (Consigliato per GPU Instinct/Radeon Pro)" \
-        "2" "Vulkan (Consigliato per GPU Consumer / Integrazione Cross-Platform)" \
+        "2" "Vulkan (Consigliato per GPU Consumer / Cross-Platform)" \
         "3" "ROCm Sperimentale / Custom HIP (Per architetture RX non supportate)" \
         3>&1 1>&2 2>&3)
 
@@ -206,7 +206,7 @@ setup_sandbox_ssh() {
     log_info "Configurazione accesso Sandbox SSH..."
     
     local ssh_port
-    ssh_port=$(whiptail --inputbox "Inserisci la porta SSH per il nodo Sandbox:" 8 60 "2222" 3>&1 1>&2 2>&3)
+    ssh_port=$(whiptail --inputbox "Inserisci la porta SSH per il nodo Sandbox:" 10 60 "2222" 3>&1 1>&2 2>&3)
     
     if [[ -n "${ssh_port}" ]]; then
         mkdir -p /root/.ssh
@@ -243,22 +243,16 @@ update_components() {
 clean_system_cache() {
     log_info "Avvio pulizia cache di sistema e file temporanei..."
 
-    # 1. Pulizia pacchetti APT
     apt-get clean -y
     apt-get autoremove --purge -y
 
-    # 2. Pulizia ccache (se presente)
     if command -v ccache &>/dev/null; then
         ccache -C
     fi
 
-    # 3. Pulizia cache shader GPU (Vulkan/AMD)
     rm -rf /root/.cache/vulkan /root/.cache/AMD ~/.cache/vulkan ~/.cache/AMD
-
-    # 4. Pulizia cartelle temporanee
     rm -rf /tmp/* /var/tmp/*
 
-    # 5. Pulizia journal logs (limita a 100M)
     if command -v journalctl &>/dev/null; then
         journalctl --vacuum-size=100M || true
     fi
@@ -286,8 +280,9 @@ uninstall_environment() {
 main_menu() {
     while true; do
         local choice
+        # Dimensioni ottimizzate (20 righe x 78 colonne)
         choice=$(whiptail --title "Homelab AI - AMD Management Console" \
-            --menu "Ambiente: $(detect_environment)\nScegli un'operazione:" 19 70 8 \
+            --menu "\nAmbiente Rilevato: $(detect_environment)\nScegli un'operazione:" 20 78 8 \
             "1" "Verifica Stato Hardware e Servizi" \
             "2" "Seleziona/Compila Backend (ROCm / Vulkan)" \
             "3" "Configura Nodo SSH Sandbox" \
