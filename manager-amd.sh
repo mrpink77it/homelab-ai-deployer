@@ -2,7 +2,7 @@
 # ==============================================================================
 # Script: manager-amd.sh
 # Descrizione: Gestore deployment, servizi systemd, Open WebUI Bare-Metal e ciclo AI per GPU AMD
-# Ambienti: Bare-Metal & Proxmox LXC
+# Ambienti: Bare-Metal & Proxmox LXC (Debian 13 / Ubuntu 24.04 LTS)
 # ==============================================================================
 
 set -euo pipefail
@@ -25,28 +25,64 @@ WEBUI_SERVICE_FILE="/etc/systemd/system/${WEBUI_SERVICE_NAME}.service"
 
 BACKEND_CONF="${INSTALL_DIR}/backend.conf"
 
-# Pacchetti di sistema essenziali
+# ------------------------------------------------------------------------------
+# Pacchetti di Sistema Essenziali (Supporto Integrato: Imaging, Audio, Video, RAG)
+# ------------------------------------------------------------------------------
 DEP_PACKAGES=(
+    # --- Utility di Sistema & Build Tool ---
     build-essential
     cmake
     git
     curl
     wget
     pkg-config
+    ca-certificates
+    htop
+    whiptail
+    openssh-server
+    pciutils
+    clinfo
+
+    # --- Python 3.12+ Stack & Header Dev (PEP 668 Compliant) ---
     python3
     python3-pip
     python3-venv
-    ffmpeg
+    python3-dev
+    python3-full
+    libsqlite3-dev
+    libssl-dev
+    libffi-dev
+
+    # --- Tool e Header Grafici GPU AMD (Vulkan) ---
     libvulkan-dev
     vulkan-tools
     glslc
     libshaderc-dev
     glslang-tools
-    clinfo
-    pciutils
-    openssh-server
-    htop
-    whiptail
+
+    # --- Audio, Speech (STT/Whisper), TTS & Talk Mode ---
+    portaudio19-dev
+    libasound2-dev
+    libsndfile1-dev
+    flac
+    espeak-ng
+
+    # --- Video & Multimedialità ---
+    ffmpeg
+    libavcodec-extra
+
+    # --- Imaging, Vision & OCR ---
+    libpng-dev
+    libjpeg-dev
+    libwebp-dev
+    libtiff-dev
+    tesseract-ocr
+    tesseract-ocr-ita
+
+    # --- Web Search, Scraping & RAG Parsing ---
+    libxml2-dev
+    libxslt1-dev
+    zlib1g-dev
 )
 
 # Colori TUI
@@ -56,7 +92,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # ------------------------------------------------------------------------------
 # Funzioni Helper & Logging
@@ -105,10 +141,10 @@ init_env() {
 # Installazione Dipendenze
 # ------------------------------------------------------------------------------
 install_dependencies() {
-    log_info "Verifica e installazione pacchetti di sistema..."
+    log_info "Verifica e installazione pacchetti di sistema e librerie multimediali..."
     apt-get update -qq
     apt-get install -y -qq "${DEP_PACKAGES[@]}"
-    log_info "Dipendenze base e sviluppo installate correttamente."
+    log_info "Dipendenze di sistema installate correttamente."
 }
 
 # ------------------------------------------------------------------------------
@@ -159,7 +195,7 @@ EOF
 # Installazione & Configurazione Open WebUI Bare-Metal
 # ------------------------------------------------------------------------------
 install_open_webui_baremetal() {
-    log_info "Avvio installazione Open WebUI in ambiente Bare-Metal (Python Virtualenv)..."
+    log_info "Avvio installazione Open WebUI Bare-Metal (Python Virtual Environment)..."
 
     # 1. Creazione Virtualenv se non presente
     if [[ ! -d "${WEBUI_VENV}" ]]; then
@@ -167,14 +203,14 @@ install_open_webui_baremetal() {
         python3 -m venv "${WEBUI_VENV}"
     fi
 
-    # 2. Aggiornamento pip e installazione open-webui
-    log_info "Installazione/Aggiornamento del pacchetto open-webui tramite pip..."
-    "${WEBUI_VENV}/bin/pip" install --upgrade pip -q
+    # 2. Aggiornamento pip, setuptools, wheel e installazione open-webui
+    log_info "Aggiornamento pip/setuptools e installazione pacchetto open-webui..."
+    "${WEBUI_VENV}/bin/pip" install --upgrade pip setuptools wheel -q
     "${WEBUI_VENV}/bin/pip" install open-webui -q
 
-    log_info "Open WebUI installato correttamente nel venv."
+    log_info "Open WebUI e librerie collegate installate con successo."
 
-    # 3. Creazione Servizio Systemd per Open WebUI
+    # 3. Creazione Servizio Systemd per Open WebUI con Binding Automatico llama.cpp
     log_info "Configurazione file di servizio Systemd per Open WebUI (${WEBUI_SERVICE_NAME})..."
 
     cat <<EOF > "${WEBUI_SERVICE_FILE}"
@@ -206,14 +242,15 @@ EOF
     systemctl enable "${WEBUI_SERVICE_NAME}"
     systemctl restart "${WEBUI_SERVICE_NAME}"
 
-    log_info "Servizio Open WebUI configurato, abilitato al boot e avviato sulla porta 3000."
+    log_info "Servizio Open WebUI configurato ed avviato sulla porta 3000."
     
     whiptail --title "Open WebUI Bare-Metal Installato" --msgbox \
 "Open WebUI è stato installato ed avviato con successo!\n\n\
-- Porta Web UI: http://0.0.0.0:3000\n\
-- Collegamento Backend: http://127.0.0.1:8080/v1 (llama.cpp)\n\
-- File Servizio: ${WEBUI_SERVICE_FILE}\n\
-- Dati Persistent: ${WEBUI_DATA_DIR}" 14 70
+- Interfaccia Web UI : http://0.0.0.0:3000\n\
+- Backend Collegato  : http://127.0.0.1:8080/v1 (llama.cpp)\n\
+- Feature Attivate   : Sound, Talk, STT/TTS, OCR, Imaging, Video, Web Search\n\
+- File Servizio      : ${WEBUI_SERVICE_FILE}\n\
+- Cartella Dati      : ${WEBUI_DATA_DIR}" 15 75
 }
 
 manage_webui_menu() {
@@ -267,9 +304,9 @@ manage_webui_menu() {
 select_backend() {
     local choice
     choice=$(whiptail --title "Selezione Backend Inferenza AMD" \
-        --menu "\nGPU rilevata: AMD RX 5700 XT (Navi 10)\nConsigliato: 1 (Vulkan) per RDNA1\n\nScegli il backend:" 18 78 3 \
-        "1" "Vulkan (RACCOMANDATO per RX 5700 XT / RDNA1)" \
-        "2" "ROCm Sperimentale (HIP con Override HSA_OVERRIDE_GFX_VERSION=10.3.0)" \
+        --menu "\nSeleziona il backend grafico per la tua GPU AMD:" 18 78 3 \
+        "1" "Vulkan (RACCOMANDATO per RX 5700 XT / RDNA1 e iGPU)" \
+        "2" "ROCm Sperimentale (HIP con HSA_OVERRIDE_GFX_VERSION=10.3.0)" \
         "3" "ROCm Ufficiale (Radeon Pro / Instinct / RX 6000+)" \
         3>&1 1>&2 2>&3)
 
@@ -501,7 +538,7 @@ update_components() {
     # 2. Aggiornamento Open WebUI
     if [[ -d "${WEBUI_VENV}" ]]; then
         log_info "Aggiornamento pacchetto Open WebUI tramite pip..."
-        "${WEBUI_VENV}/bin/pip" install --upgrade open-webui -q
+        "${WEBUI_VENV}/bin/pip" install --upgrade open-webui setuptools wheel -q
         systemctl restart "${WEBUI_SERVICE_NAME}" 2>/dev/null || true
     fi
 
@@ -560,7 +597,7 @@ main_menu() {
     while true; do
         local choice
         choice=$(whiptail --title "Homelab AI - AMD Management Console" \
-            --menu "\nAmbiente: $(detect_environment)\nGPU Rilevata: AMD RX 5700 XT (RADV Navi10)\n\nScegli un'operazione:" 22 78 10 \
+            --menu "\nAmbiente: $(detect_environment)\n\nScegli un'operazione:" 22 78 10 \
             "1" "Verifica Stato Hardware e Servizi (Backend & Web UI)" \
             "2" "Seleziona/Compila Backend (Vulkan / ROCm)" \
             "3" "Gestisci Servizio Backend llama.cpp (Porta 8080)" \
