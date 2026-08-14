@@ -43,15 +43,12 @@ Il progetto supporta un'architettura **Multi-Backend** in grado di rilevare auto
 
 ### Setup del Controller AI (Host Principale)
 
-Lo script `main.sh` agisce da router principale: rileva la presenza di schede NVIDIA o AMD ed avvia in automatico lo script di gestione dedicato (`manager.sh` o `manager-amd.sh`).
+Copiare ed incollare questo comando per eseguire l'installazione
 
 ```bash
-sudo apt install git -y
-git clone https://github.com/mrpink77it/homelab-ai-deployer.git
-cd homelab-ai-deployer
-sudo chmod +x main.sh manager.sh manager-amd.sh sandbox_setup.sh setup_jupyter.sh monitor.sh
-sudo ./main.sh
+wget -qO- https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/main.sh | sudo bash
 ```
+
 
 ---
 
