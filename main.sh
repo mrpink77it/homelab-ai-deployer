@@ -21,11 +21,7 @@ C_PURPLE='\033[38;5;135m'
 C_GRAY='\033[38;5;244m'
 C_WHITE='\033[38;5;255m'
 
-# Card / Box Frames
-BORDER_CYAN="${C_CYAN}│${RESET}"
-BORDER_GRAY="${C_GRAY}│${RESET}"
-
-# --- Helper Grafici ---
+# Helper per disegnare l'header
 draw_header() {
     clear
     echo -e "${C_CYAN}┌──────────────────────────────────────────────────────────────────────────────┐${RESET}"
@@ -49,7 +45,15 @@ show_spinner() {
     done
     printf "                                                                               \r"
 }
- 
+
+pause_before_launch() {
+    local script_name=$1
+    echo -e "  ${C_YELLOW}⚡ Premere [INVIO] per avviare subito o attendi 3 secondi...${RESET}"
+    read -t 3 -n 1 -r -p "" || true
+    echo -e "\n  ${C_GREEN}➔ Avvio di ${script_name}...${RESET}\n"
+    sleep 0.5
+}
+
 # --- Controllo Privilegi ---
 if [ "$EUID" -ne 0 ]; then
     draw_header
@@ -62,7 +66,7 @@ fi
 draw_header
 
 # --- Rilevamento Hardware con Animation ---
-( sleep 1.2 ) &
+( sleep 1.0 ) &
 SPINNER_PID=$!
 show_spinner $SPINNER_PID
 
@@ -97,13 +101,11 @@ if [ "$NVIDIA_FOUND" = true ] && [ "$AMD_FOUND" = true ]; then
     read -p "  Scelta [1-2]: " dual_choice
     case $dual_choice in
         1)
-            echo -e "\n  ${C_GREEN}➔ Redirection:${RESET} Inizializzazione ${C_CYAN}manager.sh${RESET} (NVIDIA)..."
-            sleep 0.8
+            pause_before_launch "manager.sh (NVIDIA)"
             exec ./manager.sh
             ;;
         2)
-            echo -e "\n  ${C_GREEN}➔ Redirection:${RESET} Inizializzazione ${C_PURPLE}manager-amd.sh${RESET} (AMD)..."
-            sleep 0.8
+            pause_before_launch "manager-amd.sh (AMD)"
             exec ./manager-amd.sh
             ;;
         *)
@@ -116,16 +118,14 @@ elif [ "$NVIDIA_FOUND" = true ]; then
     echo -e "  ${C_GREEN}✔ GPU NVIDIA RILEVATA${RESET}"
     echo -e "  ${C_GRAY}Scheda:${RESET} ${C_WHITE}${GPU_MODEL}${RESET}"
     echo -e "  ${C_GRAY}Stack:${RESET}  ${C_CYAN}CUDA Toolkit / PyTorch Native / vLLM${RESET}\n"
-    echo -e "  ${C_GRAY}Lancio di ${RESET}${C_CYAN}manager.sh${RESET}${C_GRAY} in corso...${RESET}\n"
-    sleep 1.2
+    pause_before_launch "manager.sh"
     exec ./manager.sh
 
 elif [ "$AMD_FOUND" = true ]; then
     echo -e "  ${C_PURPLE}✔ GPU AMD RADEON RILEVATA${RESET}"
     echo -e "  ${C_GRAY}Scheda:${RESET} ${C_WHITE}${GPU_MODEL}${RESET}"
     echo -e "  ${C_GRAY}Stack:${RESET}  ${C_PURPLE}ROCm / Vulkan (RADV) / llama.cpp${RESET}\n"
-    echo -e "  ${C_GRAY}Lancio di ${RESET}${C_PURPLE}manager-amd.sh${RESET}${C_GRAY} in corso...${RESET}\n"
-    sleep 1.2
+    pause_before_launch "manager-amd.sh"
     exec ./manager-amd.sh
 
 else
@@ -142,9 +142,21 @@ else
     
     read -p "  Scelta [1-3]: " force_choice
     case $force_choice in
-        1) exec ./manager.sh ;;
-        2) exec ./manager-amd.sh ;;
-        3) echo -e "\n  ${C_GRAY}Uscita...${RESET}"; exit 0 ;;
-        *) echo -e "\n  ${C_RED}Opzione non valida.${RESET}"; exit 1 ;;
+        1)
+            pause_before_launch "manager.sh"
+            exec ./manager.sh
+            ;;
+        2)
+            pause_before_launch "manager-amd.sh"
+            exec ./manager-amd.sh
+            ;;
+        3)
+            echo -e "\n  ${C_GRAY}Uscita...${RESET}"
+            exit 0
+            ;;
+        *)
+            echo -e "\n  ${C_RED}Opzione non valida.${RESET}"
+            exit 1
+            ;;
     esac
 fi
