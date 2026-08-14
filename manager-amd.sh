@@ -66,7 +66,6 @@ show_split_screen_guide() {
         local l_line="${left_lines[i]:-}"
         local r_line="${right_lines[i]:-}"
         
-        # Pulisce i codici ANSI per il calcolo della lunghezza reale della colonna sinistra
         local clean_left
         clean_left=$(echo -e "$l_line" | sed 's/\x1b\[[0-9;]*m//g')
         local len=${#clean_left}
@@ -140,7 +139,7 @@ build_llama_vulkan() {
         cd "${LLAMA_CPP_DIR}"
     fi
 
-    # Pulizia profonda dell'ambiente di build fallito
+    # Pulizia profonda della build precedente per eliminare artifact errati
     rm -rf build
     mkdir -p build
     cd build
@@ -150,16 +149,18 @@ build_llama_vulkan() {
 * GPU  : Vulkan (Driver RADV)
 * Mode : [${LOG_MODE}]"
 
-    local right_info="* Shaders : Pre-compilati (No GLSLC)
+    local right_info="* Shaders : Pre-compilati (Bypass glslc)
+* C++     : Standard C++20
 * Logs    : ${LOG_DIR}/"
 
     show_split_screen_guide "Compilazione Nativa llama.cpp" "$left_info" "$right_info"
 
-    echo -e "  ${C_CYAN}➜ Configurazione ambiente CMake (Release - Shader Precompilati)...${RESET}"
+    echo -e "  ${C_CYAN}➜ Configurazione ambiente CMake (Release - Bypass Shader Gen)...${RESET}"
 
-    # -DGGML_VULKAN_SHADERS_GEN=OFF evita glslc e usa gli shader pre-compilati
+    # Flag specifici per disattivare la rigenerazione dinamica via glslc/shaderc
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_STANDARD=20 \
         -DGGML_VULKAN=ON \
         -DGGML_VULKAN_SHADERS_GEN=OFF \
         -DGGML_VULKAN_SHADERC=OFF \
