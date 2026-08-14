@@ -94,7 +94,7 @@ install_vulkan_dependencies() {
     echo -e "  ${C_CYAN}➜ Aggiornamento repository ed installazione dipendenze di sistema...${RESET}"
     apt-get update -qq
 
-    # Pacchetti essenziali per Debian 13 e Ubuntu 24.04 (glslang-tools/dev necessari per CMake 3.31+)
+    # Pacchetti essenziali per Debian 13 e Ubuntu 24.04 (glslang-tools/dev per glslc con CMake 3.31+)
     BASE_PACKAGES=(
         build-essential cmake ccache git curl wget zstd
         pkg-config libssl-dev libvulkan-dev vulkan-tools
@@ -128,11 +128,11 @@ select_log_mode() {
 }
 
 build_llama_vulkan() {
-    # Garanzia creazione cartella Log prima di qualsiasi opzione
+    # Garanzia creazione cartella Log prima di qualsiasi operazione
     mkdir -p "${LOG_DIR}"
     chmod 755 "${LOG_DIR}"
 
-    # Installazione automatica dipendenze per macchine pulite
+    # Installazione automatica dipendenze (sblocca glslc sia su installazioni pulite che esistenti)
     install_vulkan_dependencies
 
     select_log_mode
@@ -154,7 +154,7 @@ build_llama_vulkan() {
         cd "${LLAMA_CPP_DIR}"
     fi
 
-    # Pulizia profonda della build precedente
+    # Pulizia della build precedente
     rm -rf build
     mkdir -p build
     cd build
