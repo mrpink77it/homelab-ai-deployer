@@ -94,22 +94,28 @@ install_vulkan_dependencies() {
     echo -e "  ${C_CYAN}➜ Verifica e installazione dipendenze di sistema...${RESET}"
     apt-get update -qq
 
-    # Aggiunto 'shaderc' che fornisce direttamente /usr/bin/glslc in molte distro Debian-based
+    # Solo pacchetti ufficialmente presenti nei repo standard Debian/Ubuntu
     BASE_PACKAGES=(
         build-essential cmake ccache git curl wget zstd
         pkg-config libssl-dev libvulkan-dev vulkan-tools
-        mesa-vulkan-drivers glslang-tools glslang-dev shaderc
+        mesa-vulkan-drivers glslang-tools glslang-dev libshaderc-dev spirv-tools
         python3 python3-pip python3-venv clinfo nodejs npm
     )
 
     echo -e "  ${C_BLUE}➜ Installazione pacchetti base e toolchain Vulkan/C++...${RESET}"
     apt-get install -y "${BASE_PACKAGES[@]}"
 
-    # Fallback/Symlink: Se glslc non c'è ma abbiamo glslangValidator, creiamo il link per CMake
+    # Gestione automatica assenza glslc su Debian:
+    # Se CMake richiede 'glslc' ma Debian ha fornito solo 'glslangValidator', creiamo il wrapper necessario.
     if ! command -v glslc &> /dev/null; then
         if command -v glslangValidator &> /dev/null; then
-            echo -e "  ${C_YELLOW}➜ Creazione symlink di ripiego: glslangValidator -> /usr/local/bin/glslc${RESET}"
-            ln -sf "$(which glslangValidator)" /usr/local/bin/glslc
+            echo -e "  ${C_YELLOW}➜ Generazione wrapper glslc per CMake tramite glslangValidator...${RESET}"
+            cat << 'EOF' > /usr/local/bin/glslc
+#!/usr/bin/env bash
+# Wrapper automatico Homelab AI per far passare i check di CMake FindVulkan
+exec glslangValidator -V "$@"
+EOF
+            chmod +x /usr/local/bin/glslc
         fi
     fi
 }
@@ -140,11 +146,8 @@ build_llama_vulkan() {
     mkdir -p "${LOG_DIR}"
     chmod 755 "${LOG_DIR}"
 
-    # Auto-healing: garantisce la presenza di glslc prima di lanciare CMake
-    if ! command -v glslc &> /dev/null; then
-        echo -e "  ${C_YELLOW}[!] Binario 'glslc' non trovato. Esecuzione installazione dipendenze...${RESET}"
-        install_vulkan_dependencies
-    fi
+    # Assicura che le dipendenze e il wrapper glslc siano attivi
+    install_vulkan_dependencies
 
     select_log_mode
 
@@ -175,7 +178,7 @@ build_llama_vulkan() {
 * GPU  : Vulkan (Driver RADV)
 * Mode : [${LOG_MODE}]"
 
-    local right_info="* Shaders : Compilatore glslc attivo
+    local right_info="* Shaders : Compilatore Vulkan / glslc attivo
 * C++     : Standard C++20
 * Logs    : ${LOG_DIR}/"
 
@@ -250,11 +253,11 @@ install_services() {
 
     read -p "  Seleziona opzione [1-3]: " amd_choice
 
-    install_vulkan_dependencies
     mkdir -p "${INSTALL_DIR}"
 
     case $amd_choice in
         1)
+            install_vulkan_dependencies
             echo -e "\n  ${C_BLUE}➜ Setup ROCm Ufficiale...${RESET}"
             apt-get install -y -qq rocm-hip-sdk || true
             mkdir -p "${UNSLOTH_ENV}"
@@ -266,6 +269,7 @@ install_services() {
             build_llama_vulkan
             ;;
         3)
+            install_vulkan_dependencies
             echo -e "\n  ${C_BLUE}➜ Setup ROCm Sperimentale (gfx1030)...${RESET}"
             apt-get install -y -qq rocm-hip-sdk || true
             mkdir -p "${UNSLOTH_ENV}"
@@ -359,7 +363,7 @@ uninstall_all() {
     echo -e "  ${BOLD}${C_RED}❖ RIMOZIONE COMPLETA AMBIENTE${RESET}\n"
     read -p "  Confermi la cancellazione di servizi, dipendenze e log? [y/N]: " confirm
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        rm -rf "${INSTALL_DIR}" "${UNSLOTH_ENV}" "${CODE_RUNNER_DIR}" "${LOG_DIR}"
+        rm -rf "${INSTALL_DIR}" "${UNSLOTH_ENV}" "${CODE_RUNNER_DIR}" "${LOG_DIR}" /usr/local/bin/glslc
         echo -e "\n  ${C_GREEN}✔ Ambiente e log rimossi con successo.${RESET}"
     else
         echo -e "\n  ${C_YELLOW}Operazione annullata.${RESET}"
