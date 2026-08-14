@@ -24,19 +24,27 @@ C_WHITE='\033[38;5;255m'
 # --- Componenti Grafici ---
 show_header() {
     clear
-    echo -e "${C_CYAN}┌──────────────────────────────────────────────────────────────────────────────┐${RESET}"
-    echo -e "${C_CYAN}│${RESET}  ${BOLD}${C_WHITE}H O M E L A B   A I   D E P L O Y E R${RESET}  │  ${BOLD}${C_PURPLE}A U T O - R O U T E R${RESET}         ${C_CYAN}│${RESET}"
-    echo -e "${C_CYAN}│${RESET}  ${C_GRAY}Zero-Config Hardware Discovery & AI Environment Orchestrator${RESET}         ${C_CYAN}│${RESET}"
-    echo -e "${C_CYAN}└──────────────────────────────────────────────────────────────────────────────┘${RESET}"
-    echo ""
+    echo -e "${C_CYAN}==============================================================================${RESET}"
+    echo -e "  ${BOLD}${C_WHITE}H O M E L A B   A I   D E P L O Y E R${RESET}  ${C_GRAY}::${RESET}  ${BOLD}${C_PURPLE}A U T O - R O U T E R${RESET}"
+    echo -e "  ${C_GRAY}Zero-Config Hardware Discovery & Local AI Environment Orchestrator${RESET}"
+    echo -e "${C_CYAN}==============================================================================${RESET}\n"
 }
 
 show_about() {
-    echo -e "  ${BOLD}${C_PURPLE}❖ INFORMAZIONI SUL PROGETTO${RESET}"
+    echo -e "  ${BOLD}${C_PURPLE}❖ INFORMAZIONI E ARCHITETTURA PROGETTO${RESET}"
     echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}"
-    echo -e "  ${C_WHITE}Homelab AI Deployer è uno stack automatizzato per l'infrastruttura AI locale.${RESET}"
-    echo -e "  ${C_WHITE}Scansiona l'hardware di sistema (GPU, CPU, RAM, Storage) e orchestra il${RESET}"
-    echo -e "  ${C_WHITE}deploy dei driver accelerati (CUDA/ROCm/Vulkan) e dei motori d'inferenza.${RESET}"
+    echo -e "  ${C_WHITE}Homelab AI Deployer è una piattaforma automatizzata per l'infrastruttura AI locale.${RESET}"
+    echo -e "  ${C_WHITE}Scansiona le risorse di sistema e orchestra l'ambiente ideale per:${RESET}\n"
+    
+    echo -e "  ${C_CYAN}🤖 Local AI Inference${RESET}   : Supporto LLM (GGUF, Safetensors via llama.cpp / vLLM)"
+    echo -e "  ${C_GREEN}💻 AI-Assisted Coding${RESET}  : Server locali per VS Code, Codex, OpenCode & CodeRunner"
+    echo -e "  ${C_YELLOW}⚡ Model Fine-Tuning${RESET}   : Integrazione nativa Unsloth & PyTorch per addestramento"
+    echo -e "  ${C_PURPLE}🔒 Isolated Sandbox${RESET}    : Deploy sicuro via SSH/LXC per esecuzione codice locale\n"
+
+    echo -e "  ${BOLD}${C_WHITE}📍 ROADWAY & MAPPA DI SVILUPPO:${RESET}"
+    echo -e "  ${C_GRAY}  ├─ [v0.1 - v0.2]${RESET} ${C_GREEN}✔ Core Auto-Router & Controller GPU AMD/NVIDIA/CPU${RESET}"
+    echo -e "  ${C_GRAY}  ├─ [v0.3 - v0.4]${RESET} ${C_YELLOW}➜ Setup JupyterLab Node & Docker Container Multi-node${RESET}"
+    echo -e "  ${C_GRAY}  └─ [v0.5 +]     ${RESET} ${C_GRAY}⋯ Agenzia Agenti AI Locali & Vector DB RAG Orchestrator${RESET}"
     echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}\n"
 }
 
@@ -129,7 +137,7 @@ else
 fi
 
 # --- STAMPA DASHBOARD RISORSE ---
-echo -e "  🖥️  ${BOLD}CPU${RESET}      : ${C_WHITE}${CPU_MODEL}${RESET} (${CPU_CORES} Core | Istruzioni: ${CPU_FLAGS:-Standard})${RESET}"
+echo -e "  🖥️  ${BOLD}CPU${RESET}      : ${C_WHITE}${CPU_MODEL}${RESET} (${CPU_CORES} Core | ${CPU_FLAGS:-Standard})"
 echo -e "  ${RAM_STATUS}  ${BOLD}RAM${RESET}      : ${C_WHITE}${RAM_TOTAL_GB} GB Totali${RESET} (${RAM_AVAIL_GB} GB Disponibili) · ${C_GRAY}${RAM_NOTE}${RESET}"
 echo -e "  ${DISK_STATUS}  ${BOLD}Storage${RESET}  : ${C_WHITE}${DISK_FREE_GB} GB Liberi su /${RESET} · ${C_GRAY}${DISK_NOTE}${RESET}"
 echo -e "  ${GPU_STATUS}  ${BOLD}GPU [${GPU_TYPE}]${RESET}: ${C_WHITE}${GPU_INFO}${RESET}"
@@ -142,7 +150,7 @@ if [ ! -f "$TARGET_SCRIPT" ]; then
     exit 1
 fi
 
-echo -e "  ${BOLD}${C_YELLOW}➜ PREMERE UN TASTO PER AVVIARE IL CONTROLLER ASSOCIANTO [${GPU_TYPE}]...${RESET}"
+echo -e "  ${BOLD}${C_YELLOW}➜ PREMERE UN TASTO PER AVVIARE IL CONTROLLER ASSOCIATO [${GPU_TYPE}]...${RESET}"
 
 # Attesa pressione tasto obbligatoria
 read -n 1 -s -r
