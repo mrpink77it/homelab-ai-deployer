@@ -129,18 +129,20 @@ select_log_mode() {
 build_llama_vulkan() {
     select_log_mode
 
-    # Garantisce la creazione preventiva della directory di log
+    # Creazione sicura e preventiva delle cartelle
     mkdir -p "${LOG_DIR}"
+    mkdir -p "${INSTALL_DIR}"
+
     local all_log_file="${LOG_DIR}/build_all.log"
     local err_log_file="${LOG_DIR}/build_errors.log"
+    local tmp_log_file="${LOG_DIR}/build_tmp.log"
 
-    mkdir -p "${INSTALL_DIR}"
     cd "${INSTALL_DIR}"
 
     if [ -d "${LLAMA_CPP_DIR}" ]; then
         echo -e "\n  ${C_CYAN}➜ Sync repository llama.cpp in corso...${RESET}"
         cd "${LLAMA_CPP_DIR}"
-        git pull --quiet
+        git pull --quiet || true
     else
         echo -e "\n  ${C_CYAN}➜ Download sorgenti llama.cpp...${RESET}"
         git clone --quiet https://github.com/ggerganov/llama.cpp.git "${LLAMA_CPP_DIR}"
@@ -165,6 +167,8 @@ build_llama_vulkan() {
 
     echo -e "  ${C_CYAN}➜ Configurazione ambiente CMake (Release - Bypass Shader Gen)...${RESET}"
 
+    # Disattiviamo momentaneamente set -e per catturare errori di cmake
+    set +e
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_STANDARD=20 \
@@ -172,42 +176,61 @@ build_llama_vulkan() {
         -DGGML_VULKAN_SHADERS_GEN=OFF \
         -DGGML_VULKAN_SHADERC=OFF \
         -DCMAKE_C_FLAGS="-DGGML_VK_DISABLE_F16" \
-        -DCMAKE_CXX_FLAGS="-DGGML_VK_DISABLE_F16" > /dev/null 2>&1
+        -DCMAKE_CXX_FLAGS="-DGGML_VK_DISABLE_F16" > "${tmp_log_file}" 2>&1
+    
+    local cmake_res=$?
+    set -e
 
+    if [ $cmake_res -ne 0 ]; then
+        echo -e "\n  ${C_RED}✖ Errore durante la configurazione CMake!${RESET}"
+        echo -e "  ${C_YELLOW}Dettagli log configurazione:${RESET}\n"
+        cat "${tmp_log_file}"
+        rm -f "${tmp_log_file}"
+        read -p "  Premi [INVIO] per tornare al menu..."
+        return 1
+    fi
+
+    rm -f "${tmp_log_file}"
+    echo -e "  ${C_GREEN}✔ Configurazione CMake completata con successo.${RESET}"
     echo -e "  ${C_YELLOW}➜ Avvio build parallela su $(nproc) thread...${RESET}\n"
 
+    # Esecuzione build gestita in sicurezza senza interrompere lo script
+    set +e
     case $LOG_MODE in
         all)
             echo -e "  ${C_GRAY}[i] Registrazione log completo (silenzioso) in: ${C_WHITE}${all_log_file}${RESET}\n"
-            cmake --build . --config Release -j$(nproc) > "${all_log_file}" 2>&1 || true
-            grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}" > "${err_log_file}" || true
-            echo -e "  ${C_GREEN}✔ Log Completo :${RESET} ${all_log_file}"
-            echo -e "  ${C_GREEN}✔ Log Errori   :${RESET} ${err_log_file}"
+            cmake --build . --config Release -j$(nproc) > "${all_log_file}" 2>&1
+            grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}" > "${err_log_file}"
             ;;
         all_tee)
             echo -e "  ${C_GRAY}[i] Output a video + Registrazione log completo in: ${C_WHITE}${all_log_file}${RESET}\n"
-            cmake --build . --config Release -j$(nproc) 2>&1 | tee "${all_log_file}" || true
-            grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}" > "${err_log_file}" || true
-            echo -e "\n  ${C_GREEN}✔ Log Completo :${RESET} ${all_log_file}"
-            echo -e "  ${C_GREEN}✔ Log Errori   :${RESET} ${err_log_file}"
+            cmake --build . --config Release -j$(nproc) 2>&1 | tee "${all_log_file}"
+            grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}" > "${err_log_file}"
             ;;
         err)
             echo -e "  ${C_GRAY}[i] Registrazione dei soli errori (silenziosa) in: ${C_WHITE}${err_log_file}${RESET}\n"
-            cmake --build . --config Release -j$(nproc) 2>&1 | grep -iE 'error|cannot compile|failed|fatal' > "${err_log_file}" || true
-            echo -e "  ${C_GREEN}✔ Log Errori :${RESET} ${err_log_file}"
+            cmake --build . --config Release -j$(nproc) > "${tmp_log_file}" 2>&1
+            grep -iE 'error|cannot compile|failed|fatal' "${tmp_log_file}" > "${err_log_file}"
+            rm -f "${tmp_log_file}"
             ;;
         err_tee)
             echo -e "  ${C_GRAY}[i] Output a video + Isolamento errori in: ${C_WHITE}${err_log_file}${RESET}\n"
-            # Gestione sicura senza subshell asincrone bloccanti
-            cmake --build . --config Release -j$(nproc) 2>&1 | tee "${all_log_file}.tmp" || true
-            grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}.tmp" > "${err_log_file}" || true
-            rm -f "${all_log_file}.tmp"
-            echo -e "\n  ${C_GREEN}✔ Log Errori :${RESET} ${err_log_file}"
+            cmake --build . --config Release -j$(nproc) 2>&1 | tee "${tmp_log_file}"
+            grep -iE 'error|cannot compile|failed|fatal' "${tmp_log_file}" > "${err_log_file}"
+            rm -f "${tmp_log_file}"
             ;;
         none)
-            cmake --build . --config Release -j$(nproc) || true
+            cmake --build . --config Release -j$(nproc)
             ;;
     esac
+    set -e
+
+    echo -e "\n  ${C_GREEN}✔ Processo di compilazione terminato!${RESET}"
+    if [ -s "${err_log_file}" ]; then
+        echo -e "  ${C_YELLOW}[!] Alcuni errori sono stati rilevati e salvati in: ${C_WHITE}${err_log_file}${RESET}"
+    else
+        echo -e "  ${C_GREEN}✔ Nessun errore rilevato durante la build.${RESET}"
+    fi
 }
 
 install_services() {
@@ -256,7 +279,7 @@ install_services() {
             ;;
     esac
 
-    echo -e "\n  ${C_GREEN}✔ Operazione completata con successo!${RESET}"
+    echo -e "\n  ${C_GREEN}✔ Operazione completata!${RESET}"
     read -p "  Premi [INVIO] per continuare..."
 }
 
