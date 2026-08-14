@@ -6,7 +6,7 @@
 
 set -e
 
-# Determinazione sicura del percorso Log
+# Determinazione sicura della Home utente
 if [ -n "$SUDO_USER" ]; then
     REAL_USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
 else
@@ -94,11 +94,11 @@ install_vulkan_dependencies() {
     echo -e "  ${C_CYAN}➜ Aggiornamento repository ed installazione dipendenze Vulkan e glslc...${RESET}"
     apt-get update -qq
 
-    # Aggiunti glslang-dev e glslang-tools per soddisfare la richiesta di glslc da parte di CMake 3.31+
+    # Aggiunti glslang-tools e glslang-dev per fornire /usr/bin/glslc a CMake 3.31+
     BASE_PACKAGES=(
         build-essential cmake ccache git curl wget zstd
         pkg-config libssl-dev libvulkan-dev vulkan-tools
-        mesa-vulkan-drivers glslang-dev glslang-tools
+        mesa-vulkan-drivers glslang-tools glslang-dev
         python3 python3-pip python3-venv clinfo nodejs npm
     )
 
@@ -128,7 +128,7 @@ select_log_mode() {
 }
 
 build_llama_vulkan() {
-    # Garanzia assoluta creazione cartella Log prima di qualsiasi istruzione
+    # Garanzia creazione directory Log
     mkdir -p "${LOG_DIR}"
     chmod 755 "${LOG_DIR}"
 
@@ -180,7 +180,7 @@ build_llama_vulkan() {
 
     if [ $cmake_res -ne 0 ]; then
         echo -e "\n  ${C_RED}✖ Errore durante la configurazione CMake!${RESET}"
-        echo -e "  ${C_YELLOW}Il log completo di CMake è stato salvato in:${RESET} ${C_WHITE}${cmake_log_file}${RESET}\n"
+        echo -e "  ${C_YELLOW}Il log di configurazione è salvato in:${RESET} ${C_WHITE}${cmake_log_file}${RESET}\n"
         cat "${cmake_log_file}"
         read -p "  Premi [INVIO] per tornare al menu..."
         return 1
