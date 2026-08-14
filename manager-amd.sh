@@ -94,16 +94,24 @@ install_vulkan_dependencies() {
     echo -e "  ${C_CYAN}➜ Verifica e installazione dipendenze di sistema...${RESET}"
     apt-get update -qq
 
-    # Inclusi glslang-tools e glslang-dev per garantire la presenza di /usr/bin/glslc (richiesto da CMake 3.31+)
+    # Aggiunto 'shaderc' che fornisce direttamente /usr/bin/glslc in molte distro Debian-based
     BASE_PACKAGES=(
         build-essential cmake ccache git curl wget zstd
         pkg-config libssl-dev libvulkan-dev vulkan-tools
-        mesa-vulkan-drivers glslang-tools glslang-dev
+        mesa-vulkan-drivers glslang-tools glslang-dev shaderc
         python3 python3-pip python3-venv clinfo nodejs npm
     )
 
     echo -e "  ${C_BLUE}➜ Installazione pacchetti base e toolchain Vulkan/C++...${RESET}"
     apt-get install -y "${BASE_PACKAGES[@]}"
+
+    # Fallback/Symlink: Se glslc non c'è ma abbiamo glslangValidator, creiamo il link per CMake
+    if ! command -v glslc &> /dev/null; then
+        if command -v glslangValidator &> /dev/null; then
+            echo -e "  ${C_YELLOW}➜ Creazione symlink di ripiego: glslangValidator -> /usr/local/bin/glslc${RESET}"
+            ln -sf "$(which glslangValidator)" /usr/local/bin/glslc
+        fi
+    fi
 }
 
 select_log_mode() {
