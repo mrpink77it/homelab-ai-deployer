@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Homelab AI Deployer - Controller AMD (manager-amd.sh)
-# Compatible with: Debian 13 (Trixie), Ubuntu 22.04/24.04 | Baremetal & LXC
+# Compatible with: Debian 13 (Trixie) & Ubuntu 24.04 LTS | Baremetal & LXC
 # ==============================================================================
 
 set -e
@@ -94,7 +94,7 @@ install_vulkan_dependencies() {
     echo -e "  ${C_CYAN}➜ Aggiornamento repository ed installazione dipendenze di sistema...${RESET}"
     apt-get update -qq
 
-    # Pacchetti essenziali. glslang-tools e glslang-dev forniscono /usr/bin/glslc a CMake 3.31+
+    # Pacchetti essenziali per Debian 13 e Ubuntu 24.04 (glslang-tools/dev necessari per CMake 3.31+)
     BASE_PACKAGES=(
         build-essential cmake ccache git curl wget zstd
         pkg-config libssl-dev libvulkan-dev vulkan-tools
@@ -102,7 +102,7 @@ install_vulkan_dependencies() {
         python3 python3-pip python3-venv clinfo nodejs npm
     )
 
-    echo -e "  ${C_BLUE}➜ Garantita presenza pacchetti di base e dev...${RESET}"
+    echo -e "  ${C_BLUE}➜ Garantita presenza pacchetti base e toolchain di sviluppo...${RESET}"
     apt-get install -y "${BASE_PACKAGES[@]}"
 }
 
@@ -128,11 +128,11 @@ select_log_mode() {
 }
 
 build_llama_vulkan() {
-    # Garanzia assoluta creazione cartella Log prima di qualsiasi elaborazione
+    # Garanzia creazione cartella Log prima di qualsiasi opzione
     mkdir -p "${LOG_DIR}"
     chmod 755 "${LOG_DIR}"
 
-    # Assicurati che le dipendenze siano presenti anche se l'utente salta il menu installazione
+    # Installazione automatica dipendenze per macchine pulite
     install_vulkan_dependencies
 
     select_log_mode
