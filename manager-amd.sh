@@ -123,18 +123,21 @@ install_services() {
                 cd "${LLAMA_CPP_DIR}"
             fi
 
-            # Pulizia radicale della directory di build per rigenerare CMake cache
+            # Pulizia radicale della directory di build
             rm -rf build
             mkdir -p build
             cd build
 
             GLSLC_PATH=$(which glslc || echo "/usr/bin/glslc")
 
-            echo -e "  ${C_YELLOW}[*] Configurazione CMake con GGML_VULKAN=ON & Target Vulkan 1.3...${RESET}"
+            echo -e "  ${C_YELLOW}[*] Configurazione CMake sicura per gli Shader Vulkan...${RESET}"
+            
+            # Disattiviamo il supporto Cooperative Matrix e feature sperimentali che causano l'errore di glslc
             cmake .. \
                 -DGGML_VULKAN=ON \
                 -DVulkan_GLSLC_EXECUTABLE="${GLSLC_PATH}" \
-                -DGGML_VULKAN_TARGET_ENV=vulkan1.3
+                -DGGML_VULKAN_COOPMAT=OFF \
+                -DGGML_VULKAN_UNROLL=OFF
 
             echo -e "  ${C_YELLOW}[*] Compilazione in corso...${RESET}"
             cmake --build . --config Release -j$(nproc)
@@ -221,7 +224,8 @@ update_components() {
         cmake .. \
             -DGGML_VULKAN=ON \
             -DVulkan_GLSLC_EXECUTABLE="${GLSLC_PATH}" \
-            -DGGML_VULKAN_TARGET_ENV=vulkan1.3
+            -DGGML_VULKAN_COOPMAT=OFF \
+            -DGGML_VULKAN_UNROLL=OFF
         cmake --build . --config Release -j$(nproc)
         echo -e "\n  ${C_GREEN}[✔] llama.cpp aggiornato e ricompilato!${RESET}"
     else
