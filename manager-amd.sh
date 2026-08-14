@@ -44,10 +44,10 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 install_vulkan_dependencies() {
-    echo -e "  ${C_YELLOW}[+] Aggiornamento repository ed installazione dipendenze e SDK Vulkan...${RESET}"
+    echo -e "  ${C_YELLOW}[+] Aggiornamento repository e installazione dipendenze complete (Vulkan, Node.js, npm)...${RESET}"
     apt-get update
     
-    # Pacchetti testati e compatibili con Debian 13 (Trixie) + OpenSSL & CCache
+    # Inclusi nodejs e npm per gestire i moduli e gli assets web di llama.cpp
     apt-get install -y \
         build-essential \
         cmake \
@@ -62,12 +62,16 @@ install_vulkan_dependencies() {
         mesa-vulkan-drivers \
         glslang-tools \
         glslang-dev \
+        spirv-tools \
+        libspirv-tools-dev \
         spirv-headers \
         libspirv-cross-c-shared-dev \
         python3 \
         python3-pip \
         python3-venv \
-        clinfo
+        clinfo \
+        nodejs \
+        npm
 
     if ! command -v glslc &> /dev/null; then
         if [ -f "/usr/bin/glslc" ]; then
@@ -111,7 +115,7 @@ install_services() {
                 cd "${LLAMA_CPP_DIR}"
             fi
 
-            # Pulizia completa della cartella build per azzerare shader corrotti o cache vecchie
+            # Pulizia radicale della build per eliminare ogni residuo corrotto
             rm -rf build
             mkdir -p build
             cd build
@@ -121,11 +125,8 @@ install_services() {
             echo -e "  ${C_YELLOW}[*] Configurazione CMake con GGML_VULKAN=ON...${RESET}"
             cmake .. -DGGML_VULKAN=ON -DVulkan_GLSLC_EXECUTABLE="${GLSLC_PATH}"
 
-            echo -e "  ${C_YELLOW}[*] Generazione shader Vulkan (Single-Threaded)...${RESET}"
-            cmake --build . --target vulkan-shaders-gen -j1
-
-            echo -e "  ${C_YELLOW}[*] Compilazione principale in corso con $(nproc) thread...${RESET}"
-            cmake --build . --config Release -j$(nproc)
+            echo -e "  ${C_YELLOW}[*] Compilazione in modalità sequenziale protetta per gli shader Vulkan (-j1)...${RESET}"
+            cmake --build . --config Release -j1
 
             echo -e "\n  ${C_GREEN}[✔] Compilazione llama.cpp (Vulkan) completata con successo!${RESET}"
             ;;
@@ -157,21 +158,24 @@ check_status() {
     show_header
     echo -e "  ${C_PURPLE}=== Verifico Stato Hardware & Servizi AMD ===${RESET}\n"
 
-    # Controllo Vulkan
     if command -v vulkaninfo &> /dev/null; then
         echo -e "  ${C_GREEN}[✔ Vulkan]${RESET} Supporto runtime e strumenti rilevati nel sistema."
     else
         echo -e "  ${C_RED}[✖ Vulkan]${RESET} Strumenti non installati."
     fi
 
-    # Controllo glslc e spirv-headers
     if command -v glslc &> /dev/null; then
         echo -e "  ${C_GREEN}[✔ Shaderc/GLSL]${RESET} Compilatore glslc disponibile ($(which glslc))."
     else
         echo -e "  ${C_YELLOW}[! Shaderc/GLSL]${RESET} Compilatore glslc non trovato nel PATH."
     fi
 
-    # Controllo ROCm / System GPU
+    if command -v npm &> /dev/null; then
+        echo -e "  ${C_GREEN}[✔ Node.js/npm]${RESET} Gestore pacchetti npm disponibile ($(npm -v))."
+    else
+        echo -e "  ${C_YELLOW}[! Node.js/npm]${RESET} npm non trovato nel sistema."
+    fi
+
     if command -v rocm-smi &> /dev/null; then
         echo -e "  ${C_GREEN}[✔ ROCm]${RESET} Utility ROCm SMI disponibile:"
         rocm-smi --showid || true
@@ -179,7 +183,6 @@ check_status() {
         echo -e "  ${C_YELLOW}[! ROCm]${RESET} Utility ROCm non presente."
     fi
 
-    # Controllo llama.cpp
     if [ -f "${LLAMA_CPP_DIR}/build/bin/llama-cli" ] || [ -f "${LLAMA_CPP_DIR}/build/bin/main" ] || [ -f "${LLAMA_CPP_DIR}/build/bin/llama-server" ]; then
         echo -e "  ${C_GREEN}[✔ llama.cpp]${RESET} Binari compilati presenti in ${LLAMA_CPP_DIR}/build/bin"
     fi
@@ -198,8 +201,7 @@ update_components() {
         mkdir -p build
         cd build
         cmake .. -DGGML_VULKAN=ON
-        cmake --build . --target vulkan-shaders-gen -j1
-        cmake --build . --config Release -j$(nproc)
+        cmake --build . --config Release -j1
         echo -e "\n  ${C_GREEN}[✔] llama.cpp aggiornato e ricompilato!${RESET}"
     else
         echo -e "  ${C_YELLOW}[!] llama.cpp non risulta installato in ${LLAMA_CPP_DIR}.${RESET}"
