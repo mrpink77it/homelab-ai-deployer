@@ -35,7 +35,33 @@ show_header() {
     echo ""
 }
 
-# Check root privileges
+show_split_screen_guide() {
+    local step_title="$1"
+    local left_content="$2"
+    local right_content="$3"
+
+    show_header
+    echo -e "  ${BOLD}${C_PURPLE}═══ GUIDA OPERATIVA SPLIT-SCREEN :: ${step_title} ═══${RESET}\n"
+    
+    printf "  %-38s │ %-38s\n" "${BOLD}${C_CYAN}STATO OPERATIVO & ISTRUZIONI${RESET}" "${BOLD}${C_YELLOW}LOG BUILD & CONTESTO TECNICO${RESET}"
+    echo -e "  ${C_GRAY}───────────────────────────────────────┼───────────────────────────────────────${RESET}"
+
+    mapfile -t left_lines <<< "$left_content"
+    mapfile -t right_lines <<< "$right_content"
+
+    local max_lines=${#left_lines[@]}
+    if [ ${#right_lines[@]} -gt $max_lines ]; then
+        max_lines=${#right_lines[@]}
+    fi
+
+    for ((i=0; i<max_lines; i++)); do
+        local l_line="${left_lines[i]:-}"
+        local r_line="${right_lines[i]:-}"
+        printf "  %-48s ${C_GRAY}│${RESET} %-48s\n" "$l_line" "$r_line"
+    done
+    echo -e "  ${C_GRAY}───────────────────────────────────────┴───────────────────────────────────────${RESET}\n"
+}
+
 if [ "$EUID" -ne 0 ]; then
     show_header
     echo -e "  ${C_RED}𐄂 PERMESSI INSUFFICIENTI${RESET}"
@@ -82,36 +108,89 @@ install_vulkan_dependencies() {
     apt-get install -y libspirv-cross-c-shared-dev 2>/dev/null || true
 }
 
+select_log_mode() {
+    echo -e "  ${C_PURPLE}=== Seleziona la Modalità di Logging ===${RESET}\n"
+    echo -e "  ${C_GRAY}┌────────────────────────────────────────────────────────┐${RESET}"
+    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_CYAN}[1] all${RESET}  : Log completo (Output + Errori)               ${C_GRAY}│${RESET}"
+    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_YELLOW}[2] err${RESET}  : Registra SOLO gli errori in un file dedicato ${C_GRAY}│${RESET}"
+    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_RED}[3] none${RESET} : Nessun log salvato su disco                 ${C_GRAY}│${RESET}"
+    echo -e "  ${C_GRAY}└────────────────────────────────────────────────────────┘${RESET}\n"
+
+    read -p "  Seleziona la modalità [1-3] (default: 1): " log_choice
+    case $log_choice in
+        2) LOG_MODE="err" ;;
+        3) LOG_MODE="none" ;;
+        *) LOG_MODE="all" ;;
+    esac
+}
+
 build_llama_vulkan() {
+    select_log_mode
+
+    local build_dir="${LLAMA_CPP_DIR}/build"
+    local all_log_file="${build_dir}/build_all.log"
+    local err_log_file="${build_dir}/build_errors.log"
+
     cd "${INSTALL_DIR}"
     if [ -d "${LLAMA_CPP_DIR}" ]; then
         echo -e "  ${C_YELLOW}[*] Aggiornamento sorgenti llama.cpp esistenti...${RESET}"
         cd "${LLAMA_CPP_DIR}"
         git pull
     else
+        echo -e "  ${C_YELLOW}[*] Cloning llama.cpp...${RESET}"
         git clone https://github.com/ggerganov/llama.cpp.git "${LLAMA_CPP_DIR}"
         cd "${LLAMA_CPP_DIR}"
     fi
 
-    # Pulizia profonda dell'ambiente di build per resettare la cache CMake
     rm -rf build
     mkdir -p build
     cd build
 
-    echo -e "  ${C_YELLOW}[*] Configurazione CMake con backend Vulkan (disabilitando shader generator dinamico FP16)...${RESET}"
+    local left_info="  * Repository: github.com/ggerganov/llama.cpp
+  * Directory: ${LLAMA_CPP_DIR}
+  * Backend: Vulkan (RADV)
+  * Logging: Modalità [${LOG_MODE}]"
 
-    # Forziamo l'uso di glslc disattivando SHADERC, FP16 e CoopMat per garantire la massima compatibilità SPIR-V
+    local right_info="  * Disabilitazione dinamica FP16/CoopMat
+  * Percorsi file di log nel progetto:
+    - ALL: ${all_log_file}
+    - ERR: ${err_log_file}"
+
+    show_split_screen_guide "Compilazione Nativa llama.cpp (Vulkan)" "$left_info" "$right_info"
+
+    echo -e "  ${C_YELLOW}[*] Configurazione CMake con backend Vulkan...${RESET}"
+
     cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
         -DGGML_VULKAN=ON \
         -DVulkan_GLSLC_EXECUTABLE=/usr/bin/glslc \
         -DGGML_VULKAN_SHADERC=OFF \
         -DGGML_VULKAN_COOPMAT=OFF \
         -DGGML_VULKAN_COOPMAT2=OFF \
         -DGGML_VULKAN_FP16=OFF \
-        -DGGML_VULKAN_VK_QUALIFIERS=OFF
+        -DGGML_VULKAN_VK_QUALIFIERS=OFF \
+        -DCMAKE_C_FLAGS="-DGGML_VK_DISABLE_F16" \
+        -DCMAKE_CXX_FLAGS="-DGGML_VK_DISABLE_F16"
 
-    echo -e "  ${C_YELLOW}[*] Compilazione in corso...${RESET}"
-    cmake --build . --config Release -j$(nproc)
+    echo -e "  ${C_YELLOW}[*] Avvio compilazione parallela su $(nproc) core...${RESET}"
+
+    case $LOG_MODE in
+        all)
+            echo -e "  ${C_CYAN}[i] Registrazione LOG COMPLETO e ERRORE nella cartella di build...${RESET}"
+            cmake --build . --config Release -j$(nproc) 2>&1 | tee "${all_log_file}" | grep -iE 'error|cannot compile|failed|fatal' > "${err_log_file}" || true
+            echo -e "  ${C_GREEN}[✔] Log Completo: ${all_log_file}${RESET}"
+            echo -e "  ${C_GREEN}[✔] Log Errori  : ${err_log_file}${RESET}"
+            ;;
+        err)
+            echo -e "  ${C_YELLOW}[i] Registrazione dei SOLI ERRORI nella cartella di build...${RESET}"
+            cmake --build . --config Release -j$(nproc) 2>&1 | grep -iE 'error|cannot compile|failed|fatal' > "${err_log_file}" || true
+            echo -e "  ${C_GREEN}[✔] Log Errori: ${err_log_file}${RESET}"
+            ;;
+        none)
+            echo -e "  ${C_GRAY}[i] Compilazione standard senza salvataggio log.${RESET}"
+            cmake --build . --config Release -j$(nproc)
+            ;;
+    esac
 }
 
 install_services() {
@@ -138,9 +217,8 @@ install_services() {
             "${UNSLOTH_ENV}/bin/pip" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.0
             ;;
         2)
-            echo -e "\n  ${C_GREEN}[+] Compilazione nativa di llama.cpp con accelerazione Vulkan (RADV)...${RESET}"
+            echo -e "\n  ${C_GREEN}[+] Avvio procedura di compilazione Vulkan...${RESET}"
             build_llama_vulkan
-            echo -e "\n  ${C_GREEN}[✔] Compilazione llama.cpp (Vulkan) completata con successo!${RESET}"
             ;;
         3)
             echo -e "\n  ${C_BLUE}[+] Configurazione ROCm Sperimentale con GFX Override (gfx1030)...${RESET}"
@@ -162,7 +240,7 @@ install_services() {
             ;;
     esac
 
-    echo -e "\n  ${C_GREEN}[✔] Installazione completata per l'ambiente AMD!${RESET}"
+    echo -e "\n  ${C_GREEN}[✔] Operazione completata!${RESET}"
     read -p "  Premi [INVIO] per tornare al menu principale..."
 }
 
@@ -182,16 +260,8 @@ check_status() {
         echo -e "  ${C_YELLOW}[! Shaderc/GLSL]${RESET} Compilatore glslc non trovato nel PATH."
     fi
 
-    if command -v zstd &> /dev/null; then
-        echo -e "  ${C_GREEN}[✔ ZSTD]${RESET} Utilità di decompressione zstd presente."
-    else
-        echo -e "  ${C_YELLOW}[! ZSTD]${RESET} zstd non installato nel sistema."
-    fi
-
-    if command -v npm &> /dev/null; then
-        echo -e "  ${C_GREEN}[✔ Node.js/npm]${RESET} Gestore pacchetti npm disponibile ($(npm -v))."
-    else
-        echo -e "  ${C_YELLOW}[! Node.js/npm]${RESET} npm non trovato nel sistema."
+    if [ -f "${LLAMA_CPP_DIR}/build/build_errors.log" ]; then
+        echo -e "  ${C_YELLOW}[! Log Errori]${RESET} Trovato file errori in: ${C_CYAN}${LLAMA_CPP_DIR}/build/build_errors.log${RESET}"
     fi
 
     if command -v rocm-smi &> /dev/null; then
@@ -214,7 +284,6 @@ update_components() {
     echo -e "  ${C_YELLOW}[+] Aggiornamento componenti AMD in corso...${RESET}\n"
     if [ -d "${LLAMA_CPP_DIR}" ]; then
         build_llama_vulkan
-        echo -e "\n  ${C_GREEN}[✔] llama.cpp aggiornato e ricompilato!${RESET}"
     else
         echo -e "  ${C_YELLOW}[!] llama.cpp non risulta installato in ${LLAMA_CPP_DIR}.${RESET}"
     fi
@@ -224,7 +293,16 @@ update_components() {
 
 configure_sandbox() {
     show_header
-    echo -e "  ${C_PURPLE}=== Helper Configurazione Sandbox ===${RESET}\n"
+    local left_info="  * Associa Sandbox remota via SSH
+  * Generazione chiave Ed25519
+  * Copia id_ed25519.pub su target"
+
+    local right_info="  * Consente l'esecuzione remota
+  * Configurazione permessi root
+  * Target raccomandato: Nodo LXC / VM"
+
+    show_split_screen_guide "Configurazione Sandbox SSH" "$left_info" "$right_info"
+
     read -p "  Inserisci l'IP della Sandbox da associare via SSH (oppure premi INVIO per annullare): " sandbox_ip
     if [ -n "$sandbox_ip" ]; then
         if [ ! -f /root/.ssh/id_ed25519 ]; then
@@ -238,7 +316,7 @@ configure_sandbox() {
 uninstall_all() {
     show_header
     echo -e "  ${C_RED}=== RIMOZIONE COMPLETA AMBIENTE ===${RESET}\n"
-    read -p "  Sei sicuro di voler rimuovere i servizi, le directory ed i binari installati? [y/N]: " confirm
+    read -p "  Sei sicuro di voler rimuovere i servizi e le directory installate? [y/N]: " confirm
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
         rm -rf "${INSTALL_DIR}" "${UNSLOTH_ENV}" "${CODE_RUNNER_DIR}"
         echo -e "\n  ${C_GREEN}[✔] Rimozione completata!${RESET}"
