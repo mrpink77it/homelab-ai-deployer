@@ -46,11 +46,24 @@ show_spinner() {
     printf "                                                                               \r"
 }
 
+# --- Funzione Pausa con Countdown 10s e Tasto di Interruzione ---
 pause_before_launch() {
     local script_name=$1
-    echo -e "  ${C_YELLOW}⚡ Premere [INVIO] per avviare subito o attendi 3 secondi...${RESET}"
-    read -t 3 -n 1 -r -p "" || true
-    echo -e "\n  ${C_GREEN}➔ Avvio di ${script_name}...${RESET}\n"
+    local timeout=10
+
+    for (( i=timeout; i>0; i-- )); do
+        # Formattazione pad a 2 cifre per mantenere pulita la riga
+        printf "\r  ${C_YELLOW}⚡ Premere un tasto per avviare subito (avvio automatico tra %02ds)...${RESET}" "$i"
+        
+        # Attende 1 secondo; se viene premuto un tasto (-n 1), interrompe il ciclo
+        if read -t 1 -n 1 -s -r 2>/dev/null; then
+            break
+        fi
+    done
+
+    # Pulisce la riga del countdown prima del messaggio di avvio
+    echo -e "\r                                                                               "
+    echo -e "  ${C_GREEN}➔ Avvio di ${script_name}...${RESET}\n"
     sleep 0.5
 }
 
