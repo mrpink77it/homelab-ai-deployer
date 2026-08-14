@@ -6,7 +6,7 @@
 
 set -e
 
-# Determinazione della Home dell'utente reale (supporta esecuzione via sudo)
+# Determinazione sicura del percorso Log
 if [ -n "$SUDO_USER" ]; then
     REAL_USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
 else
@@ -91,18 +91,19 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 install_vulkan_dependencies() {
-    echo -e "  ${C_CYAN}➜ Aggiornamento repository ed elaborazione dipendenze...${RESET}"
+    echo -e "  ${C_CYAN}➜ Aggiornamento repository ed installazione dipendenze Vulkan e glslc...${RESET}"
     apt-get update -qq
 
+    # Aggiunti glslang-dev e glslang-tools per soddisfare la richiesta di glslc da parte di CMake 3.31+
     BASE_PACKAGES=(
         build-essential cmake ccache git curl wget zstd
         pkg-config libssl-dev libvulkan-dev vulkan-tools
-        mesa-vulkan-drivers python3 python3-pip python3-venv
-        clinfo nodejs npm
+        mesa-vulkan-drivers glslang-dev glslang-tools
+        python3 python3-pip python3-venv clinfo nodejs npm
     )
 
     echo -e "  ${C_BLUE}➜ Installazione pacchetti di sistema...${RESET}"
-    apt-get install -y -qq "${BASE_PACKAGES[@]}" > /dev/null
+    apt-get install -y "${BASE_PACKAGES[@]}"
 }
 
 select_log_mode() {
@@ -127,16 +128,17 @@ select_log_mode() {
 }
 
 build_llama_vulkan() {
-    select_log_mode
-
-    # Creazione sicura e preventiva delle cartelle
+    # Garanzia assoluta creazione cartella Log prima di qualsiasi istruzione
     mkdir -p "${LOG_DIR}"
-    mkdir -p "${INSTALL_DIR}"
+    chmod 755 "${LOG_DIR}"
+
+    select_log_mode
 
     local all_log_file="${LOG_DIR}/build_all.log"
     local err_log_file="${LOG_DIR}/build_errors.log"
-    local tmp_log_file="${LOG_DIR}/build_tmp.log"
+    local cmake_log_file="${LOG_DIR}/cmake_config.log"
 
+    mkdir -p "${INSTALL_DIR}"
     cd "${INSTALL_DIR}"
 
     if [ -d "${LLAMA_CPP_DIR}" ]; then
@@ -159,65 +161,55 @@ build_llama_vulkan() {
 * GPU  : Vulkan (Driver RADV)
 * Mode : [${LOG_MODE}]"
 
-    local right_info="* Shaders : Pre-compilati (Bypass glslc)
+    local right_info="* Shaders : Compilatore glslc attivo
 * C++     : Standard C++20
 * Logs    : ${LOG_DIR}/"
 
     show_split_screen_guide "Compilazione Nativa llama.cpp" "$left_info" "$right_info"
 
-    echo -e "  ${C_CYAN}➜ Configurazione ambiente CMake (Release - Bypass Shader Gen)...${RESET}"
+    echo -e "  ${C_CYAN}➜ Configurazione ambiente CMake (Vulkan Enabled)...${RESET}"
 
-    # Disattiviamo momentaneamente set -e per catturare errori di cmake
     set +e
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_STANDARD=20 \
-        -DGGML_VULKAN=ON \
-        -DGGML_VULKAN_SHADERS_GEN=OFF \
-        -DGGML_VULKAN_SHADERC=OFF \
-        -DCMAKE_C_FLAGS="-DGGML_VK_DISABLE_F16" \
-        -DCMAKE_CXX_FLAGS="-DGGML_VK_DISABLE_F16" > "${tmp_log_file}" 2>&1
+        -DGGML_VULKAN=ON > "${cmake_log_file}" 2>&1
     
     local cmake_res=$?
     set -e
 
     if [ $cmake_res -ne 0 ]; then
         echo -e "\n  ${C_RED}✖ Errore durante la configurazione CMake!${RESET}"
-        echo -e "  ${C_YELLOW}Dettagli log configurazione:${RESET}\n"
-        cat "${tmp_log_file}"
-        rm -f "${tmp_log_file}"
+        echo -e "  ${C_YELLOW}Il log completo di CMake è stato salvato in:${RESET} ${C_WHITE}${cmake_log_file}${RESET}\n"
+        cat "${cmake_log_file}"
         read -p "  Premi [INVIO] per tornare al menu..."
         return 1
     fi
 
-    rm -f "${tmp_log_file}"
     echo -e "  ${C_GREEN}✔ Configurazione CMake completata con successo.${RESET}"
     echo -e "  ${C_YELLOW}➜ Avvio build parallela su $(nproc) thread...${RESET}\n"
 
-    # Esecuzione build gestita in sicurezza senza interrompere lo script
     set +e
     case $LOG_MODE in
         all)
-            echo -e "  ${C_GRAY}[i] Registrazione log completo (silenzioso) in: ${C_WHITE}${all_log_file}${RESET}\n"
+            echo -e "  ${C_GRAY}[i] Registrazione log completo in: ${C_WHITE}${all_log_file}${RESET}\n"
             cmake --build . --config Release -j$(nproc) > "${all_log_file}" 2>&1
-            grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}" > "${err_log_file}"
+            grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}" > "${err_log_file}" || true
             ;;
         all_tee)
-            echo -e "  ${C_GRAY}[i] Output a video + Registrazione log completo in: ${C_WHITE}${all_log_file}${RESET}\n"
+            echo -e "  ${C_GRAY}[i] Output a video + Registrazione log in: ${C_WHITE}${all_log_file}${RESET}\n"
             cmake --build . --config Release -j$(nproc) 2>&1 | tee "${all_log_file}"
-            grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}" > "${err_log_file}"
+            grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}" > "${err_log_file}" || true
             ;;
         err)
-            echo -e "  ${C_GRAY}[i] Registrazione dei soli errori (silenziosa) in: ${C_WHITE}${err_log_file}${RESET}\n"
-            cmake --build . --config Release -j$(nproc) > "${tmp_log_file}" 2>&1
-            grep -iE 'error|cannot compile|failed|fatal' "${tmp_log_file}" > "${err_log_file}"
-            rm -f "${tmp_log_file}"
+            echo -e "  ${C_GRAY}[i] Registrazione dei soli errori in: ${C_WHITE}${err_log_file}${RESET}\n"
+            cmake --build . --config Release -j$(nproc) > "${all_log_file}" 2>&1
+            grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}" > "${err_log_file}" || true
             ;;
         err_tee)
             echo -e "  ${C_GRAY}[i] Output a video + Isolamento errori in: ${C_WHITE}${err_log_file}${RESET}\n"
-            cmake --build . --config Release -j$(nproc) 2>&1 | tee "${tmp_log_file}"
-            grep -iE 'error|cannot compile|failed|fatal' "${tmp_log_file}" > "${err_log_file}"
-            rm -f "${tmp_log_file}"
+            cmake --build . --config Release -j$(nproc) 2>&1 | tee "${all_log_file}"
+            grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}" > "${err_log_file}" || true
             ;;
         none)
             cmake --build . --config Release -j$(nproc)
@@ -227,9 +219,9 @@ build_llama_vulkan() {
 
     echo -e "\n  ${C_GREEN}✔ Processo di compilazione terminato!${RESET}"
     if [ -s "${err_log_file}" ]; then
-        echo -e "  ${C_YELLOW}[!] Alcuni errori sono stati rilevati e salvati in: ${C_WHITE}${err_log_file}${RESET}"
+        echo -e "  ${C_YELLOW}[!] Rilevati avvisi/errori registrati in: ${C_WHITE}${err_log_file}${RESET}"
     else
-        echo -e "  ${C_GREEN}✔ Nessun errore rilevato durante la build.${RESET}"
+        echo -e "  ${C_GREEN}✔ Nessun errore critico rilevato.${RESET}"
     fi
 }
 
