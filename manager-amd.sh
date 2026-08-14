@@ -93,30 +93,21 @@ build_llama_vulkan() {
         cd "${LLAMA_CPP_DIR}"
     fi
 
-    # Pulizia radicale della directory di build
+    # Pulizia profonda dell'ambiente di build per resettare la cache CMake
     rm -rf build
     mkdir -p build
     cd build
 
-    # Individuazione del compilatore shader preferito (glslangValidator o glslc)
-    SHADER_COMPILER=""
-    if command -v glslangValidator &> /dev/null; then
-        SHADER_COMPILER=$(which glslangValidator)
-    elif command -v glslc &> /dev/null; then
-        SHADER_COMPILER=$(which glslc)
-    fi
+    echo -e "  ${C_YELLOW}[*] Configurazione CMake con backend Vulkan (forzando glslc ed evitando Shaderc)...${RESET}"
 
-    echo -e "  ${C_YELLOW}[*] Configurazione CMake con backend Vulkan...${RESET}"
-
-    # Disabilitiamo i flag sperimentali e l'FP16 negli shader generator per evitare incomprensioni con glslc/glslang
+    # Forziamo l'uso del binario glslc e disabilitiamo il wrapper SHADERC e CoopMat
     cmake .. \
         -DGGML_VULKAN=ON \
-        -DVulkan_GLSLC_EXECUTABLE="${SHADER_COMPILER}" \
-        -DGGML_VULKAN_FP16=OFF \
+        -DVulkan_GLSLC_EXECUTABLE=/usr/bin/glslc \
+        -DGGML_VULKAN_SHADERC=OFF \
         -DGGML_VULKAN_COOPMAT=OFF \
-        -DGGML_VULKAN_UNROLL=OFF \
-        -DGGML_VULKAN_SHARED=OFF \
-        -DGGML_VULKAN_ASYNC=OFF
+        -DGGML_VULKAN_COOPMAT2=OFF \
+        -DGGML_VULKAN_FP16=OFF
 
     echo -e "  ${C_YELLOW}[*] Compilazione in corso...${RESET}"
     cmake --build . --config Release -j$(nproc)
@@ -184,12 +175,10 @@ check_status() {
         echo -e "  ${C_RED}[✖ Vulkan]${RESET} Strumenti non installati."
     fi
 
-    if command -v glslangValidator &> /dev/null; then
-        echo -e "  ${C_GREEN}[✔ Shaderc/GLSL]${RESET} Compilatore glslangValidator disponibile ($(which glslangValidator))."
-    elif command -v glslc &> /dev/null; then
+    if command -v glslc &> /dev/null; then
         echo -e "  ${C_GREEN}[✔ Shaderc/GLSL]${RESET} Compilatore glslc disponibile ($(which glslc))."
     else
-        echo -e "  ${C_YELLOW}[! Shaderc/GLSL]${RESET} Compilatore shader non trovato nel PATH."
+        echo -e "  ${C_YELLOW}[! Shaderc/GLSL]${RESET} Compilatore glslc non trovato nel PATH."
     fi
 
     if command -v zstd &> /dev/null; then
