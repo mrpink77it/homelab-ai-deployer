@@ -72,6 +72,8 @@ init_env() {
 install_dependencies() {
     log_info "Verifica e installazione pacchetti di sistema..."
     apt-get update -qq
+    
+    # "shaderc" è stato sostituito da "glslc" e "libshaderc-dev" per compatibilità Debian/Ubuntu
     apt-get install -y -qq \
         build-essential \
         cmake \
@@ -81,7 +83,8 @@ install_dependencies() {
         pkg-config \
         libvulkan-dev \
         vulkan-tools \
-        shaderc \
+        glslc \
+        libshaderc-dev \
         glslang-tools \
         clinfo \
         pciutils \
