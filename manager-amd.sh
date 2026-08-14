@@ -6,7 +6,15 @@
 
 set -e
 
+# Determination of User Home (supports execution via sudo)
+if [ -n "$SUDO_USER" ]; then
+    REAL_USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+else
+    REAL_USER_HOME="$HOME"
+fi
+
 # Configuration Paths
+LOG_DIR="${REAL_USER_HOME}/homelab-ai-logs"
 INSTALL_DIR="/opt/homelab-ai"
 UNSLOTH_ENV="/root/unsloth_env"
 CODE_RUNNER_DIR="/opt/code_runner"
@@ -14,7 +22,6 @@ LLAMA_CPP_DIR="${INSTALL_DIR}/llama.cpp"
 
 # --- Palette Colori & Stili ANSI ---
 BOLD='\033[1m'
-DIM='\033[2m'
 RESET='\033[0m'
 
 C_CYAN='\033[38;5;38m'
@@ -29,10 +36,10 @@ C_WHITE='\033[38;5;255m'
 # --- Componenti Grafici ---
 show_header() {
     clear
-    echo -e "${C_PURPLE}┌──────────────────────────────────────────────────────────────────────────────┐${RESET}"
-    echo -e "${C_PURPLE}│${RESET}  ${BOLD}${C_WHITE}H O M E L A B   A I   D E P L O Y E R${RESET}  ${C_GRAY}│${RESET}  ${BOLD}${C_CYAN}A M D   C O N T R O L L E R${RESET}  ${C_PURPLE}│${RESET}"
-    echo -e "${C_PURPLE}│${RESET}  ${C_GRAY}Gestione Stack Hardware AMD · Acceleration Vulkan/ROCm · llama.cpp${RESET}           ${C_PURPLE}│${RESET}"
-    echo -e "${C_PURPLE}└──────────────────────────────────────────────────────────────────────────────┘${RESET}"
+    echo -e "${C_PURPLE}┌────────────────────────────────────────────────────────────────────────┐${RESET}"
+    echo -e "${C_PURPLE}│${RESET}  ${BOLD}${C_WHITE}H O M E L A B   A I   D E P L O Y E R${RESET}  │  ${BOLD}${C_CYAN}A M D   C O N T R O L L E R${RESET}  ${C_PURPLE}│${RESET}"
+    echo -e "${C_PURPLE}│${RESET}  ${C_GRAY}Gestione Hardware AMD · Accelerazione Vulkan/ROCm · llama.cpp${RESET}        ${C_PURPLE}│${RESET}"
+    echo -e "${C_PURPLE}└────────────────────────────────────────────────────────────────────────┘${RESET}"
     echo ""
 }
 
@@ -44,7 +51,7 @@ show_split_screen_guide() {
     show_header
     echo -e "  ${BOLD}${C_PURPLE}❖ GUIDA OPERATIVA :: ${step_title}${RESET}\n"
     
-    printf "  ${C_CYAN}%-37s${RESET} │ ${C_YELLOW}%-37s${RESET}\n" "  STATO OPERATIVO & ISTRUZIONI" "  LOG BUILD & CONTESTO TECNICO"
+    echo -e "  ${C_CYAN}STATO OPERATIVO & ISTRUZIONI${RESET}            │ ${C_YELLOW}LOG BUILD & CONTESTO TECNICO${RESET}"
     echo -e "  ${C_GRAY}───────────────────────────────────────┼───────────────────────────────────────${RESET}"
 
     mapfile -t left_lines <<< "$left_content"
@@ -58,7 +65,7 @@ show_split_screen_guide() {
     for ((i=0; i<max_lines; i++)); do
         local l_line="${left_lines[i]:-}"
         local r_line="${right_lines[i]:-}"
-        printf "  %-47s ${C_GRAY}│${RESET} %-47s\n" "$l_line" "$r_line"
+        printf "  %-37s ${C_GRAY}│${RESET} %-37s\n" "$l_line" "$r_line"
     done
     echo -e "  ${C_GRAY}───────────────────────────────────────┴───────────────────────────────────────${RESET}\n"
 }
@@ -111,9 +118,9 @@ select_log_mode() {
 build_llama_vulkan() {
     select_log_mode
 
-    local build_dir="${LLAMA_CPP_DIR}/build"
-    local all_log_file="${build_dir}/build_all.log"
-    local err_log_file="${build_dir}/build_errors.log"
+    mkdir -p "${LOG_DIR}"
+    local all_log_file="${LOG_DIR}/build_all.log"
+    local err_log_file="${LOG_DIR}/build_errors.log"
 
     cd "${INSTALL_DIR}"
     if [ -d "${LLAMA_CPP_DIR}" ]; then
@@ -130,15 +137,14 @@ build_llama_vulkan() {
     mkdir -p build
     cd build
 
-    local left_info="  * Repository: github.com/ggerganov/llama.cpp
-  * Directory : ${LLAMA_CPP_DIR}
-  * Target GPU: Vulkan (Driver RADV)
-  * Logging   : Modalità [${LOG_MODE}]"
+    local left_info="  * Repo: github.com/ggerganov/llama.cpp
+  * Path: ${LLAMA_CPP_DIR}
+  * GPU : Vulkan (Driver RADV)
+  * Mode: [${LOG_MODE}]"
 
-    local right_info="  * Disabilitazione FP16/CoopMat per stabilità
-  * Percorsi Log generati nel workspace:
-    - Log All: ${all_log_file}
-    - Log Err: ${err_log_file}"
+    local right_info="  * Disabilitazione FP16/CoopMat
+  * Cartella Log Utente:
+    ${LOG_DIR}/"
 
     show_split_screen_guide "Compilazione Nativa llama.cpp" "$left_info" "$right_info"
 
@@ -160,13 +166,13 @@ build_llama_vulkan() {
 
     case $LOG_MODE in
         all)
-            echo -e "  ${C_GRAY}[i] Generazione log esteso in corso...${RESET}"
+            echo -e "  ${C_GRAY}[i] Registrazione log completo in: ${C_WHITE}${LOG_DIR}/${RESET}"
             cmake --build . --config Release -j$(nproc) 2>&1 | tee "${all_log_file}" | grep -iE 'error|cannot compile|failed|fatal' > "${err_log_file}" || true
             echo -e "\n  ${C_GREEN}✔ Log Completo :${RESET} ${all_log_file}"
             echo -e "  ${C_GREEN}✔ Log Errori   :${RESET} ${err_log_file}"
             ;;
         err)
-            echo -e "  ${C_GRAY}[i] Filtraggio ed estrazione dei soli errori...${RESET}"
+            echo -e "  ${C_GRAY}[i] Registrazione dei soli errori in: ${C_WHITE}${LOG_DIR}/${RESET}"
             cmake --build . --config Release -j$(nproc) 2>&1 | grep -iE 'error|cannot compile|failed|fatal' > "${err_log_file}" || true
             echo -e "\n  ${C_GREEN}✔ Log Errori :${RESET} ${err_log_file}"
             ;;
@@ -242,8 +248,8 @@ check_status() {
         echo -e "  ${C_YELLOW}[WARN]${RESET} ${BOLD}Compiler glslc${RESET}     · Assente nel PATH"
     fi
 
-    if [ -f "${LLAMA_CPP_DIR}/build/build_errors.log" ]; then
-        echo -e "  ${C_YELLOW}[WARN]${RESET} ${BOLD}Log Errori Build${RESET}   · Rilevato in ${C_CYAN}${LLAMA_CPP_DIR}/build/build_errors.log${RESET}"
+    if [ -f "${LOG_DIR}/build_errors.log" ]; then
+        echo -e "  ${C_YELLOW}[WARN]${RESET} ${BOLD}Log Errori Build${RESET}   · Rilevato in ${C_CYAN}${LOG_DIR}/build_errors.log${RESET}"
     fi
 
     if command -v rocm-smi &> /dev/null; then
@@ -302,8 +308,8 @@ uninstall_all() {
     echo -e "  ${BOLD}${C_RED}❖ RIMOZIONE COMPLETA AMBIENTE${RESET}\n"
     read -p "  Confermi la cancellazione di servizi, dipendenze e log? [y/N]: " confirm
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        rm -rf "${INSTALL_DIR}" "${UNSLOTH_ENV}" "${CODE_RUNNER_DIR}"
-        echo -e "\n  ${C_GREEN}✔ Ambiente rimosso con successo.${RESET}"
+        rm -rf "${INSTALL_DIR}" "${UNSLOTH_ENV}" "${CODE_RUNNER_DIR}" "${LOG_DIR}"
+        echo -e "\n  ${C_GREEN}✔ Ambiente e log rimossi con successo.${RESET}"
     else
         echo -e "\n  ${C_YELLOW}Operazione annullata.${RESET}"
     fi
