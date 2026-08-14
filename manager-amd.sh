@@ -6,7 +6,7 @@
 
 set -e
 
-# Determination of User Home (supports execution via sudo)
+# Determinazione della Home dell'utente reale (supporta esecuzione via sudo)
 if [ -n "$SUDO_USER" ]; then
     REAL_USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
 else
@@ -36,11 +36,10 @@ C_WHITE='\033[38;5;255m'
 # --- Componenti Grafici ---
 show_header() {
     clear
-    echo -e "${C_PURPLE}┌────────────────────────────────────────────────────────────────────────┐${RESET}"
-    echo -e "${C_PURPLE}│${RESET}  ${BOLD}${C_WHITE}H O M E L A B   A I   D E P L O Y E R${RESET}  │  ${BOLD}${C_CYAN}A M D   C O N T R O L L E R${RESET}  ${C_PURPLE}│${RESET}"
-    echo -e "${C_PURPLE}│${RESET}  ${C_GRAY}Gestione Hardware AMD · Accelerazione Vulkan/ROCm · llama.cpp${RESET}        ${C_PURPLE}│${RESET}"
-    echo -e "${C_PURPLE}└────────────────────────────────────────────────────────────────────────┘${RESET}"
-    echo ""
+    echo -e "${C_PURPLE}==============================================================================${RESET}"
+    echo -e "  ${BOLD}${C_WHITE}H O M E L A B   A I   D E P L O Y E R${RESET}  ${C_GRAY}::${RESET}  ${BOLD}${C_CYAN}A M D   C O N T R O L L E R${RESET}"
+    echo -e "  ${C_GRAY}Gestione Hardware AMD · Accelerazione Vulkan/ROCm · llama.cpp${RESET}"
+    echo -e "${C_PURPLE}==============================================================================${RESET}\n"
 }
 
 show_split_screen_guide() {
@@ -49,10 +48,11 @@ show_split_screen_guide() {
     local right_content="$3"
 
     show_header
-    echo -e "  ${BOLD}${C_PURPLE}❖ GUIDA OPERATIVA :: ${step_title}${RESET}\n"
+    echo -e "  ${BOLD}${C_PURPLE}❖ GUIDA OPERATIVA :: ${step_title}${RESET}"
+    echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}"
     
-    echo -e "  ${C_CYAN}STATO OPERATIVO & ISTRUZIONI${RESET}            │ ${C_YELLOW}LOG BUILD & CONTESTO TECNICO${RESET}"
-    echo -e "  ${C_GRAY}───────────────────────────────────────┼───────────────────────────────────────${RESET}"
+    echo -e "  ${BOLD}${C_CYAN}STATO OPERATIVO & PARAMETRI${RESET}          ${C_GRAY}│${RESET} ${BOLD}${C_YELLOW}CONFIGURAZIONE & CONTESTO LOGS${RESET}"
+    echo -e "  ${C_GRAY}───────────────────────────────────────┼──────────────────────────────────────${RESET}"
 
     mapfile -t left_lines <<< "$left_content"
     mapfile -t right_lines <<< "$right_content"
@@ -65,9 +65,22 @@ show_split_screen_guide() {
     for ((i=0; i<max_lines; i++)); do
         local l_line="${left_lines[i]:-}"
         local r_line="${right_lines[i]:-}"
-        printf "  %-37s ${C_GRAY}│${RESET} %-37s\n" "$l_line" "$r_line"
+        
+        # Pulisce i codici ANSI per il calcolo della lunghezza reale della colonna sinistra
+        local clean_left
+        clean_left=$(echo -e "$l_line" | sed 's/\x1b\[[0-9;]*m//g')
+        local len=${#clean_left}
+        local pad=$((37 - len))
+        [ $pad -lt 0 ] && pad=0
+        
+        local padding=""
+        if [ $pad -gt 0 ]; then
+            padding=$(printf '%*s' "$pad" "")
+        fi
+
+        echo -e "  ${l_line}${padding} ${C_GRAY}│${RESET} ${r_line}"
     done
-    echo -e "  ${C_GRAY}───────────────────────────────────────┴───────────────────────────────────────${RESET}\n"
+    echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}\n"
 }
 
 # --- Verifiche Iniziali ---
@@ -100,12 +113,12 @@ install_vulkan_dependencies() {
 }
 
 select_log_mode() {
-    echo -e "  ${BOLD}${C_PURPLE}❖ SELEZIONE MODALITÀ DI LOGGING${RESET}\n"
-    echo -e "  ${C_GRAY}┌────────────────────────────────────────────────────────────────────────┐${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_CYAN}[1] all${RESET}  ${C_WHITE}Log Completo${RESET}  · Salva stdout + stderr in build_all.log     ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_YELLOW}[2] err${RESET}  ${C_WHITE}Solo Errori${RESET}   · Isola le eccezioni in build_errors.log     ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_GRAY}[3] none${RESET} ${C_WHITE}Nessun Log${RESET}    · Compilazione standard a video              ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}└────────────────────────────────────────────────────────────────────────┘${RESET}\n"
+    echo -e "  ${BOLD}${C_PURPLE}❖ SELEZIONE MODALITÀ DI LOGGING${RESET}"
+    echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}"
+    echo -e "  ${BOLD}${C_CYAN}[1] all${RESET}  ${C_WHITE}Log Completo${RESET}  · Salva stdout + stderr in build_all.log"
+    echo -e "  ${BOLD}${C_YELLOW}[2] err${RESET}  ${C_WHITE}Solo Errori${RESET}   · Isola le eccezioni in build_errors.log"
+    echo -e "  ${BOLD}${C_GRAY}[3] none${RESET} ${C_WHITE}Nessun Log${RESET}    · Compilazione standard a video"
+    echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}\n"
 
     read -p "  Seleziona opzione [1-3] (default: 1): " log_choice
     case $log_choice in
@@ -137,19 +150,19 @@ build_llama_vulkan() {
     mkdir -p build
     cd build
 
-    local left_info="  * Repo: github.com/ggerganov/llama.cpp
-  * Path: ${LLAMA_CPP_DIR}
-  * GPU : Vulkan (Driver RADV)
-  * Mode: [${LOG_MODE}]"
+    local left_info="* Repo : github.com/ggerganov/llama.cpp
+* Path : ${LLAMA_CPP_DIR}
+* GPU  : Vulkan (Driver RADV)
+* Mode : [${LOG_MODE}]"
 
-    local right_info="  * Disabilitazione FP16/CoopMat
-  * Cartella Log Utente:
-    ${LOG_DIR}/"
+    local right_info="* Opt  : Disabilitazione FP16/CoopMat
+* Logs : ${LOG_DIR}/"
 
     show_split_screen_guide "Compilazione Nativa llama.cpp" "$left_info" "$right_info"
 
-    echo -e "  ${C_CYAN}➜ Configurazione ambiente CMake...${RESET}"
+    echo -e "  ${C_CYAN}➜ Configurazione ambiente CMake (Release)...${RESET}"
 
+    # Output di CMake silenziato per non interrompere il flusso visuale
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DGGML_VULKAN=ON \
@@ -160,21 +173,21 @@ build_llama_vulkan() {
         -DGGML_VULKAN_FP16=OFF \
         -DGGML_VULKAN_VK_QUALIFIERS=OFF \
         -DCMAKE_C_FLAGS="-DGGML_VK_DISABLE_F16" \
-        -DCMAKE_CXX_FLAGS="-DGGML_VK_DISABLE_F16" > /dev/null
+        -DCMAKE_CXX_FLAGS="-DGGML_VK_DISABLE_F16" > /dev/null 2>&1
 
     echo -e "  ${C_YELLOW}➜ Avvio build parallela su $(nproc) thread...${RESET}\n"
 
     case $LOG_MODE in
         all)
-            echo -e "  ${C_GRAY}[i] Registrazione log completo in: ${C_WHITE}${LOG_DIR}/${RESET}"
+            echo -e "  ${C_GRAY}[i] Registrazione log completo in: ${C_WHITE}${LOG_DIR}/build_all.log${RESET}\n"
             cmake --build . --config Release -j$(nproc) 2>&1 | tee "${all_log_file}" | grep -iE 'error|cannot compile|failed|fatal' > "${err_log_file}" || true
             echo -e "\n  ${C_GREEN}✔ Log Completo :${RESET} ${all_log_file}"
             echo -e "  ${C_GREEN}✔ Log Errori   :${RESET} ${err_log_file}"
             ;;
         err)
-            echo -e "  ${C_GRAY}[i] Registrazione dei soli errori in: ${C_WHITE}${LOG_DIR}/${RESET}"
+            echo -e "  ${C_GRAY}[i] Registrazione dei soli errori in: ${C_WHITE}${LOG_DIR}/build_errors.log${RESET}\n"
             cmake --build . --config Release -j$(nproc) 2>&1 | grep -iE 'error|cannot compile|failed|fatal' > "${err_log_file}" || true
-            echo -e "\n  ${C_GREEN}✔ Log Errori :${RESET} ${err_log_file}"
+            echo -e "  ${C_GREEN}✔ Log Errori :${RESET} ${err_log_file}"
             ;;
         none)
             cmake --build . --config Release -j$(nproc)
@@ -184,12 +197,12 @@ build_llama_vulkan() {
 
 install_services() {
     show_header
-    echo -e "  ${BOLD}${C_PURPLE}❖ SELEZIONE BACKEND D'INFERENZA AMD${RESET}\n"
-    echo -e "  ${C_GRAY}┌────────────────────────────────────────────────────────────────────────┐${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_CYAN}[1]${RESET} ${C_WHITE}ROCm Ufficiale${RESET}     · Consigliato per GPU RX 6000 / RX 7000         ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_GREEN}[2]${RESET} ${C_WHITE}Vulkan / llama.cpp${RESET} · Consigliato per RX 5000 / RDNA1 (RX 5700 XT)  ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_YELLOW}[3]${RESET} ${C_WHITE}ROCm Sperimentale${RESET}  · Override PyTorch (HSA_OVERRIDE_GFX=10.3.0)  ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}└────────────────────────────────────────────────────────────────────────┘${RESET}\n"
+    echo -e "  ${BOLD}${C_PURPLE}❖ SELEZIONE BACKEND D'INFERENZA AMD${RESET}"
+    echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}"
+    echo -e "  ${BOLD}${C_CYAN}[1]${RESET} ${C_WHITE}ROCm Ufficiale${RESET}     · Consigliato per GPU RX 6000 / RX 7000"
+    echo -e "  ${BOLD}${C_GREEN}[2]${RESET} ${C_WHITE}Vulkan / llama.cpp${RESET} · Consigliato per RX 5000 / RDNA1 (RX 5700 XT)"
+    echo -e "  ${BOLD}${C_YELLOW}[3]${RESET} ${C_WHITE}ROCm Sperimentale${RESET}  · Override PyTorch (HSA_OVERRIDE_GFX=10.3.0)"
+    echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}\n"
 
     read -p "  Seleziona opzione [1-3]: " amd_choice
 
@@ -283,13 +296,13 @@ update_components() {
 
 configure_sandbox() {
     show_header
-    local left_info="  * Associazione Sandbox Remota via SSH
-  * Generazione chiave nativa Ed25519
-  * Deploy automatico della chiave pubblica"
+    local left_info="* Connect Remote Sandbox SSH
+* Nativo KeyGen Ed25519
+* Auto-deploy chiave pubblica"
 
-    local right_info="  * Abilita l'esecuzione comandi remoti
-  * Requisito: Permessi Root sul Target
-  * Ambiente ideale: Container LXC / VM"
+    local right_info="* Esecuzione remota abilitata
+* Requisito: Root target
+* Ideal: Container LXC / VM"
 
     show_split_screen_guide "Configurazione Sandbox SSH" "$left_info" "$right_info"
 
@@ -319,14 +332,14 @@ uninstall_all() {
 # --- Main Menu Loop ---
 while true; do
     show_header
-    echo -e "  ${C_GRAY}┌────────────────────────────────────────────────────────┐${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_CYAN}[1]${RESET} ${C_WHITE}INSTALLA Servizi${RESET} (ROCm / Vulkan)                ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_GREEN}[2]${RESET} ${C_WHITE}VERIFICA Stato${RESET} Hardware & Servizi               ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_YELLOW}[3]${RESET} ${C_WHITE}AGGIORNA Componenti${RESET} & llama.cpp                  ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_PURPLE}[4]${RESET} ${C_WHITE}CONFIGURA Sandbox SSH${RESET}                            ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_RED}[5]${RESET} ${C_WHITE}DISINSTALLA Tutto${RESET}                                ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_WHITE}[6] ESCI${RESET}                                             ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}└────────────────────────────────────────────────────────┘${RESET}\n"
+    echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}"
+    echo -e "  ${BOLD}${C_CYAN}[1]${RESET} ${C_WHITE}INSTALLA Servizi${RESET} (ROCm / Vulkan)"
+    echo -e "  ${BOLD}${C_GREEN}[2]${RESET} ${C_WHITE}VERIFICA Stato${RESET} Hardware & Servizi"
+    echo -e "  ${BOLD}${C_YELLOW}[3]${RESET} ${C_WHITE}AGGIORNA Componenti${RESET} & llama.cpp"
+    echo -e "  ${BOLD}${C_PURPLE}[4]${RESET} ${C_WHITE}CONFIGURA Sandbox SSH${RESET}"
+    echo -e "  ${BOLD}${C_RED}[5]${RESET} ${C_WHITE}DISINSTALLA Tutto${RESET}"
+    echo -e "  ${BOLD}${C_WHITE}[6] ESCI${RESET}"
+    echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}\n"
 
     read -p "  Seleziona un'opzione [1-6]: " choice
 
