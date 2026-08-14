@@ -6,7 +6,7 @@
 
 set -e
 
-# Determinazione sicura della Home utente
+# Determinazione sicura della Home utente reale (supporta esecuzione via sudo)
 if [ -n "$SUDO_USER" ]; then
     REAL_USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
 else
@@ -91,10 +91,10 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 install_vulkan_dependencies() {
-    echo -e "  ${C_CYAN}➜ Aggiornamento repository ed installazione dipendenze Vulkan e glslc...${RESET}"
+    echo -e "  ${C_CYAN}➜ Aggiornamento repository ed installazione dipendenze di sistema...${RESET}"
     apt-get update -qq
 
-    # Aggiunti glslang-tools e glslang-dev per fornire /usr/bin/glslc a CMake 3.31+
+    # Pacchetti essenziali. glslang-tools e glslang-dev forniscono /usr/bin/glslc a CMake 3.31+
     BASE_PACKAGES=(
         build-essential cmake ccache git curl wget zstd
         pkg-config libssl-dev libvulkan-dev vulkan-tools
@@ -102,7 +102,7 @@ install_vulkan_dependencies() {
         python3 python3-pip python3-venv clinfo nodejs npm
     )
 
-    echo -e "  ${C_BLUE}➜ Installazione pacchetti di sistema...${RESET}"
+    echo -e "  ${C_BLUE}➜ Garantita presenza pacchetti di base e dev...${RESET}"
     apt-get install -y "${BASE_PACKAGES[@]}"
 }
 
@@ -128,9 +128,12 @@ select_log_mode() {
 }
 
 build_llama_vulkan() {
-    # Garanzia creazione directory Log
+    # Garanzia assoluta creazione cartella Log prima di qualsiasi elaborazione
     mkdir -p "${LOG_DIR}"
     chmod 755 "${LOG_DIR}"
+
+    # Assicurati che le dipendenze siano presenti anche se l'utente salta il menu installazione
+    install_vulkan_dependencies
 
     select_log_mode
 
