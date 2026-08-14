@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Homelab AI Deployer - Controller AMD (manager-amd.sh)
-# Compatible with: Debian 13 (Trixie) / Baremetal & Proxmox LXC | AMD GPUs
+# Compatible with: Debian 13 (Trixie), Ubuntu 22.04/24.04 | Baremetal & LXC
 # ==============================================================================
 
 set -e
@@ -44,36 +44,48 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 install_vulkan_dependencies() {
-    echo -e "  ${C_YELLOW}[+] Aggiornamento repository e installazione dipendenze complete...${RESET}"
+    echo -e "  ${C_YELLOW}[+] Aggiornamento repository ed elaborazione dipendenze per Debian/Ubuntu...${RESET}"
     apt-get update
-    
-    # Inclusi zstd, nodejs, npm e la suite completa di sviluppo Vulkan/SPIR-V
-    apt-get install -y \
-        build-essential \
-        cmake \
-        ccache \
-        git \
-        curl \
-        wget \
-        zstd \
-        pkg-config \
-        libssl-dev \
-        libvulkan-dev \
-        vulkan-tools \
-        mesa-vulkan-drivers \
-        glslang-tools \
-        glslang-dev \
-        spirv-tools \
-        libspirv-tools-dev \
-        spirv-headers \
-        libspirv-cross-c-shared-dev \
-        python3 \
-        python3-pip \
-        python3-venv \
-        clinfo \
-        nodejs \
-        npm
 
+    # Lista base di pacchetti universali
+    BASE_PACKAGES=(
+        build-essential
+        cmake
+        ccache
+        git
+        curl
+        wget
+        zstd
+        pkg-config
+        libssl-dev
+        libvulkan-dev
+        vulkan-tools
+        mesa-vulkan-drivers
+        glslang-tools
+        glslang-dev
+        spirv-tools
+        spirv-headers
+        python3
+        python3-pip
+        python3-venv
+        clinfo
+        nodejs
+        npm
+    )
+
+    echo -e "  ${C_YELLOW}[*] Installazione pacchetti base...${RESET}"
+    apt-get install -y "${BASE_PACKAGES[@]}"
+
+    # Gestione dinamica delle variazioni di denominazione tra Ubuntu e Debian Trixie
+    echo -e "  ${C_YELLOW}[*] Installazione pacchetti di sviluppo SPIR-V specifici della distro...${RESET}"
+    
+    # Prova a installare pacchetti opzionali/variabili senza interrompere lo script in caso di mismatch
+    apt-get install -y spirv-tools-dev 2>/dev/null || \
+    apt-get install -y libspirv-tools-dev 2>/dev/null || true
+
+    apt-get install -y libspirv-cross-c-shared-dev 2>/dev/null || true
+
+    # Verifica ed export del PATH per glslc se non presente di default
     if ! command -v glslc &> /dev/null; then
         if [ -f "/usr/bin/glslc" ]; then
             export PATH=$PATH:/usr/bin
