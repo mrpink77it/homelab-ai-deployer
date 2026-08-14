@@ -44,10 +44,10 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 install_vulkan_dependencies() {
-    echo -e "  ${C_YELLOW}[+] Aggiornamento repository e installazione dipendenze complete (Vulkan, Node.js, npm)...${RESET}"
+    echo -e "  ${C_YELLOW}[+] Aggiornamento repository e installazione dipendenze complete...${RESET}"
     apt-get update
     
-    # Inclusi nodejs e npm per gestire i moduli e gli assets web di llama.cpp
+    # Inclusi zstd, nodejs, npm e la suite completa di sviluppo Vulkan/SPIR-V
     apt-get install -y \
         build-essential \
         cmake \
@@ -55,6 +55,7 @@ install_vulkan_dependencies() {
         git \
         curl \
         wget \
+        zstd \
         pkg-config \
         libssl-dev \
         libvulkan-dev \
@@ -115,7 +116,7 @@ install_services() {
                 cd "${LLAMA_CPP_DIR}"
             fi
 
-            # Pulizia radicale della build per eliminare ogni residuo corrotto
+            # Pulizia radicale della directory di build
             rm -rf build
             mkdir -p build
             cd build
@@ -168,6 +169,12 @@ check_status() {
         echo -e "  ${C_GREEN}[✔ Shaderc/GLSL]${RESET} Compilatore glslc disponibile ($(which glslc))."
     else
         echo -e "  ${C_YELLOW}[! Shaderc/GLSL]${RESET} Compilatore glslc non trovato nel PATH."
+    fi
+
+    if command -v zstd &> /dev/null; then
+        echo -e "  ${C_GREEN}[✔ ZSTD]${RESET} Utilità di decompressione zstd presente."
+    else
+        echo -e "  ${C_YELLOW}[! ZSTD]${RESET} zstd non installato nel sistema."
     fi
 
     if command -v npm &> /dev/null; then
