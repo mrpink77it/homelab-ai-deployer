@@ -49,7 +49,7 @@ show_spinner() {
     done
     printf "                                                                               \r"
 }
-
+ 
 # --- Controllo Privilegi ---
 if [ "$EUID" -ne 0 ]; then
     draw_header
