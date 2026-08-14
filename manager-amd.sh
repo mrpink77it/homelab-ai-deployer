@@ -129,11 +129,14 @@ select_log_mode() {
 build_llama_vulkan() {
     select_log_mode
 
+    # Garantisce la creazione preventiva della directory di log
     mkdir -p "${LOG_DIR}"
     local all_log_file="${LOG_DIR}/build_all.log"
     local err_log_file="${LOG_DIR}/build_errors.log"
 
+    mkdir -p "${INSTALL_DIR}"
     cd "${INSTALL_DIR}"
+
     if [ -d "${LLAMA_CPP_DIR}" ]; then
         echo -e "\n  ${C_CYAN}➜ Sync repository llama.cpp in corso...${RESET}"
         cd "${LLAMA_CPP_DIR}"
@@ -183,7 +186,7 @@ build_llama_vulkan() {
             ;;
         all_tee)
             echo -e "  ${C_GRAY}[i] Output a video + Registrazione log completo in: ${C_WHITE}${all_log_file}${RESET}\n"
-            cmake --build . --config Release -j$(nproc) 2>&1 | tee "${all_log_file}"
+            cmake --build . --config Release -j$(nproc) 2>&1 | tee "${all_log_file}" || true
             grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}" > "${err_log_file}" || true
             echo -e "\n  ${C_GREEN}✔ Log Completo :${RESET} ${all_log_file}"
             echo -e "  ${C_GREEN}✔ Log Errori   :${RESET} ${err_log_file}"
@@ -195,11 +198,14 @@ build_llama_vulkan() {
             ;;
         err_tee)
             echo -e "  ${C_GRAY}[i] Output a video + Isolamento errori in: ${C_WHITE}${err_log_file}${RESET}\n"
-            cmake --build . --config Release -j$(nproc) 2>&1 | tee >(grep -iE 'error|cannot compile|failed|fatal' > "${err_log_file}")
+            # Gestione sicura senza subshell asincrone bloccanti
+            cmake --build . --config Release -j$(nproc) 2>&1 | tee "${all_log_file}.tmp" || true
+            grep -iE 'error|cannot compile|failed|fatal' "${all_log_file}.tmp" > "${err_log_file}" || true
+            rm -f "${all_log_file}.tmp"
             echo -e "\n  ${C_GREEN}✔ Log Errori :${RESET} ${err_log_file}"
             ;;
         none)
-            cmake --build . --config Release -j$(nproc)
+            cmake --build . --config Release -j$(nproc) || true
             ;;
     esac
 }
