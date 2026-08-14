@@ -6,10 +6,9 @@
 
 set -e
 
-# Determination of Script Directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# --- Palette Colori & Stili ANSI ---
+# --- Palette Colori ANSI ---
 BOLD='\033[1m'
 RESET='\033[0m'
 
@@ -25,24 +24,23 @@ C_WHITE='\033[38;5;255m'
 # --- Componenti Grafici ---
 show_header() {
     clear
-    echo -e "${C_CYAN}┌────────────────────────────────────────────────────────────────────────┐${RESET}"
-    echo -e "${C_CYAN}│${RESET}  ${BOLD}${C_WHITE}H O M E L A B   A I   D E P L O Y E R${RESET}  │  ${BOLD}${C_PURPLE}A U T O - R O U T E R${RESET}    ${C_CYAN}│${RESET}"
+    echo -e "${C_CYAN}┌──────────────────────────────────────────────────────────────────────────────┐${RESET}"
+    echo -e "${C_CYAN}│${RESET}  ${BOLD}${C_WHITE}H O M E L A B   A I   D E P L O Y E R${RESET}  │  ${BOLD}${C_PURPLE}A U T O - R O U T E R${RESET}         ${C_CYAN}│${RESET}"
     echo -e "${C_CYAN}│${RESET}  ${C_GRAY}Zero-Config Hardware Discovery & AI Environment Orchestrator${RESET}         ${C_CYAN}│${RESET}"
-    echo -e "${C_CYAN}└────────────────────────────────────────────────────────────────────────┘${RESET}"
+    echo -e "${C_CYAN}└──────────────────────────────────────────────────────────────────────────────┘${RESET}"
     echo ""
 }
 
 show_about() {
     echo -e "  ${BOLD}${C_PURPLE}❖ INFORMAZIONI SUL PROGETTO${RESET}"
-    echo -e "  ${C_GRAY}┌────────────────────────────────────────────────────────────────────────┐${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${C_WHITE}Homelab AI Deployer è uno stack automatizzato per l'infrastruttura   ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${C_WHITE}di AI locale. Rileva l'hardware presente (NVIDIA / AMD / CPU) e      ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${C_WHITE}configura i controller dedicati, i driver accelerati (CUDA/Vulkan) ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${C_WHITE}e i backend d'inferenza (llama.cpp, Unsloth, PyTorch).              ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}└────────────────────────────────────────────────────────────────────────┘${RESET}\n"
+    echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}"
+    echo -e "  ${C_WHITE}Homelab AI Deployer è uno stack automatizzato per l'infrastruttura AI locale.${RESET}"
+    echo -e "  ${C_WHITE}Scansiona l'hardware di sistema (GPU, CPU, RAM, Storage) e orchestra il${RESET}"
+    echo -e "  ${C_WHITE}deploy dei driver accelerati (CUDA/ROCm/Vulkan) e dei motori d'inferenza.${RESET}"
+    echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}\n"
 }
 
-# --- Verifiche Iniziali ---
+# --- Verifiche Permessi ---
 if [ "$EUID" -ne 0 ]; then
     show_header
     echo -e "  ${C_RED}✖ PERMESSI INSUFFICIENTI${RESET}"
@@ -53,58 +51,101 @@ fi
 show_header
 show_about
 
-echo -e "  ${BOLD}${C_CYAN}❖ ANALISI HARDWARE IN CORSO...${RESET}\n"
+echo -e "  ${BOLD}${C_CYAN}❖ RILEVAMENTO RISORSE DI SISTEMA${RESET}"
+echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}"
 
-# Detection GPU Logic
+# 1. ANALISI CPU
+CPU_MODEL=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//')
+[ -z "$CPU_MODEL" ] && CPU_MODEL="Processore generico x86_64"
+CPU_CORES=$(nproc)
+CPU_FLAGS=""
+grep -q 'avx2' /proc/cpuinfo && CPU_FLAGS="AVX2 "
+grep -q 'avx512' /proc/cpuinfo && CPU_FLAGS="${CPU_FLAGS}AVX-512 "
+
+# 2. ANALISI RAM
+RAM_TOTAL_MB=$(free -m | awk '/Mem:/ {print $2}')
+RAM_AVAIL_MB=$(free -m | awk '/Mem:/ {print $7}')
+RAM_TOTAL_GB=$(awk "BEGIN {printf \"%.1f\", $RAM_TOTAL_MB/1024}")
+RAM_AVAIL_GB=$(awk "BEGIN {printf \"%.1f\", $RAM_AVAIL_MB/1024}")
+
+RAM_STATUS="🟢"
+RAM_NOTE="Ottima per modelli LLM 7B/13B"
+if [ "$RAM_TOTAL_MB" -lt 8192 ]; then
+    RAM_STATUS="🔴"
+    RAM_NOTE="Critica: RAM insufficiente per LLM complessi"
+elif [ "$RAM_TOTAL_MB" -lt 16384 ]; then
+    RAM_STATUS="🟡"
+    RAM_NOTE="Sufficiente: consigliati modelli quantizzati (Q4_K_M)"
+fi
+
+# 3. ANALISI DISCO
+DISK_FREE_KB=$(df -k / | awk 'NR==2 {print $4}')
+DISK_FREE_GB=$((DISK_FREE_KB / 1024 / 1024))
+
+DISK_STATUS="🟢"
+DISK_NOTE="Spazio adeguato per pesi modelli e ambienti"
+if [ "$DISK_FREE_GB" -lt 15 ]; then
+    DISK_STATUS="🔴"
+    DISK_NOTE="Spazio insufficiente (minimo 15GB richiesti)"
+elif [ "$DISK_FREE_GB" -lt 35 ]; then
+    DISK_STATUS="🟡"
+    DISK_NOTE="Spazio ridotto: fai attenzione ai modelli > 10GB"
+fi
+
+# 4. ANALISI GPU & ROUTING
 GPU_TYPE="CPU"
 GPU_INFO=""
+GPU_STATUS="🔴"
+GPU_STACK=""
 TARGET_SCRIPT=""
 
 if lspci | grep -iE 'vga|3d|display' | grep -i 'nvidia' > /dev/null 2>&1; then
     GPU_TYPE="NVIDIA"
     GPU_INFO=$(lspci | grep -iE 'vga|3d|display' | grep -i 'nvidia' | head -n 1 | cut -d ':' -f3 | sed 's/^[ \t]*//')
+    GPU_STATUS="🟢"
+    GPU_STACK="CUDA / TensorRT / llama.cpp / Unsloth"
     TARGET_SCRIPT="${SCRIPT_DIR}/manager-nvidia.sh"
+
 elif lspci | grep -iE 'vga|3d|display' | grep -iE 'amd|radeon' > /dev/null 2>&1; then
     GPU_TYPE="AMD"
     GPU_INFO=$(lspci | grep -iE 'vga|3d|display' | grep -iE 'amd|radeon' | head -n 1 | cut -d ':' -f3 | sed 's/^[ \t]*//')
+    
+    # Check per architetture AMD RDNA1 / Navi (es. RX 5000 / 5700 XT)
+    if echo "$GPU_INFO" | grep -iE 'Navi 10|Navi 12|Navi 14|RX 5' > /dev/null 2>&1; then
+        GPU_STATUS="🟡"
+        GPU_STACK="ROCm (Sperimentale) / Vulkan RADV / llama.cpp"
+    else
+        GPU_STATUS="🟢"
+        GPU_STACK="ROCm Nativo / Vulkan RADV / llama.cpp"
+    fi
     TARGET_SCRIPT="${SCRIPT_DIR}/manager-amd.sh"
+
 else
     GPU_TYPE="CPU"
-    GPU_INFO="Nessuna GPU dedicata rilevata (Modalità CPU Nativa)"
+    GPU_INFO="Nessuna GPU dedicata trovata"
+    GPU_STATUS="🔴"
+    GPU_STACK="OpenMP / Vector Extensions / llama.cpp CPU"
     TARGET_SCRIPT="${SCRIPT_DIR}/manager-cpu.sh"
 fi
 
-# Visualizzazione Risultati
-case $GPU_TYPE in
-    NVIDIA)
-        echo -e "  ${C_GREEN}✔ HARDWARE RILEVATO:${RESET} ${BOLD}${C_WHITE}GPU NVIDIA GEFORCE / QUADRO${RESET}"
-        echo -e "  ${C_GRAY}  Scheda :${RESET} ${GPU_INFO}"
-        echo -e "  ${C_GRAY}  Stack  :${RESET} ${C_CYAN}CUDA / TensorRT / llama.cpp / Unsloth${RESET}\n"
-        ;;
-    AMD)
-        echo -e "  ${C_GREEN}✔ HARDWARE RILEVATO:${RESET} ${BOLD}${C_WHITE}GPU AMD RADEON${RESET}"
-        echo -e "  ${C_GRAY}  Scheda :${RESET} ${GPU_INFO}"
-        echo -e "  ${C_GRAY}  Stack  :${RESET} ${C_CYAN}ROCm / Vulkan (RADV) / llama.cpp${RESET}\n"
-        ;;
-    CPU)
-        echo -e "  ${C_YELLOW}⚠ HARDWARE RILEVATO:${RESET} ${BOLD}${C_WHITE}ACCELERAZIONE CPU ONLY${RESET}"
-        echo -e "  ${C_GRAY}  Note   :${RESET} ${GPU_INFO}"
-        echo -e "  ${C_GRAY}  Stack  :${RESET} ${C_CYAN}OpenMP / AVX2 / AVX-512 / llama.cpp CPU${RESET}\n"
-        ;;
-esac
+# --- STAMPA DASHBOARD RISORSE ---
+echo -e "  🖥️  ${BOLD}CPU${RESET}      : ${C_WHITE}${CPU_MODEL}${RESET} (${CPU_CORES} Core | Istruzioni: ${CPU_FLAGS:-Standard})${RESET}"
+echo -e "  ${RAM_STATUS}  ${BOLD}RAM${RESET}      : ${C_WHITE}${RAM_TOTAL_GB} GB Totali${RESET} (${RAM_AVAIL_GB} GB Disponibili) · ${C_GRAY}${RAM_NOTE}${RESET}"
+echo -e "  ${DISK_STATUS}  ${BOLD}Storage${RESET}  : ${C_WHITE}${DISK_FREE_GB} GB Liberi su /${RESET} · ${C_GRAY}${DISK_NOTE}${RESET}"
+echo -e "  ${GPU_STATUS}  ${BOLD}GPU [${GPU_TYPE}]${RESET}: ${C_WHITE}${GPU_INFO}${RESET}"
+echo -e "     ${C_GRAY}└─ Stack Target: ${C_CYAN}${GPU_STACK}${RESET}"
+echo -e "  ${C_GRAY}──────────────────────────────────────────────────────────────────────────────${RESET}\n"
 
-# Verifica esistenza dello script target
+# Verifica Controller Target
 if [ ! -f "$TARGET_SCRIPT" ]; then
-    echo -e "  ${C_RED}✖ ERRORE ROUTING:${RESET} Impossibile trovare il controller ${C_WHITE}${TARGET_SCRIPT}${RESET}\n"
+    echo -e "  ${C_RED}✖ ERRORE CRITICO ROUTING:${RESET} Controller non trovato: ${C_WHITE}${TARGET_SCRIPT}${RESET}\n"
     exit 1
 fi
 
-echo -e "  ${C_GRAY}────────────────────────────────────────────────────────────────────────${RESET}"
-echo -e "  ${BOLD}${C_YELLOW}➜ Premere un tasto per avviare il Controller ${GPU_TYPE}...${RESET}"
-echo -e "  ${C_GRAY}────────────────────────────────────────────────────────────────────────${RESET}\n"
+echo -e "  ${BOLD}${C_YELLOW}➜ PREMERE UN TASTO PER AVVIARE IL CONTROLLER ASSOCIANTO [${GPU_TYPE}]...${RESET}"
 
-# Attesa pressione tasto obbligatoria (senza timeout)
+# Attesa pressione tasto obbligatoria
 read -n 1 -s -r
 
-# Esecuzione del controller corrispondente
+# Handoff al controller specifico
 exec bash "$TARGET_SCRIPT"
