@@ -18,13 +18,17 @@ SERVICE_NAME="homelab-ai-backend"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 BACKEND_CONF="${INSTALL_DIR}/backend.conf"
 
-# Pacchetti installati dallo script per la gestione/compilazione
-DEP_PACKAGES=(
-    build-essential
-    cmake
+# Pacchetti essenziali di sistema (da MANTENERE anche dopo la disinstallazione)
+BASE_TOOLS=(
     git
     curl
     wget
+)
+
+# Pacchetti di compilazione/sviluppo (questi possono essere rimossi in fase di purge)
+DEV_PACKAGES=(
+    build-essential
+    cmake
     pkg-config
     libvulkan-dev
     vulkan-tools
@@ -36,7 +40,13 @@ DEP_PACKAGES=(
     openssh-server
     htop
     whiptail
+    mc
+    btop
+    nvtop
 )
+
+# Unione pacchetti per l'installazione iniziale
+DEP_PACKAGES=("${BASE_TOOLS[@]}" "${DEV_PACKAGES[@]}")
 
 # Colori TUI
 RED='\033[0;31m'
@@ -96,7 +106,7 @@ install_dependencies() {
     log_info "Verifica e installazione pacchetti di sistema..."
     apt-get update -qq
     apt-get install -y -qq "${DEP_PACKAGES[@]}"
-    log_info "Dipendenze base installate correttamente."
+    log_info "Dipendenze base e di sviluppo installate correttamente."
 }
 
 # ------------------------------------------------------------------------------
@@ -389,7 +399,7 @@ clean_system_cache() {
 }
 
 # ------------------------------------------------------------------------------
-# Disinstallazione e Pulizia Completa (Servizi, File, Dipendenze APT)
+# Disinstallazione e Pulizia Completa (Servizi, File, Dipendenze APT di Dev)
 # ------------------------------------------------------------------------------
 uninstall_environment() {
     if whiptail --title "Conferma Rimozione Completa" --yesno "Sei sicuro di voler disinstallare completamente l'ambiente?\n\n- Arresto e rimozione servizio Systemd\n- Rimozione directory ${INSTALL_DIR}\n- Rimozione dei file di log" 12 70; then
@@ -410,18 +420,18 @@ uninstall_environment() {
         rm -rf "${INSTALL_DIR}"
         rm -rf /root/.cache/vulkan /root/.cache/AMD
 
-        # 3. Richiesta conferma per rimozione dipendenze PRIMA di rimuovere whiptail
+        # 3. Richiesta conferma per rimozione dipendenze di build PRIMA di rimuovere whiptail
         local remove_deps=0
-        if whiptail --title "Rimozione Dipendenze di Sistema" --yesno "Vuoi rimuovere anche le dipendenze di pacchetto (build-essential, cmake, libvulkan-dev, ecc.) installate per questo progetto?" 12 70; then
+        if whiptail --title "Rimozione Dipendenze di Sviluppo" --yesno "Vuoi rimuovere i pacchetti di build (build-essential, cmake, libvulkan-dev, ecc.)?\n\nNota: wget, curl e git verranno MANTENUTI di sistema." 12 70; then
             remove_deps=1
         fi
 
         log_info "Ambiente disinstallato completamente."
 
-        # 4. Esecuzione purge APT solo dopo la chiusura di whiptail
+        # 4. Esecuzione purge APT solo per i pacchetti DEV (escludendo wget/curl/git)
         if [[ $remove_deps -eq 1 ]]; then
             log_info "Rimozione pacchetti APT di sviluppo..."
-            apt-get purge -y "${DEP_PACKAGES[@]}" || true
+            apt-get purge -y "${DEV_PACKAGES[@]}" || true
             apt-get autoremove --purge -y
             apt-get clean -y
         fi
