@@ -18,17 +18,13 @@ SERVICE_NAME="homelab-ai-backend"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 BACKEND_CONF="${INSTALL_DIR}/backend.conf"
 
-# Pacchetti essenziali di sistema (da MANTENERE anche dopo la disinstallazione)
-BASE_TOOLS=(
+# Pacchetti di sistema essenziali (vengono installati se mancanti, MAI disinstallati)
+DEP_PACKAGES=(
+    build-essential
+    cmake
     git
     curl
     wget
-)
-
-# Pacchetti di compilazione/sviluppo (questi possono essere rimossi in fase di purge)
-DEV_PACKAGES=(
-    build-essential
-    cmake
     pkg-config
     libvulkan-dev
     vulkan-tools
@@ -40,13 +36,7 @@ DEV_PACKAGES=(
     openssh-server
     htop
     whiptail
-    mc
-    btop
-    nvtop
 )
-
-# Unione pacchetti per l'installazione iniziale
-DEP_PACKAGES=("${BASE_TOOLS[@]}" "${DEV_PACKAGES[@]}")
 
 # Colori TUI
 RED='\033[0;31m'
@@ -375,17 +365,10 @@ update_components() {
 }
 
 # ------------------------------------------------------------------------------
-# Pulizia File Temporanei e Cache di Sistema
+# Pulizia Cache Senza Rimuovere Pacchetti di Sistema
 # ------------------------------------------------------------------------------
 clean_system_cache() {
-    log_info "Avvio pulizia cache di sistema e file temporanei..."
-
-    apt-get clean -y
-    apt-get autoremove --purge -y
-
-    if command -v ccache &>/dev/null; then
-        ccache -C
-    fi
+    log_info "Avvio pulizia cache e file temporanei..."
 
     rm -rf /root/.cache/vulkan /root/.cache/AMD ~/.cache/vulkan ~/.cache/AMD
     rm -rf /tmp/* /var/tmp/*
@@ -395,16 +378,16 @@ clean_system_cache() {
     fi
 
     log_info "Pulizia completata con successo."
-    whiptail --msgbox "Cache pacchetti, shader e file temporanei rimossi con successo!" 10 60
+    whiptail --msgbox "Cache shader e file temporanei rimossi con successo!" 10 60
 }
 
 # ------------------------------------------------------------------------------
-# Disinstallazione e Pulizia Completa (Servizi, File, Dipendenze APT di Dev)
+# Disinstallazione e Pulizia (Senza Rimuovere Pacchetti .deb di Sistema)
 # ------------------------------------------------------------------------------
 uninstall_environment() {
-    if whiptail --title "Conferma Rimozione Completa" --yesno "Sei sicuro di voler disinstallare completamente l'ambiente?\n\n- Arresto e rimozione servizio Systemd\n- Rimozione directory ${INSTALL_DIR}\n- Rimozione dei file di log" 12 70; then
+    if whiptail --title "Conferma Rimozione Ambiente" --yesno "Sei sicuro di voler rimuovere l'ambiente Homelab AI?\n\n- Arresto e rimozione servizio Systemd\n- Rimozione directory ${INSTALL_DIR}\n- Rimozione file di log\n\nI pacchetti di sistema (.deb) NON verranno modificati." 12 70; then
         
-        log_warn "Avvio disinstallazione..."
+        log_warn "Avvio disinstallazione dell'ambiente AI..."
 
         # 1. Arresto e rimozione servizio Systemd
         if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null || [[ -f "${SERVICE_FILE}" ]]; then
@@ -415,27 +398,14 @@ uninstall_environment() {
             systemctl daemon-reload
         fi
 
-        # 2. Rimozione cartelle installazione e file temporanei
-        log_info "Rimozione cartelle e log..."
+        # 2. Rimozione cartelle installazione e log
+        log_info "Rimozione cartelle e file di log..."
         rm -rf "${INSTALL_DIR}"
+        rm -rf "${LOG_FILE}"
         rm -rf /root/.cache/vulkan /root/.cache/AMD
 
-        # 3. Richiesta conferma per rimozione dipendenze di build PRIMA di rimuovere whiptail
-        local remove_deps=0
-        if whiptail --title "Rimozione Dipendenze di Sviluppo" --yesno "Vuoi rimuovere i pacchetti di build (build-essential, cmake, libvulkan-dev, ecc.)?\n\nNota: wget, curl e git verranno MANTENUTI di sistema." 12 70; then
-            remove_deps=1
-        fi
-
-        log_info "Ambiente disinstallato completamente."
-
-        # 4. Esecuzione purge APT solo per i pacchetti DEV (escludendo wget/curl/git)
-        if [[ $remove_deps -eq 1 ]]; then
-            log_info "Rimozione pacchetti APT di sviluppo..."
-            apt-get purge -y "${DEV_PACKAGES[@]}" || true
-            apt-get autoremove --purge -y
-            apt-get clean -y
-        fi
-
+        log_info "Disinstallazione completata con successo."
+        whiptail --msgbox "Ambiente Homelab AI rimosso con successo!" 10 60
         echo -e "${GREEN}Disinstallazione e pulizia completate con successo.${NC}"
         exit 0
     fi
@@ -456,7 +426,7 @@ main_menu() {
             "5" "Aggiorna Componenti (llama.cpp)" \
             "6" "Visualizza Log di Sistema" \
             "7" "Pulizia Cache e File Temporanei" \
-            "8" "Disinstalla Ambiente e Dipendenze" \
+            "8" "Disinstalla Ambiente AI" \
             "9" "Esci" \
             3>&1 1>&2 2>&3)
 
