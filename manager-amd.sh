@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-amd.sh
-# Descrizione: Gestore deployment, servizi systemd e ciclo di vita AI per GPU AMD
+# Descrizione: Gestore deployment, servizi systemd, Open WebUI Bare-Metal e ciclo AI per GPU AMD
 # Ambienti: Bare-Metal & Proxmox LXC
 # ==============================================================================
 
@@ -14,11 +14,18 @@ LOG_FILE="/var/log/homelab-ai-amd.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
 MODELS_DIR="${INSTALL_DIR}/models"
+WEBUI_VENV="${INSTALL_DIR}/venv-webui"
+WEBUI_DATA_DIR="${INSTALL_DIR}/open-webui-data"
+
 SERVICE_NAME="homelab-ai-backend"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+
+WEBUI_SERVICE_NAME="homelab-ai-webui"
+WEBUI_SERVICE_FILE="/etc/systemd/system/${WEBUI_SERVICE_NAME}.service"
+
 BACKEND_CONF="${INSTALL_DIR}/backend.conf"
 
-# Pacchetti di sistema essenziali (vengono installati se mancanti, MAI disinstallati)
+# Pacchetti di sistema essenziali
 DEP_PACKAGES=(
     build-essential
     cmake
@@ -26,6 +33,10 @@ DEP_PACKAGES=(
     curl
     wget
     pkg-config
+    python3
+    python3-pip
+    python3-venv
+    ffmpeg
     libvulkan-dev
     vulkan-tools
     glslc
@@ -86,29 +97,36 @@ init_env() {
     mkdir -p "$(dirname "$LOG_FILE")"
     mkdir -p "${INSTALL_DIR}"
     mkdir -p "${MODELS_DIR}"
+    mkdir -p "${WEBUI_DATA_DIR}"
     touch "${LOG_FILE}"
 }
 
 # ------------------------------------------------------------------------------
-# Installazione Dipendenze e Driver AMD
+# Installazione Dipendenze
 # ------------------------------------------------------------------------------
 install_dependencies() {
     log_info "Verifica e installazione pacchetti di sistema..."
     apt-get update -qq
     apt-get install -y -qq "${DEP_PACKAGES[@]}"
-    log_info "Dipendenze base e di sviluppo installate correttamente."
+    log_info "Dipendenze base e sviluppo installate correttamente."
 }
 
 # ------------------------------------------------------------------------------
-# Configurazione e Avvio Automatico Systemd (al Boot e Post-Install)
+# Configurazione e Avvio Systemd Backend (llama.cpp)
 # ------------------------------------------------------------------------------
 auto_setup_systemd_service() {
-    log_info "Configurazione ed abilitazione automatica del servizio Systemd (${SERVICE_NAME})..."
+    local backend_type="${1:-vulkan}"
+    log_info "Configurazione ed abilitazione automatica del servizio Systemd Backend (${SERVICE_NAME})..."
 
     local host="0.0.0.0"
     local port="8080"
     local model_path="${MODELS_DIR}/model.gguf"
     local extra_args="-ngl 99 -c 2048"
+
+    local env_override=""
+    if [[ "${backend_type}" == "rocm_exp" ]]; then
+        env_override="Environment=\"HSA_OVERRIDE_GFX_VERSION=10.3.0\""
+    fi
 
     cat <<EOF > "${SERVICE_FILE}"
 [Unit]
@@ -119,6 +137,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
+${env_override}
 ExecStart=${LLAMA_DIR}/build/bin/llama-server --host ${host} --port ${port} -m "${model_path}" ${extra_args}
 Restart=always
 RestartSec=5
@@ -133,7 +152,113 @@ EOF
     systemctl enable "${SERVICE_NAME}"
     systemctl restart "${SERVICE_NAME}"
     
-    log_info "Servizio ${SERVICE_NAME} abilitato al boot e avviato automaticamente."
+    log_info "Servizio ${SERVICE_NAME} abilitato al boot e avviato."
+}
+
+# ------------------------------------------------------------------------------
+# Installazione & Configurazione Open WebUI Bare-Metal
+# ------------------------------------------------------------------------------
+install_open_webui_baremetal() {
+    log_info "Avvio installazione Open WebUI in ambiente Bare-Metal (Python Virtualenv)..."
+
+    # 1. Creazione Virtualenv se non presente
+    if [[ ! -d "${WEBUI_VENV}" ]]; then
+        log_info "Creazione Python Virtual Environment in ${WEBUI_VENV}..."
+        python3 -m venv "${WEBUI_VENV}"
+    fi
+
+    # 2. Aggiornamento pip e installazione open-webui
+    log_info "Installazione/Aggiornamento del pacchetto open-webui tramite pip..."
+    "${WEBUI_VENV}/bin/pip" install --upgrade pip -q
+    "${WEBUI_VENV}/bin/pip" install open-webui -q
+
+    log_info "Open WebUI installato correttamente nel venv."
+
+    # 3. Creazione Servizio Systemd per Open WebUI
+    log_info "Configurazione file di servizio Systemd per Open WebUI (${WEBUI_SERVICE_NAME})..."
+
+    cat <<EOF > "${WEBUI_SERVICE_FILE}"
+[Unit]
+Description=Homelab AI Open WebUI Service (Bare-Metal)
+After=network.target ${SERVICE_NAME}.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${INSTALL_DIR}
+Environment="PORT=3000"
+Environment="WEBUI_PORT=3000"
+Environment="OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1"
+Environment="OPENAI_API_KEY=no-key"
+Environment="ENABLE_OLLAMA_API=False"
+Environment="DATA_DIR=${WEBUI_DATA_DIR}"
+ExecStart=${WEBUI_VENV}/bin/open-webui serve
+Restart=always
+RestartSec=5
+StandardOutput=append:${LOG_FILE}
+StandardError=append:${LOG_FILE}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable "${WEBUI_SERVICE_NAME}"
+    systemctl restart "${WEBUI_SERVICE_NAME}"
+
+    log_info "Servizio Open WebUI configurato, abilitato al boot e avviato sulla porta 3000."
+    
+    whiptail --title "Open WebUI Bare-Metal Installato" --msgbox \
+"Open WebUI è stato installato ed avviato con successo!\n\n\
+- Porta Web UI: http://0.0.0.0:3000\n\
+- Collegamento Backend: http://127.0.0.1:8080/v1 (llama.cpp)\n\
+- File Servizio: ${WEBUI_SERVICE_FILE}\n\
+- Dati Persistent: ${WEBUI_DATA_DIR}" 14 70
+}
+
+manage_webui_menu() {
+    while true; do
+        local webui_status="INATTIVO"
+        if systemctl is-active --quiet "${WEBUI_SERVICE_NAME}" 2>/dev/null; then
+            webui_status="ATTIVO (Porta 3000)"
+        fi
+
+        local choice
+        choice=$(whiptail --title "Gestione Open WebUI Bare-Metal" \
+            --menu "\nStato attuale Open WebUI: ${webui_status}\n\nScegli un'azione:" 18 78 6 \
+            "1" "Installa / Ri-installa Open WebUI Bare-Metal" \
+            "2" "Riavvia Servizio Open WebUI" \
+            "3" "Arresta Servizio Open WebUI" \
+            "4" "Visualizza Stato Dettagliato (systemctl)" \
+            "5" "Visualizza Log Open WebUI (journalctl)" \
+            "6" "Torna al Menu Principale" \
+            3>&1 1>&2 2>&3)
+
+        case "$choice" in
+            1) install_open_webui_baremetal ;;
+            2) 
+                systemctl restart "${WEBUI_SERVICE_NAME}"
+                log_info "Servizio ${WEBUI_SERVICE_NAME} riavviato."
+                whiptail --msgbox "Servizio Open WebUI riavviato!" 8 45
+                ;;
+            3) 
+                systemctl stop "${WEBUI_SERVICE_NAME}"
+                log_info "Servizio ${WEBUI_SERVICE_NAME} arrestato."
+                whiptail --msgbox "Servizio Open WebUI arrestato!" 8 45
+                ;;
+            4) 
+                clear
+                systemctl status "${WEBUI_SERVICE_NAME}" || true
+                read -rp "Premere invio per tornare al menu..."
+                ;;
+            5) 
+                clear
+                journalctl -u "${WEBUI_SERVICE_NAME}" -n 100 -f
+                ;;
+            6) break ;;
+            *) break ;;
+        esac
+    done
 }
 
 # ------------------------------------------------------------------------------
@@ -142,27 +267,27 @@ EOF
 select_backend() {
     local choice
     choice=$(whiptail --title "Selezione Backend Inferenza AMD" \
-        --menu "\nScegli il backend di accelerazione hardware per llama.cpp:" 18 78 3 \
-        "1" "ROCm Ufficiale (Consigliato per GPU Instinct/Radeon Pro)" \
-        "2" "Vulkan (Consigliato per GPU Consumer / Cross-Platform)" \
-        "3" "ROCm Sperimentale / Custom HIP (Per architetture RX non supportate)" \
+        --menu "\nGPU rilevata: AMD RX 5700 XT (Navi 10)\nConsigliato: 1 (Vulkan) per RDNA1\n\nScegli il backend:" 18 78 3 \
+        "1" "Vulkan (RACCOMANDATO per RX 5700 XT / RDNA1)" \
+        "2" "ROCm Sperimentale (HIP con Override HSA_OVERRIDE_GFX_VERSION=10.3.0)" \
+        "3" "ROCm Ufficiale (Radeon Pro / Instinct / RX 6000+)" \
         3>&1 1>&2 2>&3)
 
     case "$choice" in
         1)
-            echo "BACKEND=rocm_official" > "${BACKEND_CONF}"
-            log_info "Selezionato backend: ROCm Ufficiale"
-            compile_llama "rocm"
-            ;;
-        2)
             echo "BACKEND=vulkan" > "${BACKEND_CONF}"
             log_info "Selezionato backend: Vulkan"
             compile_llama "vulkan"
             ;;
-        3)
+        2)
             echo "BACKEND=rocm_experimental" > "${BACKEND_CONF}"
             log_info "Selezionato backend: ROCm Sperimentale"
             compile_llama "rocm_exp"
+            ;;
+        3)
+            echo "BACKEND=rocm_official" > "${BACKEND_CONF}"
+            log_info "Selezionato backend: ROCm Ufficiale"
+            compile_llama "rocm"
             ;;
         *)
             log_warn "Nessun backend selezionato."
@@ -193,80 +318,35 @@ compile_llama() {
             cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
             ;;
         "rocm_exp")
-            HSA_OVERRIDE_GFX_VERSION=10.3.0 cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_HIPBLAS=ON
-            cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
+            HSA_OVERRIDE_GFX_VERSION=10.3.0 cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_HIPBLAS=ON -DAMDGPU_TARGETS=gfx1030
+            HSA_OVERRIDE_GFX_VERSION=10.3.0 cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
             ;;
     esac
 
     log_info "Compilazione completata con successo in ${LLAMA_DIR}/build"
 
-    # Configurazione e Avvio Automatico del servizio
-    auto_setup_systemd_service
+    # Configurazione e Avvio Automatico del servizio Systemd Backend
+    auto_setup_systemd_service "${type}"
 
-    # Banner informativo a schermo e richiesta pressione tasto
     echo -e "\n${BOLD}${GREEN}==============================================================================${NC}"
     echo -e "${BOLD}${GREEN}   COMPILAZIONE E CONFIGURAZIONE SERVIZIO SYSTEMD COMPLETATE${NC}"
     echo -e "${BOLD}${GREEN}==============================================================================${NC}"
-    echo -e " ⚙️  ${BOLD}Servizio Systemd:${NC} ${CYAN}${SERVICE_NAME}.service${NC}"
-    echo -e " 📍 ${BOLD}File Unità:${NC}       ${SERVICE_FILE}"
-    echo -e " 🚀 ${BOLD}Stato Servizio:${NC}    $(systemctl is-active "${SERVICE_NAME}" 2>/dev/null || echo "Inattivo")"
-    echo -e " 🌐 ${BOLD}Endpoint Default:${NC}  http://0.0.0.0:8080"
-    echo -e " 📁 ${BOLD}Cartella Modelli:${NC}  ${MODELS_DIR}"
-    echo -e " 📝 ${BOLD}Log di Sistema:${NC}   ${LOG_FILE}"
-    echo -e "${GREEN}------------------------------------------------------------------------------${NC}"
-    echo -e " ${YELLOW}Nota:${NC} Inserisci un file .gguf in ${MODELS_DIR}/model.gguf per avviare l'inferenza."
-    echo -e "${BOLD}${GREEN}==============================================================================${NC}\n"
+    echo -e " ⚙️  ${BOLD}Servizio Backend:${NC}  ${CYAN}${SERVICE_NAME}.service${NC}"
+    echo -e " 🚀 ${BOLD}Stato Servizio:${NC}   $(systemctl is-active "${SERVICE_NAME}" 2>/dev/null || echo "Inattivo")"
+    echo -e " 🌐 ${BOLD}Endpoint Backend:${NC} http://0.0.0.0:8080"
+    echo -e " 📁 ${BOLD}Cartella Modelli:${NC} ${MODELS_DIR}"
+    echo -e "${GREEN}------------------------------------------------------------------------------${NC}\n"
 
-    read -rp "Premere [INVIO] per continuare e tornare al menu principale..."
+    read -rp "Premere [INVIO] per continuare..."
 }
 
 # ------------------------------------------------------------------------------
-# Gestione Manuale Servizio Systemd (Personalizzazione Parametri)
+# Gestione Manuale Backend Systemd
 # ------------------------------------------------------------------------------
-custom_setup_systemd_service() {
-    log_info "Personalizzazione configurazione servizio Systemd (${SERVICE_NAME})..."
-
-    if [[ ! -f "${LLAMA_DIR}/build/bin/llama-server" ]]; then
-        whiptail --msgbox "Esegui prima la compilazione del backend (Opzione 2) per generare il binario llama-server!" 10 60
-        return
-    fi
-
-    local host port model_path extra_args
-    host=$(whiptail --inputbox "Host Bind per il server API:" 10 60 "0.0.0.0" 3>&1 1>&2 2>&3) || return
-    port=$(whiptail --inputbox "Porta per il server API:" 10 60 "8080" 3>&1 1>&2 2>&3) || return
-    model_path=$(whiptail --inputbox "Percorso assoluto al modello (.gguf):" 10 60 "${MODELS_DIR}/model.gguf" 3>&1 1>&2 2>&3) || return
-    extra_args=$(whiptail --inputbox "Argomenti extra (es: -ngl 99 -c 4096):" 10 60 "-ngl 99 -c 2048" 3>&1 1>&2 2>&3) || return
-
-    cat <<EOF > "${SERVICE_FILE}"
-[Unit]
-Description=Homelab AI Backend Service (llama.cpp)
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=${INSTALL_DIR}
-ExecStart=${LLAMA_DIR}/build/bin/llama-server --host ${host} --port ${port} -m "${model_path}" ${extra_args}
-Restart=always
-RestartSec=5
-StandardOutput=append:${LOG_FILE}
-StandardError=append:${LOG_FILE}
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
-    systemctl enable "${SERVICE_NAME}"
-    systemctl restart "${SERVICE_NAME}"
-    log_info "Servizio ${SERVICE_NAME} aggiornato e riavviato."
-    whiptail --msgbox "Servizio aggiornato e riavviato con successo!" 8 50
-}
-
-manage_service_menu() {
+manage_backend_service_menu() {
     while true; do
         local choice
-        choice=$(whiptail --title "Gestione Servizio Systemd" \
+        choice=$(whiptail --title "Gestione Servizio Backend (llama.cpp)" \
             --menu "\nSeleziona un'azione per ${SERVICE_NAME}:" 18 78 6 \
             "1" "Personalizza Parametri Servizio (Porta, Modello, Argomenti)" \
             "2" "Riavvia Servizio" \
@@ -303,24 +383,56 @@ manage_service_menu() {
     done
 }
 
+custom_setup_systemd_service() {
+    log_info "Personalizzazione configurazione servizio Backend (${SERVICE_NAME})..."
+
+    if [[ ! -f "${LLAMA_DIR}/build/bin/llama-server" ]]; then
+        whiptail --msgbox "Esegui prima la compilazione del backend (Opzione 2)!" 10 60
+        return
+    fi
+
+    local host port model_path extra_args
+    host=$(whiptail --inputbox "Host Bind per il server API:" 10 60 "0.0.0.0" 3>&1 1>&2 2>&3) || return
+    port=$(whiptail --inputbox "Porta per il server API:" 10 60 "8080" 3>&1 1>&2 2>&3) || return
+    model_path=$(whiptail --inputbox "Percorso al modello (.gguf):" 10 60 "${MODELS_DIR}/model.gguf" 3>&1 1>&2 2>&3) || return
+    extra_args=$(whiptail --inputbox "Argomenti extra:" 10 60 "-ngl 99 -c 2048" 3>&1 1>&2 2>&3) || return
+
+    cat <<EOF > "${SERVICE_FILE}"
+[Unit]
+Description=Homelab AI Backend Service (llama.cpp)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=${LLAMA_DIR}/build/bin/llama-server --host ${host} --port ${port} -m "${model_path}" ${extra_args}
+Restart=always
+RestartSec=5
+StandardOutput=append:${LOG_FILE}
+StandardError=append:${LOG_FILE}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable "${SERVICE_NAME}"
+    systemctl restart "${SERVICE_NAME}"
+    log_info "Servizio ${SERVICE_NAME} aggiornato e riavviato."
+    whiptail --msgbox "Servizio aggiornato con successo!" 8 50
+}
+
 # ------------------------------------------------------------------------------
 # Monitoraggio Hardware e Stato Servizi
 # ------------------------------------------------------------------------------
 check_hardware_status() {
     clear
-    echo -e "${BOLD}${CYAN}=== Stato Hardware AMD & Diagnostica ===${NC}"
+    echo -e "${BOLD}${CYAN}=== Stato Hardware AMD & Diagnostica Servizi ===${NC}"
     echo -e "Ambiente Rilevato: ${BOLD}$(detect_environment)${NC}\n"
 
     echo -e "${YELLOW}[Dispositivi PCI AMD]${NC}"
     lspci | grep -iE 'vga|3d|display|amd' || echo "Nessun dispositivo PCI AMD rilevato."
-    echo ""
-
-    echo -e "${YELLOW}[Stato ROCm / HIP]${NC}"
-    if command -v rocm-smi &>/dev/null; then
-        rocm-smi || true
-    else
-        echo "rocm-smi non presente."
-    fi
     echo ""
 
     echo -e "${YELLOW}[Stato Vulkan ICD]${NC}"
@@ -331,9 +443,17 @@ check_hardware_status() {
     fi
     echo ""
 
-    echo -e "${YELLOW}[Servizio AI Systemd]${NC}"
+    echo -e "${YELLOW}[Servizio Backend llama.cpp (Porta 8080)]${NC}"
     if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
         echo -e "Stato: ${GREEN}ATTIVO (Running - Abilitato al boot)${NC}"
+    else
+        echo -e "Stato: ${RED}INATTIVO / NON CONFIGURATO${NC}"
+    fi
+    echo ""
+
+    echo -e "${YELLOW}[Servizio Open WebUI Bare-Metal (Porta 3000)]${NC}"
+    if systemctl is-active --quiet "${WEBUI_SERVICE_NAME}" 2>/dev/null; then
+        echo -e "Stato: ${GREEN}ATTIVO (Running - http://0.0.0.0:3000)${NC}"
     else
         echo -e "Stato: ${RED}INATTIVO / NON CONFIGURATO${NC}"
     fi
@@ -343,22 +463,20 @@ check_hardware_status() {
 }
 
 # ------------------------------------------------------------------------------
-# Configurazione Nodo Sandbox SSH
+# Configurazione Sandbox SSH
 # ------------------------------------------------------------------------------
 setup_sandbox_ssh() {
     log_info "Configurazione accesso Sandbox SSH..."
-    
     local ssh_port
-    ssh_port=$(whiptail --inputbox "Inserisci la porta SSH per il nodo Sandbox:" 10 60 "2222" 3>&1 1>&2 2>&3)
+    ssh_port=$(whiptail --inputbox "Inserisci la porta SSH per la Sandbox:" 10 60 "2222" 3>&1 1>&2 2>&3)
     
     if [[ -n "${ssh_port}" ]]; then
         mkdir -p /root/.ssh
         chmod 700 /root/.ssh
         touch /root/.ssh/authorized_keys
         chmod 600 /root/.ssh/authorized_keys
-
-        log_info "Nodi Sandbox SSH configurati sulla porta ${ssh_port}."
-        whiptail --msgbox "Accesso SSH registrato. Aggiungi la tua chiave pubblica in /root/.ssh/authorized_keys" 10 60
+        log_info "Sandbox SSH registrata su porta ${ssh_port}."
+        whiptail --msgbox "Aggiungi la tua chiave pubblica in /root/.ssh/authorized_keys" 10 60
     fi
 }
 
@@ -366,7 +484,9 @@ setup_sandbox_ssh() {
 # Aggiornamento Componenti
 # ------------------------------------------------------------------------------
 update_components() {
-    log_info "Aggiornamento componenti e ricompilazione..."
+    log_info "Aggiornamento componenti (llama.cpp e Open WebUI)..."
+    
+    # 1. Ricompilazione llama.cpp
     if [[ -f "${BACKEND_CONF}" ]]; then
         source "${BACKEND_CONF}"
         case "${BACKEND:-vulkan}" in
@@ -377,15 +497,23 @@ update_components() {
     else
         select_backend
     fi
+
+    # 2. Aggiornamento Open WebUI
+    if [[ -d "${WEBUI_VENV}" ]]; then
+        log_info "Aggiornamento pacchetto Open WebUI tramite pip..."
+        "${WEBUI_VENV}/bin/pip" install --upgrade open-webui -q
+        systemctl restart "${WEBUI_SERVICE_NAME}" 2>/dev/null || true
+    fi
+
     log_info "Aggiornamento completato."
+    whiptail --msgbox "Tutti i componenti sono stati aggiornati!" 10 60
 }
 
 # ------------------------------------------------------------------------------
-# Pulizia Cache Senza Rimuovere Pacchetti di Sistema
+# Pulizia Cache
 # ------------------------------------------------------------------------------
 clean_system_cache() {
     log_info "Avvio pulizia cache e file temporanei..."
-
     rm -rf /root/.cache/vulkan /root/.cache/AMD ~/.cache/vulkan ~/.cache/AMD
     rm -rf /tmp/* /var/tmp/*
 
@@ -394,35 +522,33 @@ clean_system_cache() {
     fi
 
     log_info "Pulizia completata con successo."
-    whiptail --msgbox "Cache shader e file temporanei rimossi con successo!" 10 60
+    whiptail --msgbox "Cache e file temporanei rimossi!" 10 60
 }
 
 # ------------------------------------------------------------------------------
-# Disinstallazione e Pulizia (Senza Rimuovere Pacchetti .deb di Sistema)
+# Disinstallazione Completa
 # ------------------------------------------------------------------------------
 uninstall_environment() {
-    if whiptail --title "Conferma Rimozione Ambiente" --yesno "Sei sicuro di voler rimuovere l'ambiente Homelab AI?\n\n- Arresto e rimozione servizio Systemd\n- Rimozione directory ${INSTALL_DIR}\n- Rimozione file di log\n\nI pacchetti di sistema (.deb) NON verranno modificati." 12 70; then
+    if whiptail --title "Conferma Rimozione Ambiente" --yesno "Sei sicuro di voler rimuovere l'ambiente Homelab AI?\n\n- Arresto e rimozione servizi Systemd (Backend & Open WebUI)\n- Rimozione directory ${INSTALL_DIR}\n- Rimozione file di log e dati Open WebUI\n\nI pacchetti .deb di sistema NON verranno modificati." 14 70; then
         
         log_warn "Avvio disinstallazione dell'ambiente AI..."
 
-        # 1. Arresto e rimozione servizio Systemd
-        if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null || [[ -f "${SERVICE_FILE}" ]]; then
-            log_info "Arresto e rimozione servizio Systemd..."
-            systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
-            systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
-            rm -f "${SERVICE_FILE}"
-            systemctl daemon-reload
-        fi
+        # Rimozione Servizi Systemd
+        for svc in "${SERVICE_NAME}" "${WEBUI_SERVICE_NAME}"; do
+            systemctl stop "${svc}" 2>/dev/null || true
+            systemctl disable "${svc}" 2>/dev/null || true
+        done
 
-        # 2. Rimozione cartelle installazione e log
-        log_info "Rimozione cartelle e file di log..."
+        rm -f "${SERVICE_FILE}" "${WEBUI_SERVICE_FILE}"
+        systemctl daemon-reload
+
+        # Rimozione Directory e Log
         rm -rf "${INSTALL_DIR}"
         rm -rf "${LOG_FILE}"
         rm -rf /root/.cache/vulkan /root/.cache/AMD
 
-        log_info "Disinstallazione completata con successo."
+        log_info "Disinstallazione completata."
         whiptail --msgbox "Ambiente Homelab AI rimosso con successo!" 10 60
-        echo -e "${GREEN}Disinstallazione e pulizia completate con successo.${NC}"
         exit 0
     fi
 }
@@ -434,28 +560,30 @@ main_menu() {
     while true; do
         local choice
         choice=$(whiptail --title "Homelab AI - AMD Management Console" \
-            --menu "\nAmbiente Rilevato: $(detect_environment)\nScegli un'operazione:" 21 78 9 \
-            "1" "Verifica Stato Hardware e Servizi" \
-            "2" "Seleziona/Compila Backend (ROCm / Vulkan)" \
-            "3" "Gestisci Servizio Systemd (Personalizza/Monitora)" \
-            "4" "Configura Nodo SSH Sandbox" \
-            "5" "Aggiorna Componenti (llama.cpp)" \
-            "6" "Visualizza Log di Sistema" \
-            "7" "Pulizia Cache e File Temporanei" \
-            "8" "Disinstalla Ambiente AI" \
-            "9" "Esci" \
+            --menu "\nAmbiente: $(detect_environment)\nGPU Rilevata: AMD RX 5700 XT (RADV Navi10)\n\nScegli un'operazione:" 22 78 10 \
+            "1" "Verifica Stato Hardware e Servizi (Backend & Web UI)" \
+            "2" "Seleziona/Compila Backend (Vulkan / ROCm)" \
+            "3" "Gestisci Servizio Backend llama.cpp (Porta 8080)" \
+            "4" "Gestisci Open WebUI Bare-Metal (Porta 3000)" \
+            "5" "Configura Nodo SSH Sandbox" \
+            "6" "Aggiorna Componenti (llama.cpp & Open WebUI)" \
+            "7" "Visualizza Log di Sistema" \
+            "8" "Pulizia Cache e File Temporanei" \
+            "9" "Disinstalla Ambiente AI" \
+            "10" "Esci" \
             3>&1 1>&2 2>&3)
 
         case "$choice" in
             1) check_hardware_status ;;
             2) select_backend ;;
-            3) manage_service_menu ;;
-            4) setup_sandbox_ssh ;;
-            5) update_components ;;
-            6) clear; tail -n 50 "${LOG_FILE}"; read -rp "Premere invio per tornare al menu..." ;;
-            7) clean_system_cache ;;
-            8) uninstall_environment ;;
-            9) echo -e "${GREEN}Uscita.${NC}"; break ;;
+            3) manage_backend_service_menu ;;
+            4) manage_webui_menu ;;
+            5) setup_sandbox_ssh ;;
+            6) update_components ;;
+            7) clear; tail -n 50 "${LOG_FILE}"; read -rp "Premere invio per tornare al menu..." ;;
+            8) clean_system_cache ;;
+            9) uninstall_environment ;;
+            10) echo -e "${GREEN}Uscita.${NC}"; break ;;
             *) break ;;
         esac
     done
