@@ -202,6 +202,22 @@ compile_llama() {
 
     # Configurazione e Avvio Automatico del servizio
     auto_setup_systemd_service
+
+    # Banner informativo a schermo e richiesta pressione tasto
+    echo -e "\n${BOLD}${GREEN}==============================================================================${NC}"
+    echo -e "${BOLD}${GREEN}   COMPILAZIONE E CONFIGURAZIONE SERVIZIO SYSTEMD COMPLETATE${NC}"
+    echo -e "${BOLD}${GREEN}==============================================================================${NC}"
+    echo -e " ⚙️  ${BOLD}Servizio Systemd:${NC} ${CYAN}${SERVICE_NAME}.service${NC}"
+    echo -e " 📍 ${BOLD}File Unità:${NC}       ${SERVICE_FILE}"
+    echo -e " 🚀 ${BOLD}Stato Servizio:${NC}    $(systemctl is-active "${SERVICE_NAME}" 2>/dev/null || echo "Inattivo")"
+    echo -e " 🌐 ${BOLD}Endpoint Default:${NC}  http://0.0.0.0:8080"
+    echo -e " 📁 ${BOLD}Cartella Modelli:${NC}  ${MODELS_DIR}"
+    echo -e " 📝 ${BOLD}Log di Sistema:${NC}   ${LOG_FILE}"
+    echo -e "${GREEN}------------------------------------------------------------------------------${NC}"
+    echo -e " ${YELLOW}Nota:${NC} Inserisci un file .gguf in ${MODELS_DIR}/model.gguf per avviare l'inferenza."
+    echo -e "${BOLD}${GREEN}==============================================================================${NC}\n"
+
+    read -rp "Premere [INVIO] per continuare e tornare al menu principale..."
 }
 
 # ------------------------------------------------------------------------------
