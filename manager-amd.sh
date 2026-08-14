@@ -80,12 +80,46 @@ install_vulkan_dependencies() {
     apt-get install -y libspirv-tools-dev 2>/dev/null || true
 
     apt-get install -y libspirv-cross-c-shared-dev 2>/dev/null || true
+}
 
-    if ! command -v glslc &> /dev/null; then
-        if [ -f "/usr/bin/glslc" ]; then
-            export PATH=$PATH:/usr/bin
-        fi
+build_llama_vulkan() {
+    cd "${INSTALL_DIR}"
+    if [ -d "${LLAMA_CPP_DIR}" ]; then
+        echo -e "  ${C_YELLOW}[*] Aggiornamento sorgenti llama.cpp esistenti...${RESET}"
+        cd "${LLAMA_CPP_DIR}"
+        git pull
+    else
+        git clone https://github.com/ggerganov/llama.cpp.git "${LLAMA_CPP_DIR}"
+        cd "${LLAMA_CPP_DIR}"
     fi
+
+    # Pulizia radicale della directory di build
+    rm -rf build
+    mkdir -p build
+    cd build
+
+    # Individuazione del compilatore shader preferito (glslangValidator o glslc)
+    SHADER_COMPILER=""
+    if command -v glslangValidator &> /dev/null; then
+        SHADER_COMPILER=$(which glslangValidator)
+    elif command -v glslc &> /dev/null; then
+        SHADER_COMPILER=$(which glslc)
+    fi
+
+    echo -e "  ${C_YELLOW}[*] Configurazione CMake con backend Vulkan...${RESET}"
+
+    # Disabilitiamo i flag sperimentali e l'FP16 negli shader generator per evitare incomprensioni con glslc/glslang
+    cmake .. \
+        -DGGML_VULKAN=ON \
+        -DVulkan_GLSLC_EXECUTABLE="${SHADER_COMPILER}" \
+        -DGGML_VULKAN_FP16=OFF \
+        -DGGML_VULKAN_COOPMAT=OFF \
+        -DGGML_VULKAN_UNROLL=OFF \
+        -DGGML_VULKAN_SHARED=OFF \
+        -DGGML_VULKAN_ASYNC=OFF
+
+    echo -e "  ${C_YELLOW}[*] Compilazione in corso...${RESET}"
+    cmake --build . --config Release -j$(nproc)
 }
 
 install_services() {
@@ -113,34 +147,7 @@ install_services() {
             ;;
         2)
             echo -e "\n  ${C_GREEN}[+] Compilazione nativa di llama.cpp con accelerazione Vulkan (RADV)...${RESET}"
-            cd "${INSTALL_DIR}"
-            if [ -d "${LLAMA_CPP_DIR}" ]; then
-                echo -e "  ${C_YELLOW}[*] Aggiornamento sorgenti llama.cpp esistenti...${RESET}"
-                cd "${LLAMA_CPP_DIR}"
-                git pull
-            else
-                git clone https://github.com/ggerganov/llama.cpp.git "${LLAMA_CPP_DIR}"
-                cd "${LLAMA_CPP_DIR}"
-            fi
-
-            # Pulizia radicale della directory di build per forzare la nuova configurazione CMake
-            rm -rf build
-            mkdir -p build
-            cd build
-
-            GLSLC_PATH=$(which glslc || echo "/usr/bin/glslc")
-
-            echo -e "  ${C_YELLOW}[*] Configurazione CMake con GGML_VULKAN=ON (Senza FP16 hardcoded)...${RESET}"
-            cmake .. \
-                -DGGML_VULKAN=ON \
-                -DVulkan_GLSLC_EXECUTABLE="${GLSLC_PATH}" \
-                -DGGML_VULKAN_FP16=OFF \
-                -DGGML_VULKAN_COOPMAT=OFF \
-                -DGGML_VULKAN_UNROLL=OFF
-
-            echo -e "  ${C_YELLOW}[*] Compilazione in corso...${RESET}"
-            cmake --build . --config Release -j$(nproc)
-
+            build_llama_vulkan
             echo -e "\n  ${C_GREEN}[✔] Compilazione llama.cpp (Vulkan) completata con successo!${RESET}"
             ;;
         3)
@@ -177,10 +184,12 @@ check_status() {
         echo -e "  ${C_RED}[✖ Vulkan]${RESET} Strumenti non installati."
     fi
 
-    if command -v glslc &> /dev/null; then
+    if command -v glslangValidator &> /dev/null; then
+        echo -e "  ${C_GREEN}[✔ Shaderc/GLSL]${RESET} Compilatore glslangValidator disponibile ($(which glslangValidator))."
+    elif command -v glslc &> /dev/null; then
         echo -e "  ${C_GREEN}[✔ Shaderc/GLSL]${RESET} Compilatore glslc disponibile ($(which glslc))."
     else
-        echo -e "  ${C_YELLOW}[! Shaderc/GLSL]${RESET} Compilatore glslc non trovato nel PATH."
+        echo -e "  ${C_YELLOW}[! Shaderc/GLSL]${RESET} Compilatore shader non trovato nel PATH."
     fi
 
     if command -v zstd &> /dev/null; then
@@ -214,19 +223,7 @@ update_components() {
     show_header
     echo -e "  ${C_YELLOW}[+] Aggiornamento componenti AMD in corso...${RESET}\n"
     if [ -d "${LLAMA_CPP_DIR}" ]; then
-        cd "${LLAMA_CPP_DIR}"
-        git pull
-        rm -rf build
-        mkdir -p build
-        cd build
-        GLSLC_PATH=$(which glslc || echo "/usr/bin/glslc")
-        cmake .. \
-            -DGGML_VULKAN=ON \
-            -DVulkan_GLSLC_EXECUTABLE="${GLSLC_PATH}" \
-            -DGGML_VULKAN_FP16=OFF \
-            -DGGML_VULKAN_COOPMAT=OFF \
-            -DGGML_VULKAN_UNROLL=OFF
-        cmake --build . --config Release -j$(nproc)
+        build_llama_vulkan
         echo -e "\n  ${C_GREEN}[✔] llama.cpp aggiornato e ricompilato!${RESET}"
     else
         echo -e "  ${C_YELLOW}[!] llama.cpp non risulta installato in ${LLAMA_CPP_DIR}.${RESET}"
