@@ -47,7 +47,6 @@ install_vulkan_dependencies() {
     echo -e "  ${C_YELLOW}[+] Aggiornamento repository ed elaborazione dipendenze per Debian/Ubuntu...${RESET}"
     apt-get update
 
-    # Lista base di pacchetti universali
     BASE_PACKAGES=(
         build-essential
         cmake
@@ -76,16 +75,12 @@ install_vulkan_dependencies() {
     echo -e "  ${C_YELLOW}[*] Installazione pacchetti base...${RESET}"
     apt-get install -y "${BASE_PACKAGES[@]}"
 
-    # Gestione dinamica delle variazioni di denominazione tra Ubuntu e Debian Trixie
     echo -e "  ${C_YELLOW}[*] Installazione pacchetti di sviluppo SPIR-V specifici della distro...${RESET}"
-    
-    # Prova a installare pacchetti opzionali/variabili senza interrompere lo script in caso di mismatch
     apt-get install -y spirv-tools-dev 2>/dev/null || \
     apt-get install -y libspirv-tools-dev 2>/dev/null || true
 
     apt-get install -y libspirv-cross-c-shared-dev 2>/dev/null || true
 
-    # Verifica ed export del PATH per glslc se non presente di default
     if ! command -v glslc &> /dev/null; then
         if [ -f "/usr/bin/glslc" ]; then
             export PATH=$PATH:/usr/bin
@@ -128,18 +123,21 @@ install_services() {
                 cd "${LLAMA_CPP_DIR}"
             fi
 
-            # Pulizia radicale della directory di build
+            # Pulizia radicale della directory di build per rigenerare CMake cache
             rm -rf build
             mkdir -p build
             cd build
 
             GLSLC_PATH=$(which glslc || echo "/usr/bin/glslc")
 
-            echo -e "  ${C_YELLOW}[*] Configurazione CMake con GGML_VULKAN=ON...${RESET}"
-            cmake .. -DGGML_VULKAN=ON -DVulkan_GLSLC_EXECUTABLE="${GLSLC_PATH}"
+            echo -e "  ${C_YELLOW}[*] Configurazione CMake con GGML_VULKAN=ON & Target Vulkan 1.3...${RESET}"
+            cmake .. \
+                -DGGML_VULKAN=ON \
+                -DVulkan_GLSLC_EXECUTABLE="${GLSLC_PATH}" \
+                -DGGML_VULKAN_TARGET_ENV=vulkan1.3
 
-            echo -e "  ${C_YELLOW}[*] Compilazione in modalità sequenziale protetta per gli shader Vulkan (-j1)...${RESET}"
-            cmake --build . --config Release -j1
+            echo -e "  ${C_YELLOW}[*] Compilazione in corso...${RESET}"
+            cmake --build . --config Release -j$(nproc)
 
             echo -e "\n  ${C_GREEN}[✔] Compilazione llama.cpp (Vulkan) completata con successo!${RESET}"
             ;;
@@ -219,8 +217,12 @@ update_components() {
         rm -rf build
         mkdir -p build
         cd build
-        cmake .. -DGGML_VULKAN=ON
-        cmake --build . --config Release -j1
+        GLSLC_PATH=$(which glslc || echo "/usr/bin/glslc")
+        cmake .. \
+            -DGGML_VULKAN=ON \
+            -DVulkan_GLSLC_EXECUTABLE="${GLSLC_PATH}" \
+            -DGGML_VULKAN_TARGET_ENV=vulkan1.3
+        cmake --build . --config Release -j$(nproc)
         echo -e "\n  ${C_GREEN}[✔] llama.cpp aggiornato e ricompilato!${RESET}"
     else
         echo -e "  ${C_YELLOW}[!] llama.cpp non risulta installato in ${LLAMA_CPP_DIR}.${RESET}"
