@@ -9,9 +9,10 @@
 ### Setup del Controller AI (Host Principale)
 
 ```bash
+sudo apt install git
 git clone [https://github.com/mrpink77it/homelab-ai-deployer.git](https://github.com/mrpink77it/homelab-ai-deployer.git)
 cd homelab-ai-deployer
-chmod +x manager.sh sandbox_setup.sh setup_jupyter.sh
+sudo chmod +x manager.sh sandbox_setup.sh setup_jupyter.sh
 sudo ./manager.sh
 ```
 
