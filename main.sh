@@ -1,175 +1,110 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Homelab AI Deployer - Unified Hardware Router (main.sh)
-# Style: Cyberpunk / Modern Minimal CLI
+# Homelab AI Deployer - Main Entrypoint Router (main.sh)
+# Hardware Discovery & Automated Controller Delegation
 # ==============================================================================
 
 set -e
 
-# --- Palette Colori ANSI (16/256 Color Safe) ---
+# Determination of Script Directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- Palette Colori & Stili ANSI ---
 BOLD='\033[1m'
-DIM='\033[2m'
 RESET='\033[0m'
 
-# Colors
-C_CYAN='\033[38;5;39m'
-C_BLUE='\033[38;5;33m'
+C_CYAN='\033[38;5;38m'
+C_BLUE='\033[38;5;32m'
 C_GREEN='\033[38;5;42m'
 C_YELLOW='\033[38;5;214m'
 C_RED='\033[38;5;196m'
-C_PURPLE='\033[38;5;135m'
-C_GRAY='\033[38;5;244m'
+C_PURPLE='\033[38;5;141m'
+C_GRAY='\033[38;5;242m'
 C_WHITE='\033[38;5;255m'
 
-# Helper per disegnare l'header
-draw_header() {
+# --- Componenti Grafici ---
+show_header() {
     clear
-    echo -e "${C_CYAN}┌──────────────────────────────────────────────────────────────────────────────┐${RESET}"
-    echo -e "${C_CYAN}│${RESET}  ${BOLD}${C_WHITE}H O M E L A B   A I   D E P L O Y E R${RESET}                                ${C_CYAN}│${RESET}"
-    echo -e "${C_CYAN}│${RESET}  ${C_GRAY}Zero-Config Hardware Discovery & AI Controller Router${RESET}               ${C_CYAN}│${RESET}"
-    echo -e "${C_CYAN}└──────────────────────────────────────────────────────────────────────────────┘${RESET}"
+    echo -e "${C_CYAN}┌────────────────────────────────────────────────────────────────────────┐${RESET}"
+    echo -e "${C_CYAN}│${RESET}  ${BOLD}${C_WHITE}H O M E L A B   A I   D E P L O Y E R${RESET}  │  ${BOLD}${C_PURPLE}A U T O - R O U T E R${RESET}    ${C_CYAN}│${RESET}"
+    echo -e "${C_CYAN}│${RESET}  ${C_GRAY}Zero-Config Hardware Discovery & AI Environment Orchestrator${RESET}         ${C_CYAN}│${RESET}"
+    echo -e "${C_CYAN}└────────────────────────────────────────────────────────────────────────┘${RESET}"
     echo ""
 }
 
-show_spinner() {
-    local pid=$1
-    local delay=0.08
-    local spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-    echo -ne "  "
-    while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
-        local temp=${spinstr#?}
-        printf " ${C_CYAN}%c${RESET}  ${C_GRAY}Scansione bus PCIe e rilevamento GPU in corso...${RESET}" "$spinstr"
-        local spinstr=$temp${spinstr%"$temp"}
-        sleep $delay
-        printf "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"
-    done
-    printf "                                                                               \r"
+show_about() {
+    echo -e "  ${BOLD}${C_PURPLE}❖ INFORMAZIONI SUL PROGETTO${RESET}"
+    echo -e "  ${C_GRAY}┌────────────────────────────────────────────────────────────────────────┐${RESET}"
+    echo -e "  ${C_GRAY}│${RESET}  ${C_WHITE}Homelab AI Deployer è uno stack automatizzato per l'infrastruttura   ${C_GRAY}│${RESET}"
+    echo -e "  ${C_GRAY}│${RESET}  ${C_WHITE}di AI locale. Rileva l'hardware presente (NVIDIA / AMD / CPU) e      ${C_GRAY}│${RESET}"
+    echo -e "  ${C_GRAY}│${RESET}  ${C_WHITE}configura i controller dedicati, i driver accelerati (CUDA/Vulkan) ${C_GRAY}│${RESET}"
+    echo -e "  ${C_GRAY}│${RESET}  ${C_WHITE}e i backend d'inferenza (llama.cpp, Unsloth, PyTorch).              ${C_GRAY}│${RESET}"
+    echo -e "  ${C_GRAY}└────────────────────────────────────────────────────────────────────────┘${RESET}\n"
 }
 
-# --- Funzione Pausa con Countdown 10s e Tasto di Interruzione ---
-pause_before_launch() {
-    local script_name=$1
-    local timeout=10
-
-    for (( i=timeout; i>0; i-- )); do
-        # Formattazione pad a 2 cifre per mantenere pulita la riga
-        printf "\r  ${C_YELLOW}⚡ Premere un tasto per avviare subito (avvio automatico tra %02ds)...${RESET}" "$i"
-        
-        # Attende 1 secondo; se viene premuto un tasto (-n 1), interrompe il ciclo
-        if read -t 1 -n 1 -s -r 2>/dev/null; then
-            break
-        fi
-    done
-
-    # Pulisce la riga del countdown prima del messaggio di avvio
-    echo -e "\r                                                                               "
-    echo -e "  ${C_GREEN}➔ Avvio di ${script_name}...${RESET}\n"
-    sleep 0.5
-}
-
-# --- Controllo Privilegi ---
+# --- Verifiche Iniziali ---
 if [ "$EUID" -ne 0 ]; then
-    draw_header
-    echo -e "  ${C_RED}𐄂 PERMESSI INSUFFICIENTI${RESET}"
-    echo -e "  ${C_GRAY}Questo script richiede privilegi di root per accedere ai nodi hardware.${RESET}\n"
-    echo -e "  ${BOLD}Uso consigliato:${RESET} ${C_CYAN}sudo ./main.sh${RESET}\n"
+    show_header
+    echo -e "  ${C_RED}✖ PERMESSI INSUFFICIENTI${RESET}"
+    echo -e "  ${C_GRAY}Esegui lo script con privilegi di root: ${C_WHITE}sudo ./main.sh${RESET}\n"
     exit 1
 fi
 
-draw_header
+show_header
+show_about
 
-# --- Rilevamento Hardware con Animation ---
-( sleep 1.0 ) &
-SPINNER_PID=$!
-show_spinner $SPINNER_PID
+echo -e "  ${BOLD}${C_CYAN}❖ ANALISI HARDWARE IN CORSO...${RESET}\n"
 
-# Query PCI Bus
-NVIDIA_FOUND=false
-AMD_FOUND=false
+# Detection GPU Logic
+GPU_TYPE="CPU"
+GPU_INFO=""
+TARGET_SCRIPT=""
 
-if lspci | grep -iE 'vga|3d|display' | grep -iq 'nvidia'; then
-    NVIDIA_FOUND=true
-fi
-
-if lspci | grep -iE 'vga|3d|display' | grep -iq 'amd\|radeon\|advanced micro devices'; then
-    AMD_FOUND=true
-fi
-
-# Rilevamento modello GPU esatto per il banner
-GPU_MODEL=$(lspci | grep -iE 'vga|3d|display' | cut -d ':' -f3 | sed 's/^[ \t]*//' | head -n 1)
-[ -z "$GPU_MODEL" ] && GPU_MODEL="Dispositivo Grafico Generico"
-
-# --- Routing dell'Hardware ---
-if [ "$NVIDIA_FOUND" = true ] && [ "$AMD_FOUND" = true ]; then
-    echo -e "  ${C_YELLOW}⚡ RILEVATA CONFIGURAZIONE DUAL-GPU (HYBRID)${RESET}"
-    echo -e "  ${C_GRAY}Hardware trovato:${RESET} ${C_WHITE}${GPU_MODEL}${RESET}\n"
-    
-    echo -e "  ${C_GRAY}┌────────────────────────────────────────────────────────┐${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  Seleziona quale stack software desideri avviare:      ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}├────────────────────────────────────────────────────────┤${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_CYAN}[1]${RESET} Avvia Manager ${BOLD}NVIDIA${RESET} (CUDA / vLLM)                 ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_PURPLE}[2]${RESET} Avvia Manager ${BOLD}AMD${RESET} (ROCm / Vulkan)                   ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}└────────────────────────────────────────────────────────┘${RESET}\n"
-    
-    read -p "  Scelta [1-2]: " dual_choice
-    case $dual_choice in
-        1)
-            pause_before_launch "manager.sh (NVIDIA)"
-            exec ./manager.sh
-            ;;
-        2)
-            pause_before_launch "manager-amd.sh (AMD)"
-            exec ./manager-amd.sh
-            ;;
-        *)
-            echo -e "\n  ${C_RED}Scelta non valida. Annullamento.${RESET}"
-            exit 1
-            ;;
-    esac
-
-elif [ "$NVIDIA_FOUND" = true ]; then
-    echo -e "  ${C_GREEN}✔ GPU NVIDIA RILEVATA${RESET}"
-    echo -e "  ${C_GRAY}Scheda:${RESET} ${C_WHITE}${GPU_MODEL}${RESET}"
-    echo -e "  ${C_GRAY}Stack:${RESET}  ${C_CYAN}CUDA Toolkit / PyTorch Native / vLLM${RESET}\n"
-    pause_before_launch "manager.sh"
-    exec ./manager.sh
-
-elif [ "$AMD_FOUND" = true ]; then
-    echo -e "  ${C_PURPLE}✔ GPU AMD RADEON RILEVATA${RESET}"
-    echo -e "  ${C_GRAY}Scheda:${RESET} ${C_WHITE}${GPU_MODEL}${RESET}"
-    echo -e "  ${C_GRAY}Stack:${RESET}  ${C_PURPLE}ROCm / Vulkan (RADV) / llama.cpp${RESET}\n"
-    pause_before_launch "manager-amd.sh"
-    exec ./manager-amd.sh
-
+if lspci | grep -iE 'vga|3d|display' | grep -i 'nvidia' > /dev/null 2>&1; then
+    GPU_TYPE="NVIDIA"
+    GPU_INFO=$(lspci | grep -iE 'vga|3d|display' | grep -i 'nvidia' | head -n 1 | cut -d ':' -f3 | sed 's/^[ \t]*//')
+    TARGET_SCRIPT="${SCRIPT_DIR}/manager-nvidia.sh"
+elif lspci | grep -iE 'vga|3d|display' | grep -iE 'amd|radeon' > /dev/null 2>&1; then
+    GPU_TYPE="AMD"
+    GPU_INFO=$(lspci | grep -iE 'vga|3d|display' | grep -iE 'amd|radeon' | head -n 1 | cut -d ':' -f3 | sed 's/^[ \t]*//')
+    TARGET_SCRIPT="${SCRIPT_DIR}/manager-amd.sh"
 else
-    echo -e "  ${C_RED}✖ NESSUNA GPU DEDICATA COMPATIBILE RILEVATA${RESET}"
-    echo -e "  ${C_GRAY}Non è stata trovata alcuna GPU NVIDIA o AMD supportata nel bus PCI.${RESET}\n"
-    
-    echo -e "  ${C_GRAY}┌────────────────────────────────────────────────────────┐${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  Come desideri procedere?                              ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}├────────────────────────────────────────────────────────┤${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_CYAN}[1]${RESET} Forza avvio Manager NVIDIA (CUDA)                   ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_PURPLE}[2]${RESET} Forza avvio Manager AMD (Vulkan / CPU Fallback)     ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}│${RESET}  ${BOLD}${C_WHITE}[3]${RESET} Esci                                                ${C_GRAY}│${RESET}"
-    echo -e "  ${C_GRAY}└────────────────────────────────────────────────────────┘${RESET}\n"
-    
-    read -p "  Scelta [1-3]: " force_choice
-    case $force_choice in
-        1)
-            pause_before_launch "manager.sh"
-            exec ./manager.sh
-            ;;
-        2)
-            pause_before_launch "manager-amd.sh"
-            exec ./manager-amd.sh
-            ;;
-        3)
-            echo -e "\n  ${C_GRAY}Uscita...${RESET}"
-            exit 0
-            ;;
-        *)
-            echo -e "\n  ${C_RED}Opzione non valida.${RESET}"
-            exit 1
-            ;;
-    esac
+    GPU_TYPE="CPU"
+    GPU_INFO="Nessuna GPU dedicata rilevata (Modalità CPU Nativa)"
+    TARGET_SCRIPT="${SCRIPT_DIR}/manager-cpu.sh"
 fi
+
+# Visualizzazione Risultati
+case $GPU_TYPE in
+    NVIDIA)
+        echo -e "  ${C_GREEN}✔ HARDWARE RILEVATO:${RESET} ${BOLD}${C_WHITE}GPU NVIDIA GEFORCE / QUADRO${RESET}"
+        echo -e "  ${C_GRAY}  Scheda :${RESET} ${GPU_INFO}"
+        echo -e "  ${C_GRAY}  Stack  :${RESET} ${C_CYAN}CUDA / TensorRT / llama.cpp / Unsloth${RESET}\n"
+        ;;
+    AMD)
+        echo -e "  ${C_GREEN}✔ HARDWARE RILEVATO:${RESET} ${BOLD}${C_WHITE}GPU AMD RADEON${RESET}"
+        echo -e "  ${C_GRAY}  Scheda :${RESET} ${GPU_INFO}"
+        echo -e "  ${C_GRAY}  Stack  :${RESET} ${C_CYAN}ROCm / Vulkan (RADV) / llama.cpp${RESET}\n"
+        ;;
+    CPU)
+        echo -e "  ${C_YELLOW}⚠ HARDWARE RILEVATO:${RESET} ${BOLD}${C_WHITE}ACCELERAZIONE CPU ONLY${RESET}"
+        echo -e "  ${C_GRAY}  Note   :${RESET} ${GPU_INFO}"
+        echo -e "  ${C_GRAY}  Stack  :${RESET} ${C_CYAN}OpenMP / AVX2 / AVX-512 / llama.cpp CPU${RESET}\n"
+        ;;
+esac
+
+# Verifica esistenza dello script target
+if [ ! -f "$TARGET_SCRIPT" ]; then
+    echo -e "  ${C_RED}✖ ERRORE ROUTING:${RESET} Impossibile trovare il controller ${C_WHITE}${TARGET_SCRIPT}${RESET}\n"
+    exit 1
+fi
+
+echo -e "  ${C_GRAY}────────────────────────────────────────────────────────────────────────${RESET}"
+echo -e "  ${BOLD}${C_YELLOW}➜ Premere un tasto per avviare il Controller ${GPU_TYPE}...${RESET}"
+echo -e "  ${C_GRAY}────────────────────────────────────────────────────────────────────────${RESET}\n"
+
+# Attesa pressione tasto obbligatoria (senza timeout)
+read -n 1 -s -r
+
+# Esecuzione del controller corrispondente
+exec bash "$TARGET_SCRIPT"
