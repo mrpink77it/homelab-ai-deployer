@@ -1,4 +1,4 @@
-# 🧪 Architettura & Guida Operativa Sandbox 
+# Architettura & Guida Operativa Sandbox 
 
 Questo documento fornisce una guida completa all'architettura, alla configurazione, al funzionamento dello script di gestione e alle procedure di test per l'ambiente **Sandbox** con il servizio **Code Runner API** (Porta 9000).
 
