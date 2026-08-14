@@ -222,7 +222,7 @@ Per l'inferenza e il fine-tuning con Unsloth o vLLM, assegna al container LXC/VM
 
 ## Requisiti di Sistema
 
-* **Sistema Operativo**: Debian 12 (Bookworm / Trixie) o Ubuntu 22.04 LTS / 24.04 LTS.
+* **Sistema Operativo**: Debian 13 (Trixie) o Ubuntu 24.04 LTS.
 * **Privilegi**: Accesso Root o utente con permessi `sudo`.
 * **Hardware GPU**: 
   * **NVIDIA:** GPU supportata da CUDA (consigliati almeno 8-12 GB VRAM).
