@@ -50,8 +50,15 @@ DEP_PACKAGES=(
     python3-dev
     python3-full
     libsqlite3-dev
-    libssl-dev
     libffi-dev
+
+    # --- Librerie per la compilazione di Python 3.11.13 da sorgente ---
+    zlib1g-dev
+    libncurses5-dev
+    libgdbm-dev
+    libnss3-dev
+    libssl-dev
+    libreadline-dev
 
     # --- Tool e Header Grafici GPU AMD (Vulkan) ---
     libvulkan-dev
@@ -82,7 +89,6 @@ DEP_PACKAGES=(
     # --- Web Search, Scraping & RAG Parsing ---
     libxml2-dev
     libxslt1-dev
-    zlib1g-dev
 )
 
 # Colori TUI
@@ -192,23 +198,56 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
+# Installazione Python 3.11.13 (Richiesto per Open WebUI su Debian 13)
+# ------------------------------------------------------------------------------
+install_python_311() {
+    if command -v python3.11 &>/dev/null; then
+        log_info "Python 3.11 è già installato nel sistema."
+        return
+    fi
+    
+    log_warn "Debian 13 utilizza Python 3.13. Compilazione di Python 3.11.13 da sorgente richiesta per Open WebUI..."
+    
+    cd /tmp
+    wget https://www.python.org/ftp/python/3.11.13/Python-3.11.13.tar.xz
+    tar xvf Python-3.11.13.tar.xz
+    cd Python-3.11.13
+    
+    # Configurazione e compilazione ottimizzata
+    ./configure --enable-optimizations --with-ensurepip=install
+    make -j "$(nproc)"
+    
+    # altinstall previene la sovrascrittura dell'eseguibile python3 di sistema
+    make altinstall
+    
+    # Pulizia
+    cd /tmp
+    rm -rf Python-3.11.13 Python-3.11.13.tar.xz
+    
+    log_info "Python 3.11.13 installato con successo."
+}
+
+# ------------------------------------------------------------------------------
 # Installazione & Configurazione Open WebUI Bare-Metal
 # ------------------------------------------------------------------------------
 install_open_webui_baremetal() {
-    log_info "Avvio installazione Open WebUI Bare-Metal (Python Virtual Environment)..."
+    log_info "Avvio installazione Open WebUI Bare-Metal..."
 
-    # 1. Creazione Virtualenv se non presente
+    # 0. Verifica e installazione di Python 3.11.13
+    install_python_311
+
+    # 1. Creazione Virtualenv se non presente (USANDO PYTHON 3.11)
     if [[ ! -d "${WEBUI_VENV}" ]]; then
-        log_info "Creazione Python Virtual Environment in ${WEBUI_VENV}..."
-        python3 -m venv "${WEBUI_VENV}"
+        log_info "Creazione Python Virtual Environment (3.11) in ${WEBUI_VENV}..."
+        python3.11 -m venv "${WEBUI_VENV}"
     fi
 
     # 2. Aggiornamento pip, setuptools, wheel e installazione open-webui
     log_info "Aggiornamento pip/setuptools e installazione pacchetto open-webui..."
-    "${WEBUI_VENV}/bin/pip" install --upgrade pip setuptools wheel -q
-    "${WEBUI_VENV}/bin/pip" install open-webui -q
+    "${WEBUI_VENV}/bin/python3.11" -m pip install --upgrade pip setuptools wheel -q
+    "${WEBUI_VENV}/bin/python3.11" -m pip install open-webui -q
 
-    log_info "Open WebUI e librerie collegate installate con successo."
+    log_info "Open WebUI e librerie collegate installate con successo tramite Python 3.11."
 
     # 3. Creazione Servizio Systemd per Open WebUI con Binding Automatico llama.cpp
     log_info "Configurazione file di servizio Systemd per Open WebUI (${WEBUI_SERVICE_NAME})..."
@@ -222,6 +261,7 @@ After=network.target ${SERVICE_NAME}.service
 Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
+Environment="PATH=${WEBUI_VENV}/bin:\$PATH"
 Environment="PORT=3000"
 Environment="WEBUI_PORT=3000"
 Environment="OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1"
@@ -248,7 +288,7 @@ EOF
 "Open WebUI è stato installato ed avviato con successo!\n\n\
 - Interfaccia Web UI : http://0.0.0.0:3000\n\
 - Backend Collegato  : http://127.0.0.1:8080/v1 (llama.cpp)\n\
-- Feature Attivate   : Sound, Talk, STT/TTS, OCR, Imaging, Video, Web Search\n\
+- Motore Python      : 3.11.13 (Venv)\n\
 - File Servizio      : ${WEBUI_SERVICE_FILE}\n\
 - Cartella Dati      : ${WEBUI_DATA_DIR}" 15 75
 }
