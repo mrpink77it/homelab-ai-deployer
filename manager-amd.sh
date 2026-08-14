@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager_amd.sh
-# Descrizione: Gestore deployment e ciclo di vita AI per GPU AMD
+# Descrizione: Gestore deployment, servizi systemd e ciclo di vita AI per GPU AMD
 # Ambienti: Bare-Metal & Proxmox LXC
 # ==============================================================================
 
@@ -13,8 +13,30 @@ set -euo pipefail
 LOG_FILE="/var/log/homelab-ai-amd.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
+MODELS_DIR="${INSTALL_DIR}/models"
 SERVICE_NAME="homelab-ai-backend"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 BACKEND_CONF="${INSTALL_DIR}/backend.conf"
+
+# Pacchetti installati dallo script per la gestione/compilazione
+DEP_PACKAGES=(
+    build-essential
+    cmake
+    git
+    curl
+    wget
+    pkg-config
+    libvulkan-dev
+    vulkan-tools
+    glslc
+    libshaderc-dev
+    glslang-tools
+    clinfo
+    pciutils
+    openssh-server
+    htop
+    whiptail
+)
 
 # Colori TUI
 RED='\033[0;31m'
@@ -63,6 +85,7 @@ detect_environment() {
 init_env() {
     mkdir -p "$(dirname "$LOG_FILE")"
     mkdir -p "${INSTALL_DIR}"
+    mkdir -p "${MODELS_DIR}"
     touch "${LOG_FILE}"
 }
 
@@ -72,26 +95,45 @@ init_env() {
 install_dependencies() {
     log_info "Verifica e installazione pacchetti di sistema..."
     apt-get update -qq
-    
-    apt-get install -y -qq \
-        build-essential \
-        cmake \
-        git \
-        curl \
-        wget \
-        pkg-config \
-        libvulkan-dev \
-        vulkan-tools \
-        glslc \
-        libshaderc-dev \
-        glslang-tools \
-        clinfo \
-        pciutils \
-        openssh-server \
-        htop \
-        whiptail
-
+    apt-get install -y -qq "${DEP_PACKAGES[@]}"
     log_info "Dipendenze base installate correttamente."
+}
+
+# ------------------------------------------------------------------------------
+# Configurazione e Avvio Automatico Systemd (al Boot e Post-Install)
+# ------------------------------------------------------------------------------
+auto_setup_systemd_service() {
+    log_info "Configurazione ed abilitazione automatica del servizio Systemd (${SERVICE_NAME})..."
+
+    local host="0.0.0.0"
+    local port="8080"
+    local model_path="${MODELS_DIR}/model.gguf"
+    local extra_args="-ngl 99 -c 2048"
+
+    cat <<EOF > "${SERVICE_FILE}"
+[Unit]
+Description=Homelab AI Backend Service (llama.cpp)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=${LLAMA_DIR}/build/bin/llama-server --host ${host} --port ${port} -m "${model_path}" ${extra_args}
+Restart=always
+RestartSec=5
+StandardOutput=append:${LOG_FILE}
+StandardError=append:${LOG_FILE}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable "${SERVICE_NAME}"
+    systemctl restart "${SERVICE_NAME}"
+    
+    log_info "Servizio ${SERVICE_NAME} abilitato al boot e avviato automaticamente."
 }
 
 # ------------------------------------------------------------------------------
@@ -157,6 +199,92 @@ compile_llama() {
     esac
 
     log_info "Compilazione completata con successo in ${LLAMA_DIR}/build"
+
+    # Configurazione e Avvio Automatico del servizio
+    auto_setup_systemd_service
+}
+
+# ------------------------------------------------------------------------------
+# Gestione Manuale Servizio Systemd (Personalizzazione Parametri)
+# ------------------------------------------------------------------------------
+custom_setup_systemd_service() {
+    log_info "Personalizzazione configurazione servizio Systemd (${SERVICE_NAME})..."
+
+    if [[ ! -f "${LLAMA_DIR}/build/bin/llama-server" ]]; then
+        whiptail --msgbox "Esegui prima la compilazione del backend (Opzione 2) per generare il binario llama-server!" 10 60
+        return
+    fi
+
+    local host port model_path extra_args
+    host=$(whiptail --inputbox "Host Bind per il server API:" 10 60 "0.0.0.0" 3>&1 1>&2 2>&3) || return
+    port=$(whiptail --inputbox "Porta per il server API:" 10 60 "8080" 3>&1 1>&2 2>&3) || return
+    model_path=$(whiptail --inputbox "Percorso assoluto al modello (.gguf):" 10 60 "${MODELS_DIR}/model.gguf" 3>&1 1>&2 2>&3) || return
+    extra_args=$(whiptail --inputbox "Argomenti extra (es: -ngl 99 -c 4096):" 10 60 "-ngl 99 -c 2048" 3>&1 1>&2 2>&3) || return
+
+    cat <<EOF > "${SERVICE_FILE}"
+[Unit]
+Description=Homelab AI Backend Service (llama.cpp)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=${LLAMA_DIR}/build/bin/llama-server --host ${host} --port ${port} -m "${model_path}" ${extra_args}
+Restart=always
+RestartSec=5
+StandardOutput=append:${LOG_FILE}
+StandardError=append:${LOG_FILE}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable "${SERVICE_NAME}"
+    systemctl restart "${SERVICE_NAME}"
+    log_info "Servizio ${SERVICE_NAME} aggiornato e riavviato."
+    whiptail --msgbox "Servizio aggiornato e riavviato con successo!" 8 50
+}
+
+manage_service_menu() {
+    while true; do
+        local choice
+        choice=$(whiptail --title "Gestione Servizio Systemd" \
+            --menu "\nSeleziona un'azione per ${SERVICE_NAME}:" 18 78 6 \
+            "1" "Personalizza Parametri Servizio (Porta, Modello, Argomenti)" \
+            "2" "Riavvia Servizio" \
+            "3" "Arresta Servizio" \
+            "4" "Visualizza Stato Dettagliato (systemctl)" \
+            "5" "Visualizza Log in Tempo Reale (journalctl)" \
+            "6" "Torna al Menu Principale" \
+            3>&1 1>&2 2>&3)
+
+        case "$choice" in
+            1) custom_setup_systemd_service ;;
+            2) 
+                systemctl restart "${SERVICE_NAME}"
+                log_info "Servizio ${SERVICE_NAME} riavviato."
+                whiptail --msgbox "Servizio riavviato!" 8 40
+                ;;
+            3) 
+                systemctl stop "${SERVICE_NAME}"
+                log_info "Servizio ${SERVICE_NAME} arrestato."
+                whiptail --msgbox "Servizio arrestato!" 8 40
+                ;;
+            4) 
+                clear
+                systemctl status "${SERVICE_NAME}" || true
+                read -rp "Premere invio per tornare al menu..."
+                ;;
+            5) 
+                clear
+                journalctl -u "${SERVICE_NAME}" -n 100 -f
+                ;;
+            6) break ;;
+            *) break ;;
+        esac
+    done
 }
 
 # ------------------------------------------------------------------------------
@@ -189,7 +317,7 @@ check_hardware_status() {
 
     echo -e "${YELLOW}[Servizio AI Systemd]${NC}"
     if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
-        echo -e "Stato: ${GREEN}ATTIVO${NC}"
+        echo -e "Stato: ${GREEN}ATTIVO (Running - Abilitato al boot)${NC}"
     else
         echo -e "Stato: ${RED}INATTIVO / NON CONFIGURATO${NC}"
     fi
@@ -261,15 +389,38 @@ clean_system_cache() {
 }
 
 # ------------------------------------------------------------------------------
-# Disinstallazione e Pulizia Completa
+# Disinstallazione e Pulizia Completa (Servizi, File, Dipendenze APT)
 # ------------------------------------------------------------------------------
 uninstall_environment() {
-    if whiptail --title "Conferma Rimozione" --yesno "Sei sicuro di voler rimuovere completamente l'ambiente Homelab-AI e llama.cpp?" 10 60; then
-        log_warn "Rimozione in corso..."
-        systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
-        systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
+    if whiptail --title "Conferma Rimozione Completa" --yesno "Sei sicuro di voler disinstallare completamente l'ambiente?\n\n- Arresto e rimozione servizio Systemd\n- Rimozione directory ${INSTALL_DIR}\n- Rimozione dei file di log" 12 70; then
+        
+        log_warn "Avvio disinstallazione..."
+
+        # 1. Arresto e rimozione servizio Systemd
+        if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null || [[ -f "${SERVICE_FILE}" ]]; then
+            log_info "Arresto e rimozione servizio Systemd..."
+            systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+            systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
+            rm -f "${SERVICE_FILE}"
+            systemctl daemon-reload
+        fi
+
+        # 2. Rimozione cartelle installazione e file temporanei
+        log_info "Rimozione cartelle e log..."
         rm -rf "${INSTALL_DIR}"
-        log_info "Ambiente rimosso con successo."
+        rm -rf /root/.cache/vulkan /root/.cache/AMD
+
+        # 3. Pulizia opzionale delle dipendenze APT di sistema
+        if whiptail --title "Rimozione Dipendenze di Sistema" --yesno "Vuoi rimuovere anche le dipendenze di pacchetto (build-essential, cmake, libvulkan-dev, ecc.) installate per questo progetto?" 12 70; then
+            log_info "Rimozione pacchetti APT di sviluppo..."
+            apt-get purge -y "${DEP_PACKAGES[@]}" || true
+            apt-get autoremove --purge -y
+            apt-get clean -y
+        fi
+
+        log_info "Ambiente disinstallato completamente."
+        whiptail --msgbox "Disinstallazione e pulizia completate con successo." 10 60
+        exit 0
     fi
 }
 
@@ -280,27 +431,28 @@ main_menu() {
     while true; do
         local choice
         choice=$(whiptail --title "Homelab AI - AMD Management Console" \
-            --menu "\nAmbiente Rilevato: $(detect_environment)\nScegli un'operazione:" 20 78 8 \
+            --menu "\nAmbiente Rilevato: $(detect_environment)\nScegli un'operazione:" 21 78 9 \
             "1" "Verifica Stato Hardware e Servizi" \
             "2" "Seleziona/Compila Backend (ROCm / Vulkan)" \
-            "3" "Configura Nodo SSH Sandbox" \
-            "4" "Aggiorna Componenti (llama.cpp)" \
-            "5" "Visualizza Log di Sistema" \
-            "6" "Pulizia Cache e File Temporanei" \
-            "7" "Disinstalla Ambiente AI" \
-            "8" "Esci" \
+            "3" "Gestisci Servizio Systemd (Personalizza/Monitora)" \
+            "4" "Configura Nodo SSH Sandbox" \
+            "5" "Aggiorna Componenti (llama.cpp)" \
+            "6" "Visualizza Log di Sistema" \
+            "7" "Pulizia Cache e File Temporanei" \
+            "8" "Disinstalla Ambiente e Dipendenze" \
+            "9" "Esci" \
             3>&1 1>&2 2>&3)
 
         case "$choice" in
             1) check_hardware_status ;;
             2) select_backend ;;
-            3) setup_sandbox_ssh ;;
-            4) update_components ;;
-            5) clear; tail -n 50 "${LOG_FILE}"; read -rp "Premere invio per continuare..." ;;
-            6) clean_system_cache ;;
-            7) uninstall_environment ;;
-            8) echo -e "${GREEN}Uscita.${NC}"; break ;;
-            *) break ;;
+            3) manage_service_menu ;;
+            4) setup_sandbox_ssh ;;
+            5) update_components ;;
+            6) clear; tail -n 50 "${LOG_FILE}"; read -rp "Premere invio per continuare..." ;;
+            7) clean_system_cache ;;
+            8) uninstall_environment ;;
+            9) echo -e "${GREEN}Uscita.${NC}"; break ;;
         esac
     done
 }
