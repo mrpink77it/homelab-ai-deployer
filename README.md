@@ -233,9 +233,20 @@ Per l'inferenza e il fine-tuning con Unsloth o vLLM, assegna al container LXC/VM
 
 ---
 
+## ⚠️ Disclaimer
+
+Tutti gli script sono forniti "così come sono" (AS IS). Sebbene siano utilizzati e testati regolarmente nel mio ambiente, **sei caldamente invitato a leggere e comprendere il codice sorgente** prima di eseguirlo sui tuoi server, specialmente se in produzione. Non mi assumo alcuna responsabilità per eventuali malfunzionamenti o perdite di dati.
+
+## 📄 Licenza
+
+Questo progetto è distribuito sotto licenza **MIT**. Sei libero di utilizzare, modificare e distribuire il codice, anche per scopi commerciali, mantenendo l'attribuzione originale.
+
+---
+
 ## Struttura della Repository
 
 ```text
+
 homelab-ai-deployer/
 ├── README.md                 # Documentazione generale e guida rapida
 ├── main.sh                   # Router principale per il rilevamento hardware (NVIDIA/AMD)
@@ -248,13 +259,3 @@ homelab-ai-deployer/
 ├── sandbox_setup.sh          # Script di setup interno alla Sandbox (UTF-8, SSH, Python)
 └── setup_jupyter.sh          # Script di installazione, verifica e gestione per JupyterLab
 
-## ⚠️ Disclaimer
-
-Tutti gli script sono forniti "così come sono" (AS IS). Sebbene siano utilizzati e testati regolarmente nel mio ambiente, **sei caldamente invitato a leggere e comprendere il codice sorgente** prima di eseguirlo sui tuoi server, specialmente se in produzione. Non mi assumo alcuna responsabilità per eventuali malfunzionamenti o perdite di dati.
-
-## 📄 Licenza
-
-Questo progetto è distribuito sotto licenza **MIT**. Sei libero di utilizzare, modificare e distribuire il codice, anche per scopi commerciali, mantenendo l'attribuzione originale.
-
----
-*Creato e mantenuto da [mrpink77it](https://github.com/mrpink77it)*
