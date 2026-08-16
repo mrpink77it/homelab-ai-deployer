@@ -76,12 +76,10 @@ install_dependencies() {
         build-essential cmake git curl wget pkg-config pciutils gnupg \
         libvulkan-dev vulkan-tools python3 python3-pip python3-venv python3-dev whiptail || true
     
-    log_info "Verifica conflitti con pacchetti ROCm di sistema (obsoleti)..."
-    if dpkg -l | grep -qE "hipcc|rocm-dev|libhip-dev"; then
-        log_warn "Rilevata versione di sistema di ROCm non compatibile. Pulizia profonda..."
-        apt-get remove --purge -y hipcc rocm-dev rocm-cmake rocm-core libamdhip64-dev libhip-dev >/dev/null 2>&1 || true
-        apt-get autoremove -y >/dev/null 2>&1 || true
-    fi
+    log_info "Verifica e pulizia conflitti con pacchetti ROCm nativi di Ubuntu 24.04..."
+    # Rimuoviamo in modo aggressivo qualsiasi libreria ROCm di sistema che può causare conflitto
+    apt-get remove --purge -y hipcc rocminfo "rocm-*" "libhip*" "libamdhip*" >/dev/null 2>&1 || true
+    apt-get autoremove -y >/dev/null 2>&1 || true
 }
 
 get_amd_gpu_profile() {
@@ -109,27 +107,31 @@ get_amd_gpu_profile() {
 }
 
 # ------------------------------------------------------------------------------
-# Auto-Riparazione Toolchain ROCm (Brute-Force)
+# Auto-Riparazione Toolchain ROCm (Brute-Force con Pinning APT)
 # ------------------------------------------------------------------------------
 ensure_hipcc_toolchain() {
     local HIPCC_BIN="/opt/rocm/bin/hipcc"
     if [[ ! -x "$HIPCC_BIN" ]]; then
         log_warn "Compilatore hipcc non trovato. Iniezione forzata repository AMD ROCm 6.2..."
         
-        # Bypassiamo amdgpu-install e registriamo i repo a mano
+        # Registriamo i repo ufficiali di AMD
         mkdir -p /etc/apt/keyrings
         wget -q -O - https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/rocm.gpg
         
         echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.2 noble main" > /etc/apt/sources.list.d/rocm.list
         echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/amdgpu/6.2/ubuntu noble main" > /etc/apt/sources.list.d/amdgpu.list
         
-        # Diamo priorità ai pacchetti AMD ufficiali
-        echo -e "Package: *\nPin: release o=repo.radeon.com\nPin-Priority: 600" > /etc/apt/preferences.d/rocm-pin-600
+        # ANTI-DEPENDENCY HELL: Forza apt a preferire SEMPRE i pacchetti AMD rispetto a quelli di Ubuntu 24.04
+        cat <<EOF > /etc/apt/preferences.d/99-rocm-amd
+Package: *
+Pin: origin repo.radeon.com
+Pin-Priority: 1001
+EOF
         
         export DEBIAN_FRONTEND=noninteractive
         apt-get update || true
         
-        log_info "Installazione toolchain HIP/ROCm..."
+        log_info "Installazione toolchain HIP/ROCm ufficiale AMD..."
         apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" rocm-dev rocm-hip-sdk || true
         
         if [[ ! -x "$HIPCC_BIN" ]]; then
