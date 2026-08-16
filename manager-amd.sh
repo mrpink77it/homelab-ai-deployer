@@ -188,7 +188,7 @@ compile_llama() {
             local ROCM_PREFIX="/opt/rocm"
             local ROCM_CLANG="${ROCM_PREFIX}/llvm/bin/clang"
             local ROCM_CLANGXX="${ROCM_PREFIX}/llvm/bin/clang++"
-            local CMAKE_ROCM_FLAGS="-DGGML_HIP=ON -DAMDGPU_TARGETS=${target} -DROCM_PATH=${ROCM_PREFIX} -DCMAKE_PREFIX_PATH=${ROCM_PREFIX}/lib/cmake:${ROCM_PREFIX}/lib/x86_64-linux-gnu/cmake"
+            local CMAKE_ROCM_FLAGS="-DGGML_HIP=ON -DAMDGPU_TARGETS=${target} -DROCM_PATH=${ROCM_PREFIX} -DCMAKE_PREFIX_PATH=${ROCM_PREFIX}/lib/cmake:${ROCM_PREFIX}/lib/x86_64-linux-gnu/cmake -DCMAKE_C_FLAGS=-Wno-pedantic -DCMAKE_CXX_FLAGS=-Wno-pedantic"
             
             export PATH="${ROCM_PREFIX}/bin:${ROCM_PREFIX}/llvm/bin:${PATH}"
             export CC="${ROCM_CLANG}"
