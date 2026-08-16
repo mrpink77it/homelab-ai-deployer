@@ -76,7 +76,7 @@ install_dependencies() {
     apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" \
         build-essential cmake git curl wget pkg-config pciutils gnupg \
         libvulkan-dev vulkan-tools python3 python3-pip python3-venv python3-dev whiptail \
-        libffi-dev libssl-dev || true
+        libffi-dev libssl-dev libomp-dev || true
     
     log_info "Verifica e pulizia conflitti con pacchetti ROCm nativi..."
     apt-get remove --purge -y hipcc rocminfo "rocm-*" "libhip*" "libamdhip*" >/dev/null 2>&1 || true
@@ -168,7 +168,7 @@ compile_llama() {
     rm -rf ~/.cache/ccache 2>/dev/null || true
     hash -r
 
-    local gpu_profile target override env_override=""
+    local gpu_profile target override
     gpu_profile=$(get_amd_gpu_profile)
     target=$(echo "$gpu_profile" | cut -d'|' -f1)
     override=$(echo "$gpu_profile" | cut -d'|' -f2)
@@ -197,7 +197,6 @@ compile_llama() {
             if [[ "${type}" == "rocm_exp" && -n "${override}" ]]; then
                 log_warn "Iniezione Hack di compatibilità: HSA_OVERRIDE_GFX_VERSION=${override}"
                 export HSA_OVERRIDE_GFX_VERSION="${override}"
-                env_override="Environment=\"HSA_OVERRIDE_GFX_VERSION=${override}\""
             fi
             
             cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" ${CMAKE_ROCM_FLAGS}
@@ -206,14 +205,26 @@ compile_llama() {
     esac
 
     log_info "Compilazione completata con successo."
-    auto_setup_systemd_service "${env_override}"
+    auto_setup_systemd_service "${type}" "${override}"
 }
 
 auto_setup_systemd_service() {
-    local env_override="$1"
+    local type="$1"
+    local override="$2"
     local host="0.0.0.0"
     local port="8080"
     local model_path="${MODELS_DIR}/model.gguf"
+
+    local env_directives=""
+    if [[ "${type}" == "rocm" || "${type}" == "rocm_exp" ]]; then
+        env_directives="Environment=\"PATH=/opt/rocm/bin:/opt/rocm/llvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
+        env_directives+=$'\n'
+        env_directives+="Environment=\"LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64\""
+        if [[ -n "${override}" ]]; then
+            env_directives+=$'\n'
+            env_directives+="Environment=\"HSA_OVERRIDE_GFX_VERSION=${override}\""
+        fi
+    fi
 
     cat <<EOF > "${SERVICE_FILE}"
 [Unit]
@@ -224,7 +235,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
-${env_override}
+${env_directives}
 ExecStart=${LLAMA_DIR}/build/bin/llama-server --host ${host} --port ${port} -m "${model_path}" -ngl 99
 Restart=always
 RestartSec=5
@@ -238,7 +249,7 @@ EOF
     systemctl daemon-reload
     systemctl enable "${SERVICE_NAME}"
     systemctl restart "${SERVICE_NAME}" || true
-    log_info "Servizio ${SERVICE_NAME} configurato e avviato."
+    log_info "Servizio ${SERVICE_NAME} configurato con variabili d'ambiente ROCm e avviato."
 }
 
 # ------------------------------------------------------------------------------
