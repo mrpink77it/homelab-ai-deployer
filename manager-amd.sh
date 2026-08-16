@@ -60,13 +60,6 @@ DEP_PACKAGES=(
     libssl-dev
     libreadline-dev
 
-    # --- ROCm / HIP Stack per AMD ---
-    rocm-dev
-    rocminfo
-    librocblas-dev
-    libhipblas-dev
-    hipcc
-
     # --- Tool e Header Grafici GPU AMD (Vulkan) ---
     libvulkan-dev
     vulkan-tools
@@ -96,6 +89,13 @@ DEP_PACKAGES=(
     # --- Web Search, Scraping & RAG Parsing ---
     libxml2-dev
     libxslt1-dev
+)
+
+ROCM_PACKAGES=(
+    rocminfo
+    librocblas-dev
+    libhipblas-dev
+    hipcc
 )
 
 # Colori TUI
@@ -154,10 +154,18 @@ init_env() {
 # Installazione Dipendenze
 # ------------------------------------------------------------------------------
 install_dependencies() {
-    log_info "Verifica e installazione pacchetti di sistema (incluso stack ROCm)..."
+    log_info "Verifica e installazione pacchetti di sistema essenziali (Vulkan, Python, Build Tools)..."
     apt-get update -qq
     apt-get install -y -qq "${DEP_PACKAGES[@]}"
-    log_info "Dipendenze di sistema installate correttamente."
+    log_info "Dipendenze di base installate correttamente."
+
+    log_info "Tentativo di installazione dello stack ROCm/HIP (opzionale per Vulkan)..."
+    if apt-get install -y -qq "${ROCM_PACKAGES[@]}" 2>/dev/null; then
+        log_info "Stack ROCm installato con successo."
+    else
+        log_warn "Alcuni pacchetti ROCm non sono disponibili nei repository di sistema standard."
+        log_warn "Il backend Vulkan (raccomandato per RX 5000/6000) funzionerà regolarmente senza ROCm."
+    fi
 }
 
 # ------------------------------------------------------------------------------
