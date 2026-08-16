@@ -67,9 +67,14 @@ init_env() {
 # Installazione Stack Sistema
 # ------------------------------------------------------------------------------
 install_dependencies() {
+    # Forza apt e dpkg a non fare domande interattive all'utente
+    export DEBIAN_FRONTEND=noninteractive
+    export APT_LISTCHANGES_FRONTEND=none
+
     log_info "Verifica pacchetti base di sistema..."
     apt-get update || true
-    apt-get install -y build-essential cmake git curl wget pkg-config pciutils \
+    apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" \
+        build-essential cmake git curl wget pkg-config pciutils \
         libvulkan-dev vulkan-tools python3 python3-pip python3-venv python3-dev whiptail || true
     
     log_info "Verifica conflitti con pacchetti ROCm di sistema (obsoleti)..."
@@ -79,20 +84,21 @@ install_dependencies() {
         apt-get autoremove -y >/dev/null 2>&1 || true
     fi
 
-    # Verifichiamo se ROCm 6.1+ è già installato
     if [[ ! -x "/opt/rocm/bin/hipcc" ]]; then
         log_warn "ROCm ufficiale non rilevato. Rilevamento disponibilità per Ubuntu 24.04..."
         
-        # Test di connessione per la versione corretta di Noble (6.2/6.1.3). 
-        # Se fallisce, evoca un fallback pulito verso Vulkan per evitare Dependency Hell.
         local ROCM_URL="https://repo.radeon.com/amdgpu-install/6.2/ubuntu/noble/amdgpu-install_6.2.60200-1_all.deb"
         
         if wget --spider -q "${ROCM_URL}"; then
             log_info "Scaricamento installer repository AMD..."
             wget -q "${ROCM_URL}" -O /tmp/amdgpu-install.deb
-            dpkg -i /tmp/amdgpu-install.deb || apt-get install -f -y || true
+            
+            # Installazione forzata e silenziosa del pacchetto AMD
+            dpkg --force-confdef --force-confnew -i /tmp/amdgpu-install.deb || \
+            apt-get install -f -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" || true
+            
             apt-get update || true
-            amdgpu-install -y --usecase=rocm,hiplibsdk --no-dkms || log_warn "Installazione ROCm completata con avvisi."
+            amdgpu-install -y --usecase=rocm,hiplibsdk --no-dkms --accept-eula || log_warn "Installazione ROCm completata con avvisi."
         else
             log_warn "Pacchetti ROCm ufficiali AMD per questa distro non raggiungibili."
             log_warn "NESSUN PROBLEMA: L'hardware rilevato è RDNA1. È ALTAMENTE RACCOMANDATO il backend VULKAN."
