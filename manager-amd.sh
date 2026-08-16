@@ -60,6 +60,13 @@ DEP_PACKAGES=(
     libssl-dev
     libreadline-dev
 
+    # --- ROCm / HIP Stack per AMD ---
+    rocm-dev
+    rocminfo
+    librocblas-dev
+    libhipblas-dev
+    hipcc
+
     # --- Tool e Header Grafici GPU AMD (Vulkan) ---
     libvulkan-dev
     vulkan-tools
@@ -147,7 +154,7 @@ init_env() {
 # Installazione Dipendenze
 # ------------------------------------------------------------------------------
 install_dependencies() {
-    log_info "Verifica e installazione pacchetti di sistema e librerie multimediali..."
+    log_info "Verifica e installazione pacchetti di sistema (incluso stack ROCm)..."
     apt-get update -qq
     apt-get install -y -qq "${DEP_PACKAGES[@]}"
     log_info "Dipendenze di sistema installate correttamente."
@@ -374,8 +381,11 @@ select_backend() {
 
 compile_llama() {
     local type="$1"
-    log_info "Clonazione / Aggiornamento repository llama.cpp..."
     
+    log_info "Arresto preventivo del backend per liberare la porta 8080..."
+    systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+    
+    log_info "Clonazione / Aggiornamento repository llama.cpp..."
     if [[ ! -d "${LLAMA_DIR}" ]]; then
         git clone https://github.com/ggerganov/llama.cpp.git "${LLAMA_DIR}"
     else
@@ -391,11 +401,11 @@ compile_llama() {
             cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
             ;;
         "rocm")
-            cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_HIPBLAS=ON -DAMDGPU_TARGETS=gfx900,gfx906,gfx908,gfx1030,gfx1100
+            cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx900,gfx906,gfx908,gfx1030,gfx1100
             cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
             ;;
         "rocm_exp")
-            HSA_OVERRIDE_GFX_VERSION=10.3.0 cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_HIPBLAS=ON -DAMDGPU_TARGETS=gfx1030
+            HSA_OVERRIDE_GFX_VERSION=10.3.0 cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1030
             HSA_OVERRIDE_GFX_VERSION=10.3.0 cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
             ;;
     esac
