@@ -66,7 +66,7 @@ init_env() {
 }
 
 # ------------------------------------------------------------------------------
-# Installazione Stack Sistema e ROCm
+# Installazione Stack Sistema e Risoluzione Conflitti ROCm
 # ------------------------------------------------------------------------------
 install_dependencies() {
     log_info "Verifica pacchetti base di sistema..."
@@ -74,17 +74,27 @@ install_dependencies() {
     apt-get install -y -qq build-essential cmake git curl wget pkg-config pciutils \
         libvulkan-dev vulkan-tools python3 python3-pip python3-venv python3-dev whiptail
     
-    if ! command -v hipcc &>/dev/null; then
-        log_warn "Compilatore hipcc non trovato. Avvio integrazione repository AMD..."
+    # 1. Rilevamento e rimozione pacchetti ROCm nativi/obsoleti
+    log_info "Verifica conflitti con pacchetti ROCm di sistema (obsoleti)..."
+    if dpkg -l | grep -qE "hipcc|rocm-dev|libhip-dev"; then
+        log_warn "Rilevata versione di sistema di ROCm non compatibile. Avvio pulizia profonda..."
+        apt-get remove --purge -y hipcc rocm-dev rocm-cmake rocm-core libamdhip64-dev libhip-dev >/dev/null 2>&1 || true
+        apt-get autoremove -y >/dev/null 2>&1 || true
+        log_info "Pulizia vecchi pacchetti completata."
+    fi
+
+    # 2. Controllo e installazione Stack ROCm Ufficiale (V6.1+)
+    if [[ ! -x "/opt/rocm/bin/hipcc" ]]; then
+        log_warn "Compilatore hipcc ufficiale AMD non trovato in /opt/rocm. Avvio integrazione repository..."
         local amd_deb="/tmp/amdgpu-install.deb"
         wget -q "https://repo.radeon.com/amdgpu-install/6.1.2/ubuntu/noble/amdgpu-install_6.1.60102-1_all.deb" -O "${amd_deb}"
         dpkg -i "${amd_deb}" || apt-get install -f -y
         apt-get update -qq
         
-        log_info "Installazione toolchain hiplibsdk e rocm..."
+        log_info "Installazione toolchain hiplibsdk e rocm 6.1+..."
         amdgpu-install -y --usecase=rocm,hiplibsdk --no-dkms || log_warn "Procedura completata con avvisi (normale per hw legacy)."
     else
-        log_info "Stack ROCm già rilevato nel sistema."
+        log_info "Stack ROCm ufficiale già rilevato in /opt/rocm."
     fi
 }
 
@@ -126,7 +136,10 @@ compile_llama() {
         git -C "${LLAMA_DIR}" pull
     fi
 
+    log_info "Pulizia profonda cache di compilazione..."
     rm -rf "${LLAMA_DIR}/build"
+    rm -rf ~/.cache/ccache 2>/dev/null || true
+    hash -r # Resetta la cache dei path eseguibili di Bash
 
     local gpu_profile target override env_override=""
     gpu_profile=$(get_amd_gpu_profile)
@@ -136,28 +149,15 @@ compile_llama() {
     log_info "Avvio compilazione llama.cpp (Backend: ${type})..."
     
     # --- RILEVAMENTO DINAMICO ROCM E FIX CMAKE MULTIARCH ---
-    local HIPCC_BIN
-    HIPCC_BIN=$(command -v hipcc || true)
+    local HIPCC_BIN="/opt/rocm/bin/hipcc"
     
-    if [[ -z "$HIPCC_BIN" ]]; then
-        log_err "Errore: hipcc non trovato. L'installazione ROCm è assente."
+    if [[ ! -x "$HIPCC_BIN" ]]; then
+        log_err "Errore: hipcc non trovato in /opt/rocm/bin/hipcc. L'installazione ROCm ha fallito."
         return 1
     fi
     
-    local ROCM_PREFIX
-    ROCM_PREFIX=$(dirname $(dirname "$HIPCC_BIN"))
+    local ROCM_PREFIX="/opt/rocm"
     
-    # Fix per Ubuntu/Debian: Collegamento simbolico per i moduli CMake multiarch
-    if [[ "$ROCM_PREFIX" == "/usr" ]]; then
-        log_warn "Rilevato stack ROCm nativo in /usr. Applicazione fix symlink per i path CMake..."
-        mkdir -p /usr/lib/cmake
-        for cmake_dir in hip-lang AMDDeviceLibs amd_comgr; do
-            if [[ ! -e "/usr/lib/cmake/${cmake_dir}" ]] && [[ -d "/usr/lib/x86_64-linux-gnu/cmake/${cmake_dir}" ]]; then
-                ln -s "/usr/lib/x86_64-linux-gnu/cmake/${cmake_dir}" "/usr/lib/cmake/${cmake_dir}"
-            fi
-        done
-    fi
-
     local CMAKE_ROCM_FLAGS="-DGGML_HIP=ON -DAMDGPU_TARGETS=${target} -DROCM_PATH=${ROCM_PREFIX} -DCMAKE_PREFIX_PATH=${ROCM_PREFIX}/lib/cmake:${ROCM_PREFIX}/lib/x86_64-linux-gnu/cmake"
 
     case "${type}" in
