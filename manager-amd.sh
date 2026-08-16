@@ -154,10 +154,11 @@ compile_llama() {
         git -C "${LLAMA_DIR}" pull
     fi
 
-    # Iniezione patch di compatibilità ROCm 6.2 per il tipo FP8 mancante
+    # Iniezione patch di compatibilità ROCm 6.2 / fallback per architetture senza FP8 nativo (es. gfx1030)
     if [[ -f "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" ]]; then
-        log_info "Applicazione patch compatibilità ROCm FP8..."
-        sed -i '/#include <hip\/hip_fp16.h>/a #include <hip\/hip_fp8.h>' "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" || true
+        log_info "Applicazione patch di compatibilità ROCm FP8 e fallback tipi..."
+        sed -i 's/typedef __hip_fp8_e4m3 __nv_fp8_e4m3;/typedef uint8_t __nv_fp8_e4m3;/g' "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" || true
+        sed -i 's/typedef __hip_fp8_e5m2 __nv_fp8_e5m2;/typedef uint8_t __nv_fp8_e5m2;/g' "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" || true
     fi
 
     log_info "Pulizia profonda cache di compilazione..."
