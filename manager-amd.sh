@@ -77,7 +77,6 @@ install_dependencies() {
         libvulkan-dev vulkan-tools python3 python3-pip python3-venv python3-dev whiptail || true
     
     log_info "Verifica e pulizia conflitti con pacchetti ROCm nativi di Ubuntu 24.04..."
-    # Rimuoviamo in modo aggressivo qualsiasi libreria ROCm di sistema che può causare conflitto
     apt-get remove --purge -y hipcc rocminfo "rocm-*" "libhip*" "libamdhip*" >/dev/null 2>&1 || true
     apt-get autoremove -y >/dev/null 2>&1 || true
 }
@@ -114,14 +113,12 @@ ensure_hipcc_toolchain() {
     if [[ ! -x "$HIPCC_BIN" ]]; then
         log_warn "Compilatore hipcc non trovato. Iniezione forzata repository AMD ROCm 6.2..."
         
-        # Registriamo i repo ufficiali di AMD
         mkdir -p /etc/apt/keyrings
         wget -q -O - https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/rocm.gpg
         
         echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.2 noble main" > /etc/apt/sources.list.d/rocm.list
         echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/amdgpu/6.2/ubuntu noble main" > /etc/apt/sources.list.d/amdgpu.list
         
-        # ANTI-DEPENDENCY HELL: Forza apt a preferire SEMPRE i pacchetti AMD rispetto a quelli di Ubuntu 24.04
         cat <<EOF > /etc/apt/preferences.d/99-rocm-amd
 Package: *
 Pin: origin repo.radeon.com
@@ -157,6 +154,12 @@ compile_llama() {
         git -C "${LLAMA_DIR}" pull
     fi
 
+    # Iniezione patch di compatibilità ROCm 6.2 per il tipo FP8 mancante
+    if [[ -f "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" ]]; then
+        log_info "Applicazione patch compatibilità ROCm FP8..."
+        sed -i '/#include <hip\/hip_fp16.h>/a #include <hip\/hip_fp8.h>' "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" || true
+    fi
+
     log_info "Pulizia profonda cache di compilazione..."
     rm -rf "${LLAMA_DIR}/build"
     rm -rf ~/.cache/ccache 2>/dev/null || true
@@ -187,8 +190,6 @@ compile_llama() {
             
             local CMAKE_ROCM_FLAGS="-DGGML_HIP=ON -DAMDGPU_TARGETS=${target} -DROCM_PATH=${ROCM_PREFIX} -DCMAKE_PREFIX_PATH=${ROCM_PREFIX}/lib/cmake:${ROCM_PREFIX}/lib/x86_64-linux-gnu/cmake"
             
-            # ANTI-MISMATCH: Forziamo l'uso del compilatore LLVM/Clang di ROCm sia per C che per C++
-            # Risolve l'errore "-Wunreachable-code-break" generato da GCC
             export PATH="${ROCM_PREFIX}/bin:${ROCM_PREFIX}/llvm/bin:${PATH}"
             export CC="${ROCM_CLANG}"
             export CXX="${ROCM_CLANGXX}"
