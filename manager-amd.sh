@@ -73,7 +73,7 @@ install_dependencies() {
     log_info "Verifica pacchetti base di sistema..."
     apt-get update || true
     apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" \
-        build-essential cmake git curl wget pkg-config pciutils \
+        build-essential cmake git curl wget pkg-config pciutils gnupg \
         libvulkan-dev vulkan-tools python3 python3-pip python3-venv python3-dev whiptail || true
     
     log_info "Verifica conflitti con pacchetti ROCm di sistema (obsoleti)..."
@@ -81,26 +81,6 @@ install_dependencies() {
         log_warn "Rilevata versione di sistema di ROCm non compatibile. Pulizia profonda..."
         apt-get remove --purge -y hipcc rocm-dev rocm-cmake rocm-core libamdhip64-dev libhip-dev >/dev/null 2>&1 || true
         apt-get autoremove -y >/dev/null 2>&1 || true
-    fi
-
-    if [[ ! -x "/opt/rocm/bin/hipcc" ]]; then
-        log_warn "ROCm ufficiale parziale o assente. Rilevamento disponibilità per Ubuntu 24.04..."
-        
-        local ROCM_URL="https://repo.radeon.com/amdgpu-install/6.2/ubuntu/noble/amdgpu-install_6.2.60200-1_all.deb"
-        
-        if wget --spider -q "${ROCM_URL}"; then
-            log_info "Scaricamento e configurazione installer repository AMD..."
-            wget -q "${ROCM_URL}" -O /tmp/amdgpu-install.deb
-            
-            dpkg --force-confdef --force-confnew -i /tmp/amdgpu-install.deb || \
-            apt-get install -f -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" || true
-            
-            apt-get update || true
-            log_info "Installazione stack base AMD ROCm..."
-            amdgpu-install -y --usecase=rocm,hiplibsdk --no-dkms --accept-eula || true
-        fi
-    else
-        log_info "Stack ROCm ufficiale base già rilevato."
     fi
 }
 
@@ -129,18 +109,31 @@ get_amd_gpu_profile() {
 }
 
 # ------------------------------------------------------------------------------
-# Auto-Riparazione Toolchain ROCm
+# Auto-Riparazione Toolchain ROCm (Brute-Force)
 # ------------------------------------------------------------------------------
 ensure_hipcc_toolchain() {
     local HIPCC_BIN="/opt/rocm/bin/hipcc"
     if [[ ! -x "$HIPCC_BIN" ]]; then
-        log_warn "Compilatore hipcc non trovato. Avvio auto-riparazione del toolchain ROCm..."
+        log_warn "Compilatore hipcc non trovato. Iniezione forzata repository AMD ROCm 6.2..."
+        
+        # Bypassiamo amdgpu-install e registriamo i repo a mano
+        mkdir -p /etc/apt/keyrings
+        wget -q -O - https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/rocm.gpg
+        
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.2 noble main" > /etc/apt/sources.list.d/rocm.list
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/amdgpu/6.2/ubuntu noble main" > /etc/apt/sources.list.d/amdgpu.list
+        
+        # Diamo priorità ai pacchetti AMD ufficiali
+        echo -e "Package: *\nPin: release o=repo.radeon.com\nPin-Priority: 600" > /etc/apt/preferences.d/rocm-pin-600
+        
         export DEBIAN_FRONTEND=noninteractive
         apt-get update || true
-        apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" rocm-dev rocm-hip-sdk hipcc || true
+        
+        log_info "Installazione toolchain HIP/ROCm..."
+        apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" rocm-dev rocm-hip-sdk || true
         
         if [[ ! -x "$HIPCC_BIN" ]]; then
-            log_err "Auto-riparazione fallita. Impossibile installare il compilatore ROCm."
+            log_err "Auto-riparazione fallita. Repository non raggiungibili o pacchetti inesistenti."
             return 1
         fi
         log_info "Auto-riparazione completata: hipcc installato con successo."
