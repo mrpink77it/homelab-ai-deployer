@@ -67,7 +67,6 @@ init_env() {
 # Installazione Stack Sistema
 # ------------------------------------------------------------------------------
 install_dependencies() {
-    # Forza apt e dpkg a non fare domande interattive all'utente
     export DEBIAN_FRONTEND=noninteractive
     export APT_LISTCHANGES_FRONTEND=none
 
@@ -85,28 +84,23 @@ install_dependencies() {
     fi
 
     if [[ ! -x "/opt/rocm/bin/hipcc" ]]; then
-        log_warn "ROCm ufficiale non rilevato. Rilevamento disponibilità per Ubuntu 24.04..."
+        log_warn "ROCm ufficiale parziale o assente. Rilevamento disponibilità per Ubuntu 24.04..."
         
         local ROCM_URL="https://repo.radeon.com/amdgpu-install/6.2/ubuntu/noble/amdgpu-install_6.2.60200-1_all.deb"
         
         if wget --spider -q "${ROCM_URL}"; then
-            log_info "Scaricamento installer repository AMD..."
+            log_info "Scaricamento e configurazione installer repository AMD..."
             wget -q "${ROCM_URL}" -O /tmp/amdgpu-install.deb
             
-            # Installazione forzata e silenziosa del pacchetto AMD
             dpkg --force-confdef --force-confnew -i /tmp/amdgpu-install.deb || \
             apt-get install -f -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" || true
             
             apt-get update || true
-            amdgpu-install -y --usecase=rocm,hiplibsdk --no-dkms --accept-eula || log_warn "Installazione ROCm completata con avvisi."
-        else
-            log_warn "Pacchetti ROCm ufficiali AMD per questa distro non raggiungibili."
-            log_warn "NESSUN PROBLEMA: L'hardware rilevato è RDNA1. È ALTAMENTE RACCOMANDATO il backend VULKAN."
-            log_warn "Vulkan utilizza le librerie di sistema già installate senza toccare apt."
-            sleep 3
+            log_info "Installazione stack base AMD ROCm..."
+            amdgpu-install -y --usecase=rocm,hiplibsdk --no-dkms --accept-eula || true
         fi
     else
-        log_info "Stack ROCm ufficiale già rilevato in /opt/rocm."
+        log_info "Stack ROCm ufficiale base già rilevato."
     fi
 }
 
@@ -132,6 +126,26 @@ get_amd_gpu_profile() {
     fi
 
     echo "${target}|${override}"
+}
+
+# ------------------------------------------------------------------------------
+# Auto-Riparazione Toolchain ROCm
+# ------------------------------------------------------------------------------
+ensure_hipcc_toolchain() {
+    local HIPCC_BIN="/opt/rocm/bin/hipcc"
+    if [[ ! -x "$HIPCC_BIN" ]]; then
+        log_warn "Compilatore hipcc non trovato. Avvio auto-riparazione del toolchain ROCm..."
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update || true
+        apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" rocm-dev rocm-hip-sdk hipcc || true
+        
+        if [[ ! -x "$HIPCC_BIN" ]]; then
+            log_err "Auto-riparazione fallita. Impossibile installare il compilatore ROCm."
+            return 1
+        fi
+        log_info "Auto-riparazione completata: hipcc installato con successo."
+    fi
+    return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -167,13 +181,12 @@ compile_llama() {
             cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
             ;;
         "rocm"|"rocm_exp")
-            local HIPCC_BIN="/opt/rocm/bin/hipcc"
-            if [[ ! -x "$HIPCC_BIN" ]]; then
-                log_err "Errore: hipcc non trovato in /opt/rocm/bin/hipcc. ROCm assente."
-                log_err "Per la tua architettura, seleziona VULKAN dal menu."
+            if ! ensure_hipcc_toolchain; then
+                log_err "Interruzione compilazione. Ritorno al menu principale."
                 return 1
             fi
             
+            local HIPCC_BIN="/opt/rocm/bin/hipcc"
             local ROCM_PREFIX="/opt/rocm"
             local CMAKE_ROCM_FLAGS="-DGGML_HIP=ON -DAMDGPU_TARGETS=${target} -DROCM_PATH=${ROCM_PREFIX} -DCMAKE_PREFIX_PATH=${ROCM_PREFIX}/lib/cmake:${ROCM_PREFIX}/lib/x86_64-linux-gnu/cmake"
             
@@ -181,7 +194,7 @@ compile_llama() {
             export CXX="${HIPCC_BIN}"
 
             if [[ "${type}" == "rocm_exp" && -n "${override}" ]]; then
-                log_warn "Applicazione Hack HSA_OVERRIDE_GFX_VERSION=${override}"
+                log_warn "Iniezione Hack di compatibilità: HSA_OVERRIDE_GFX_VERSION=${override}"
                 export HSA_OVERRIDE_GFX_VERSION="${override}"
                 env_override="Environment=\"HSA_OVERRIDE_GFX_VERSION=${override}\""
             fi
@@ -235,7 +248,7 @@ select_backend() {
     choice=$(whiptail --title "Selezione Backend Inferenza AMD" \
         --menu "\nSeleziona il backend grafico per la tua GPU AMD:" 18 78 3 \
         "1" "Vulkan (RACCOMANDATO per Navi 10 / RDNA1 su OS Moderni)" \
-        "2" "ROCm Sperimentale (Solo se l'installazione ROCm ha avuto successo)" \
+        "2" "ROCm Sperimentale (Auto-fix HIPCC + Hack HSA_OVERRIDE)" \
         "3" "ROCm Ufficiale (Solo architetture native supportate)" \
         3>&1 1>&2 2>&3)
 
