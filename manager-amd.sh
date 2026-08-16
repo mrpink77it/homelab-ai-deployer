@@ -7,7 +7,6 @@
 
 set -euo pipefail
 
-# Trap per intercettare gli errori fatali ed evitare crash silenziosi
 trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-amd.sh si è interrotto alla riga $LINENO. Verifica di averlo avviato con privilegi elevati (sudo).\033[0m\n"' ERR
 
 # ------------------------------------------------------------------------------
@@ -22,7 +21,6 @@ WEBUI_DATA_DIR="${INSTALL_DIR}/open-webui-data"
 SERVICE_NAME="homelab-ai-backend"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
-# Colori TUI
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -66,7 +64,7 @@ init_env() {
 }
 
 # ------------------------------------------------------------------------------
-# Installazione Stack Sistema e Risoluzione Conflitti ROCm
+# Installazione Stack Sistema
 # ------------------------------------------------------------------------------
 install_dependencies() {
     log_info "Verifica pacchetti base di sistema..."
@@ -74,37 +72,32 @@ install_dependencies() {
     apt-get install -y build-essential cmake git curl wget pkg-config pciutils \
         libvulkan-dev vulkan-tools python3 python3-pip python3-venv python3-dev whiptail || true
     
-    # 1. Rilevamento e rimozione pacchetti ROCm nativi/obsoleti
     log_info "Verifica conflitti con pacchetti ROCm di sistema (obsoleti)..."
     if dpkg -l | grep -qE "hipcc|rocm-dev|libhip-dev"; then
-        log_warn "Rilevata versione di sistema di ROCm non compatibile. Avvio pulizia profonda..."
+        log_warn "Rilevata versione di sistema di ROCm non compatibile. Pulizia profonda..."
         apt-get remove --purge -y hipcc rocm-dev rocm-cmake rocm-core libamdhip64-dev libhip-dev >/dev/null 2>&1 || true
         apt-get autoremove -y >/dev/null 2>&1 || true
-        log_info "Pulizia vecchi pacchetti completata."
     fi
 
-    # 2. Controllo e installazione Stack ROCm Ufficiale (V6.1+)
+    # Verifichiamo se ROCm 6.1+ è già installato
     if [[ ! -x "/opt/rocm/bin/hipcc" ]]; then
-        log_warn "Compilatore hipcc ufficiale AMD non trovato in /opt/rocm. Avvio integrazione repository..."
-        local amd_deb="/tmp/amdgpu-install.deb"
+        log_warn "ROCm ufficiale non rilevato. Rilevamento disponibilità per Ubuntu 24.04..."
         
-        log_info "Scaricamento installer repository AMD (visualizzazione output di rete in corso)..."
+        # Test di connessione per la versione corretta di Noble (6.2/6.1.3). 
+        # Se fallisce, evoca un fallback pulito verso Vulkan per evitare Dependency Hell.
+        local ROCM_URL="https://repo.radeon.com/amdgpu-install/6.2/ubuntu/noble/amdgpu-install_6.2.60200-1_all.deb"
         
-        # Protezione su WGET per evitare crash di Bash. Fallback su versione Jammy se Noble non esiste.
-        if ! wget "https://repo.radeon.com/amdgpu-install/6.1.2/ubuntu/noble/amdgpu-install_6.1.60102-1_all.deb" -O "${amd_deb}"; then
-            log_warn "Download per Noble fallito o link inesistente. Tento il fallback su Jammy (22.04)..."
-            wget "https://repo.radeon.com/amdgpu-install/6.1.2/ubuntu/jammy/amdgpu-install_6.1.60102-1_all.deb" -O "${amd_deb}" || true
-        fi
-        
-        # Verifica che il file scaricato non sia vuoto
-        if [[ -s "${amd_deb}" ]]; then
-            dpkg -i "${amd_deb}" || apt-get install -f -y || true
+        if wget --spider -q "${ROCM_URL}"; then
+            log_info "Scaricamento installer repository AMD..."
+            wget -q "${ROCM_URL}" -O /tmp/amdgpu-install.deb
+            dpkg -i /tmp/amdgpu-install.deb || apt-get install -f -y || true
             apt-get update || true
-            log_info "Installazione toolchain hiplibsdk e rocm 6.1+ (questa operazione può richiedere molto tempo)..."
-            amdgpu-install -y --usecase=rocm,hiplibsdk --no-dkms || log_warn "Procedura completata con avvisi (normale per hw legacy)."
+            amdgpu-install -y --usecase=rocm,hiplibsdk --no-dkms || log_warn "Installazione ROCm completata con avvisi."
         else
-            log_err "Impossibile scaricare i repository AMD. Verifica la connessione o controlla i DNS."
-            read -rp "Premi Invio per continuare nel menu principale (senza ROCm)..."
+            log_warn "Pacchetti ROCm ufficiali AMD per questa distro non raggiungibili."
+            log_warn "NESSUN PROBLEMA: L'hardware rilevato è RDNA1. È ALTAMENTE RACCOMANDATO il backend VULKAN."
+            log_warn "Vulkan utilizza le librerie di sistema già installate senza toccare apt."
+            sleep 3
         fi
     else
         log_info "Stack ROCm ufficiale già rilevato in /opt/rocm."
@@ -115,7 +108,7 @@ get_amd_gpu_profile() {
     local gpu_info
     gpu_info=$(lspci | grep -iE 'vga|3d|display' | grep -i amd || true)
     
-    local target="gfx1030" # Fallback per default
+    local target="gfx1030" 
     local override=""
 
     if echo "$gpu_info" | grep -qiE 'navi 10|5700|5600'; then
@@ -136,7 +129,7 @@ get_amd_gpu_profile() {
 }
 
 # ------------------------------------------------------------------------------
-# Compilazione llama.cpp e Fix CMake
+# Compilazione llama.cpp
 # ------------------------------------------------------------------------------
 compile_llama() {
     local type="$1"
@@ -152,7 +145,7 @@ compile_llama() {
     log_info "Pulizia profonda cache di compilazione..."
     rm -rf "${LLAMA_DIR}/build"
     rm -rf ~/.cache/ccache 2>/dev/null || true
-    hash -r # Resetta la cache dei path eseguibili di Bash
+    hash -r
 
     local gpu_profile target override env_override=""
     gpu_profile=$(get_amd_gpu_profile)
@@ -160,39 +153,33 @@ compile_llama() {
     override=$(echo "$gpu_profile" | cut -d'|' -f2)
 
     log_info "Avvio compilazione llama.cpp (Backend: ${type})..."
-    
-    # --- RILEVAMENTO DINAMICO ROCM E FIX CMAKE MULTIARCH ---
-    local HIPCC_BIN="/opt/rocm/bin/hipcc"
-    
-    if [[ ! -x "$HIPCC_BIN" ]]; then
-        log_err "Errore: hipcc non trovato in /opt/rocm/bin/hipcc. L'installazione ROCm ha fallito o è incompleta."
-        return 1
-    fi
-    
-    local ROCM_PREFIX="/opt/rocm"
-    local CMAKE_ROCM_FLAGS="-DGGML_HIP=ON -DAMDGPU_TARGETS=${target} -DROCM_PATH=${ROCM_PREFIX} -DCMAKE_PREFIX_PATH=${ROCM_PREFIX}/lib/cmake:${ROCM_PREFIX}/lib/x86_64-linux-gnu/cmake"
 
     case "${type}" in
         "vulkan")
+            log_info "Backend Vulkan selezionato. Ignoro ROCm..."
             cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_VULKAN=ON
             cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
             ;;
-        "rocm")
-            export PATH="${ROCM_PREFIX}/bin:${PATH}"
-            export CXX="${HIPCC_BIN}"
+        "rocm"|"rocm_exp")
+            local HIPCC_BIN="/opt/rocm/bin/hipcc"
+            if [[ ! -x "$HIPCC_BIN" ]]; then
+                log_err "Errore: hipcc non trovato in /opt/rocm/bin/hipcc. ROCm assente."
+                log_err "Per la tua architettura, seleziona VULKAN dal menu."
+                return 1
+            fi
             
-            cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" ${CMAKE_ROCM_FLAGS}
-            cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
-            ;;
-        "rocm_exp")
+            local ROCM_PREFIX="/opt/rocm"
+            local CMAKE_ROCM_FLAGS="-DGGML_HIP=ON -DAMDGPU_TARGETS=${target} -DROCM_PATH=${ROCM_PREFIX} -DCMAKE_PREFIX_PATH=${ROCM_PREFIX}/lib/cmake:${ROCM_PREFIX}/lib/x86_64-linux-gnu/cmake"
+            
             export PATH="${ROCM_PREFIX}/bin:${PATH}"
             export CXX="${HIPCC_BIN}"
 
-            if [[ -n "${override}" ]]; then
-                log_warn "Applicazione Hack HSA_OVERRIDE_GFX_VERSION=${override} su architettura rilevata."
+            if [[ "${type}" == "rocm_exp" && -n "${override}" ]]; then
+                log_warn "Applicazione Hack HSA_OVERRIDE_GFX_VERSION=${override}"
                 export HSA_OVERRIDE_GFX_VERSION="${override}"
                 env_override="Environment=\"HSA_OVERRIDE_GFX_VERSION=${override}\""
             fi
+            
             cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" ${CMAKE_ROCM_FLAGS}
             cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
             ;;
@@ -235,15 +222,15 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# Menu TUI e Flusso Principale
+# Menu TUI
 # ------------------------------------------------------------------------------
 select_backend() {
     local choice
     choice=$(whiptail --title "Selezione Backend Inferenza AMD" \
         --menu "\nSeleziona il backend grafico per la tua GPU AMD:" 18 78 3 \
-        "1" "Vulkan (Raccomandato per compatibilità universale e RDNA1)" \
-        "2" "ROCm Sperimentale (Applica override automatici per RDNA1/Polaris)" \
-        "3" "ROCm Ufficiale (Nativo per RDNA2/RDNA3/Instinct)" \
+        "1" "Vulkan (RACCOMANDATO per Navi 10 / RDNA1 su OS Moderni)" \
+        "2" "ROCm Sperimentale (Solo se l'installazione ROCm ha avuto successo)" \
+        "3" "ROCm Ufficiale (Solo architetture native supportate)" \
         3>&1 1>&2 2>&3)
 
     case "$choice" in
