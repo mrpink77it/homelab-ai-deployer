@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-amd.sh
-# Descrizione: Gestore deployment, servizi systemd e ciclo AI per GPU AMD
+# Descrizione: Gestore deployment, frontend, servizi systemd e ciclo AI per GPU AMD
 # Ambienti: Bare-Metal & Proxmox LXC (Debian 13 / Ubuntu 24.04 LTS)
 # ==============================================================================
 
@@ -16,10 +16,11 @@ LOG_FILE="/var/log/homelab-ai-amd.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
 MODELS_DIR="${INSTALL_DIR}/models"
-WEBUI_DATA_DIR="${INSTALL_DIR}/open-webui-data"
+WEBUI_DIR="${INSTALL_DIR}/open-webui"
 
 SERVICE_NAME="homelab-ai-backend"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+FRONTEND_SERVICE_FILE="/etc/systemd/system/homelab-ai-frontend.service"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -59,7 +60,7 @@ detect_environment() {
 }
 
 init_env() {
-    mkdir -p "$(dirname "$LOG_FILE")" "${MODELS_DIR}" "${WEBUI_DATA_DIR}"
+    mkdir -p "$(dirname "$LOG_FILE")" "${MODELS_DIR}" "${WEBUI_DIR}"
     touch "${LOG_FILE}" || true
 }
 
@@ -74,9 +75,10 @@ install_dependencies() {
     apt-get update || true
     apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" \
         build-essential cmake git curl wget pkg-config pciutils gnupg \
-        libvulkan-dev vulkan-tools python3 python3-pip python3-venv python3-dev whiptail || true
+        libvulkan-dev vulkan-tools python3 python3-pip python3-venv python3-dev whiptail \
+        libffi-dev libssl-dev || true
     
-    log_info "Verifica e pulizia conflitti con pacchetti ROCm nativi di Ubuntu 24.04..."
+    log_info "Verifica e pulizia conflitti con pacchetti ROCm nativi..."
     apt-get remove --purge -y hipcc rocminfo "rocm-*" "libhip*" "libamdhip*" >/dev/null 2>&1 || true
     apt-get autoremove -y >/dev/null 2>&1 || true
 }
@@ -106,7 +108,7 @@ get_amd_gpu_profile() {
 }
 
 # ------------------------------------------------------------------------------
-# Auto-Riparazione Toolchain ROCm (Brute-Force con Pinning APT)
+# Auto-Riparazione Toolchain ROCm
 # ------------------------------------------------------------------------------
 ensure_hipcc_toolchain() {
     local HIPCC_BIN="/opt/rocm/bin/hipcc"
@@ -141,7 +143,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# Compilazione llama.cpp
+# Compilazione llama.cpp & Patch FP8
 # ------------------------------------------------------------------------------
 compile_llama() {
     local type="$1"
@@ -154,14 +156,14 @@ compile_llama() {
         git -C "${LLAMA_DIR}" pull
     fi
 
-    # Iniezione patch di compatibilità ROCm 6.2 / fallback per architetture senza FP8 nativo (es. gfx1030)
+    # Iniezione patch di compatibilità ROCm 6.2 / fallback tipi FP8 per architetture come gfx1030
     if [[ -f "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" ]]; then
         log_info "Applicazione patch di compatibilità ROCm FP8 e fallback tipi..."
         sed -i 's/typedef __hip_fp8_e4m3 __nv_fp8_e4m3;/typedef uint8_t __nv_fp8_e4m3;/g' "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" || true
         sed -i 's/typedef __hip_fp8_e5m2 __nv_fp8_e5m2;/typedef uint8_t __nv_fp8_e5m2;/g' "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" || true
     fi
 
-    log_info "Pulizia profonda cache di compilazione..."
+    log_info "Pulizia cache di compilazione..."
     rm -rf "${LLAMA_DIR}/build"
     rm -rf ~/.cache/ccache 2>/dev/null || true
     hash -r
@@ -175,20 +177,17 @@ compile_llama() {
 
     case "${type}" in
         "vulkan")
-            log_info "Backend Vulkan selezionato. Ignoro ROCm..."
             cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_VULKAN=ON
             cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
             ;;
         "rocm"|"rocm_exp")
             if ! ensure_hipcc_toolchain; then
-                log_err "Interruzione compilazione. Ritorno al menu principale."
                 return 1
             fi
             
             local ROCM_PREFIX="/opt/rocm"
             local ROCM_CLANG="${ROCM_PREFIX}/llvm/bin/clang"
             local ROCM_CLANGXX="${ROCM_PREFIX}/llvm/bin/clang++"
-            
             local CMAKE_ROCM_FLAGS="-DGGML_HIP=ON -DAMDGPU_TARGETS=${target} -DROCM_PATH=${ROCM_PREFIX} -DCMAKE_PREFIX_PATH=${ROCM_PREFIX}/lib/cmake:${ROCM_PREFIX}/lib/x86_64-linux-gnu/cmake"
             
             export PATH="${ROCM_PREFIX}/bin:${ROCM_PREFIX}/llvm/bin:${PATH}"
@@ -238,8 +237,101 @@ EOF
 
     systemctl daemon-reload
     systemctl enable "${SERVICE_NAME}"
-    systemctl restart "${SERVICE_NAME}"
-    log_info "Servizio ${SERVICE_NAME} abilitato e in esecuzione."
+    systemctl restart "${SERVICE_NAME}" || true
+    log_info "Servizio ${SERVICE_NAME} configurato e avviato."
+}
+
+# ------------------------------------------------------------------------------
+# Gestione Frontend (Open WebUI)
+# ------------------------------------------------------------------------------
+install_open_webui() {
+    log_info "Installazione/Aggiornamento Open WebUI (Frontend)..."
+    mkdir -p "${WEBUI_DIR}"
+    
+    if [[ ! -d "${WEBUI_DIR}/venv" ]]; then
+        python3 -m venv "${WEBUI_DIR}/venv"
+    fi
+    
+    source "${WEBUI_DIR}/venv/bin/activate"
+    pip install --upgrade pip
+    pip install open-webui
+    deactivate
+
+    cat <<EOF > "${FRONTEND_SERVICE_FILE}"
+[Unit]
+Description=Homelab AI Frontend Service (Open WebUI)
+After=network.target ${SERVICE_NAME}.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${WEBUI_DIR}
+Environment="PORT=3000"
+Environment="OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1"
+ExecStart=${WEBUI_DIR}/venv/bin/open-webui serve
+Restart=always
+RestartSec=5
+StandardOutput=append:${LOG_FILE}
+StandardError=append:${LOG_FILE}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable homelab-ai-frontend
+    systemctl restart homelab-ai-frontend
+    log_info "Open WebUI configurato con successo (Porta 3000)."
+    read -rp "Premi Invio per continuare..."
+}
+
+# ------------------------------------------------------------------------------
+# Gestione Modelli GGUF
+# ------------------------------------------------------------------------------
+download_model() {
+    local model_url
+    model_url=$(whiptail --title "Gestione Modelli GGUF" --inputbox "Inserisci l'URL diretto del file GGUF da scaricare:" 10 78 "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf" 3>&1 1>&2 2>&3)
+    
+    if [[ -n "${model_url}" ]]; then
+        local filename
+        filename=$(basename "${model_url}" | cut -d? -f1)
+        log_info "Download del modello ${filename} in corso..."
+        wget -O "${MODELS_DIR}/${filename}" "${model_url}"
+        ln -sf "${MODELS_DIR}/${filename}" "${MODELS_DIR}/model.gguf"
+        log_info "Modello scaricato e impostato come default (model.gguf)."
+        systemctl restart "${SERVICE_NAME}" 2>/dev/null || true
+    fi
+    read -rp "Premi Invio per continuare..."
+}
+
+# ------------------------------------------------------------------------------
+# Gestione Servizi
+# ------------------------------------------------------------------------------
+manage_service_menu() {
+    local action
+    action=$(whiptail --title "Gestione Servizi Homelab AI" \
+        --menu "\nSeleziona l'azione da compiere:" 15 78 4 \
+        "1" "Avvia Servizi (Backend & Frontend)" \
+        "2" "Ferma Servizi (Backend & Frontend)" \
+        "3" "Riavvia Servizi (Backend & Frontend)" \
+        "4" "Torna al Menu Principale" \
+        3>&1 1>&2 2>&3)
+    
+    case "$action" in
+        1) 
+            systemctl start "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
+            log_info "Servizi avviati." 
+            ;;
+        2) 
+            systemctl stop "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
+            log_info "Servizi fermati." 
+            ;;
+        3) 
+            systemctl restart "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
+            log_info "Servizi riavviati." 
+            ;;
+        *) ;;
+    esac
 }
 
 # ------------------------------------------------------------------------------
@@ -249,9 +341,9 @@ select_backend() {
     local choice
     choice=$(whiptail --title "Selezione Backend Inferenza AMD" \
         --menu "\nSeleziona il backend grafico per la tua GPU AMD:" 18 78 3 \
-        "1" "Vulkan (RACCOMANDATO per Navi 10 / RDNA1 su OS Moderni)" \
-        "2" "ROCm Sperimentale (Auto-fix HIPCC + Hack HSA_OVERRIDE)" \
-        "3" "ROCm Ufficiale (Solo architetture native supportate)" \
+        "1" "Vulkan (RACCOMANDATO per Navi / RDNA su OS Moderni)" \
+        "2" "ROCm Sperimentale (Auto-fix HIPCC + Patch FP8 + Hack HSA)" \
+        "3" "ROCm Ufficiale (Architetture native supportate)" \
         3>&1 1>&2 2>&3)
 
     case "$choice" in
@@ -266,18 +358,24 @@ main_menu() {
     while true; do
         local choice
         choice=$(whiptail --title "Homelab AI - AMD Management Console" \
-            --menu "\nAmbiente: $(detect_environment)\nScegli un'operazione:" 15 78 4 \
-            "1" "Seleziona/Compila Backend (Auto-Rilevamento GPU)" \
-            "2" "Stato Servizio Backend" \
-            "3" "Visualizza Log di Sistema" \
-            "4" "Esci" \
+            --menu "\nAmbiente: $(detect_environment)\nScegli un'operazione:" 18 78 7 \
+            "1" "Seleziona/Compila Backend Llama.cpp (Auto GPU + Patch FP8)" \
+            "2" "Installa / Configura Open WebUI (Frontend)" \
+            "3" "Scarica / Gestisci Modelli GGUF" \
+            "4" "Gestione Servizi (Avvia/Ferma/Riavvia)" \
+            "5" "Stato Servizi (Backend & Frontend)" \
+            "6" "Visualizza Log di Sistema" \
+            "7" "Esci" \
             3>&1 1>&2 2>&3)
 
         case "$choice" in
-            1) select_backend ;;
-            2) systemctl status "${SERVICE_NAME}" || true; read -rp "Premi Invio per continuare..." ;;
-            3) tail -n 50 "${LOG_FILE}" || true; read -rp "Premi Invio per continuare..." ;;
-            4) break ;;
+            1) select_backend; read -rp "Premi Invio per continuare..." ;;
+            2) install_open_webui ;;
+            3) download_model ;;
+            4) manage_service_menu ;;
+            5) systemctl status "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true; read -rp "Premi Invio per continuare..." ;;
+            6) tail -n 50 "${LOG_FILE}" || true; read -rp "Premi Invio per continuare..." ;;
+            7) break ;;
             *) break ;;
         esac
     done
