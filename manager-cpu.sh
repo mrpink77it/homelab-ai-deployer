@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # ------------------------------------------------------------------------------
-# Configurazione Ambiente e Stili ANSI (Sobri)
+# Configurazione Ambiente e Stili ANSI 
 # ------------------------------------------------------------------------------
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -40,7 +40,7 @@ pause() {
 }
 
 # ------------------------------------------------------------------------------
-# Dashboard Finale Sobria & Compatta (Registrata con TRAP)
+# Dashboard Finale
 # ------------------------------------------------------------------------------
 show_exit_summary() {
     # Disattiva temporaneamente l'uscita su errore per garantire il rendering
