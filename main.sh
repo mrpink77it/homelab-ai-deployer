@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Script: main.sh (Homelab AI Deployer - Auto-Router & Core Orchestrator)
-# Descrizione: Scansione hardware, diagnosi risorse ed instradamento dinamico
+# Script: main.sh (Homelab AI Deployer - Core Router & System Fixer)
+# Descrizione: System Pre-flight, Fix Repository OS, Auto-routing & Menu TUI
 # Ambienti: Bare-Metal & Proxmox LXC (Debian 12+ / Ubuntu 22.04+)
 # Repository: homelab-ai-deployer
 # ==============================================================================
@@ -9,24 +9,10 @@
 set -euo pipefail
 
 # ------------------------------------------------------------------------------
-# Pre-Flight Check: Installazione automatica dipendenze critiche per la scansione
-# ------------------------------------------------------------------------------
-ensure_bootstrap_deps() {
-    local missing=()
-    command -v lspci >/dev/null 2>&1 || missing+=("pciutils")
-    command -v whiptail >/dev/null 2>&1 || missing+=("whiptail")
-
-    if [ ${#missing[@]} -ne 0 ]; then
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update -qq && apt-get install -y -qq "${missing[@]}" >/dev/null 2>&1
-    fi
-}
-ensure_bootstrap_deps
-
-# ------------------------------------------------------------------------------
-# Configurazione Ambiente e Palette Colori
+# Colors & Layout Definition
 # ------------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_FILE="/var/log/homelab-ai-deployer.log"
 
 C_RESET='\033[0m'
 C_BOLD='\033[1m'
@@ -34,150 +20,173 @@ C_CYAN='\033[1;36m'
 C_GREEN='\033[1;32m'
 C_YELLOW='\033[1;33m'
 C_RED='\033[1;31m'
-C_BLUE='\033[1;34m'
 C_DIM='\033[2m'
 
 # ------------------------------------------------------------------------------
-# Diagnostica Hardware & Risorse
+# Auto-Fix Repository e Dipendenze di Base
 # ------------------------------------------------------------------------------
-CPU_MODEL=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | xsed -e 's/^[ \t]*//' || echo "CPU Genérica")
+fix_os_repositories() {
+    export DEBIAN_FRONTEND=noninteractive
+    
+    local os_id=""
+    local os_version=""
+    
+    if [[ -f /etc/os-release ]]; then
+        os_id=$(grep -E '^ID=' /etc/os-release | cut -d'=' -f2 | tr -d '"')
+        os_version=$(grep -E '^VERSION_ID=' /etc/os-release | cut -d'=' -f2 | tr -d '"')
+    fi
+
+    echo -e "${C_CYAN}[PRE-FLIGHT] Verifiche e fix repository per OS (${os_id} ${os_version})...${C_RESET}"
+
+    # 1. Dipendenze base per la gestione repo e TUI
+    apt-get update -qq || true
+    apt-get install -y -qq software-properties-common pciutils whiptail curl wget git build-essential >/dev/null 2>&1
+
+    # 2. Fix specifici per Distribuzione
+    if [[ "${os_id}" == "debian" ]]; then
+        # Abilita componenti non-free su Debian (fondamentali per driver e toolkit NVIDIA/AMD)
+        if ! grep -q "non-free-firmware" /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null; then
+            echo -e "${C_YELLOW}[FIX REPO] Abilitazione contrib, non-free e non-free-firmware per Debian...${C_RESET}"
+            apt-add-repository -y contrib non-free non-free-firmware 2>/dev/null || true
+            apt-get update -qq || true
+        fi
+    elif [[ "${os_id}" == "ubuntu" ]]; then
+        # Abilita repository universe/multiverse su Ubuntu
+        if ! grep -q "universe" /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null; then
+            echo -e "${C_YELLOW}[FIX REPO] Abilitazione universe e multiverse per Ubuntu...${C_RESET}"
+            add-apt-repository -y universe 2>/dev/null || true
+            add-apt-repository -y multiverse 2>/dev/null || true
+            apt-get update -qq || true
+        fi
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Diagnostica Hardware
+# ------------------------------------------------------------------------------
+CPU_MODEL=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed -e 's/^[ \t]*//' || echo "CPU Generica")
 CPU_CORES=$(nproc)
 
-# Identificazione estensioni vettoriali CPU
-CPU_EXT=""
+CPU_EXT="x86_64 Standard"
 if grep -q "avx512" /proc/cpuinfo; then CPU_EXT="AVX-512";
-elif grep -q "avx2" /proc/cpuinfo; then CPU_EXT="AVX2";
-elif grep -q "avx" /proc/cpuinfo; then CPU_EXT="AVX";
-else CPU_EXT="Standard x86_64"; fi
+elif grep -q "avx2" /proc/cpuinfo; then CPU_EXT="AVX2"; fi
 
-# Rilevamento Memoria e Storage
 RAM_TOTAL_GB=$(free -g | awk '/^Mem:/{print $2}')
 RAM_AVAIL_GB=$(free -g | awk '/^Mem:/{print $7}')
 DISK_FREE_GB=$(df -BG / | awk 'NR==2 {print $4}' | tr -d 'G')
 
-# Scansione Architettura Grafica (GPU)
-GPU_TYPE="CPU"
-GPU_NAME="Nessuna GPU dedicata rilevata"
-MANAGER_SCRIPT="${SCRIPT_DIR}/manager-cpu.sh"
+HAS_NVIDIA=false
+HAS_AMD=false
+GPU_DESC="Solo CPU (Nessun acceleratore GPU rilevato)"
 
 if command -v nvidia-smi >/dev/null 2>&1 || lspci | grep -i "nvidia" >/dev/null 2>&1; then
-    GPU_TYPE="NVIDIA"
-    GPU_NAME=$(lspci | grep -iE 'vga|3d|display' | grep -i nvidia | cut -d: -f3 | sed 's/^[ \t]*//' | head -n1)
-    [[ -z "$GPU_NAME" ]] && GPU_NAME="Scheda Grafica NVIDIA (CUDA Ready)"
-    MANAGER_SCRIPT="${SCRIPT_DIR}/manager-nvidia.sh"
+    HAS_NVIDIA=true
+    GPU_DESC=$(lspci | grep -iE 'vga|3d|display' | grep -i nvidia | cut -d: -f3 | sed 's/^[ \t]*//' | head -n1)
+    [[ -z "$GPU_DESC" ]] && GPU_DESC="NVIDIA GPU (CUDA Support)"
 elif lspci | grep -iE 'vga|3d|display' | grep -i amd >/dev/null 2>&1; then
-    GPU_TYPE="AMD"
-    GPU_NAME=$(lspci | grep -iE 'vga|3d|display' | grep -i amd | cut -d: -f3 | sed 's/^[ \t]*//' | head -n1)
-    MANAGER_SCRIPT="${SCRIPT_DIR}/manager-amd.sh"
+    HAS_AMD=true
+    GPU_DESC=$(lspci | grep -iE 'vga|3d|display' | grep -i amd | cut -d: -f3 | sed 's/^[ \t]*//' | head -n1)
 fi
 
 detect_environment() {
     if [[ -f /proc/1/environ ]] && grep -q "container=lxc" /proc/1/environ 2>/dev/null; then
         echo "LXC (Proxmox Virtual Environment)"
     else
-        echo "Bare-Metal OS Direct"
+        echo "Bare-Metal Direct OS"
     fi
 }
 
 # ------------------------------------------------------------------------------
-# Rendering Interfaccia Utente (Header & System Summary)
+# Interfaccia Utente Grafica
 # ------------------------------------------------------------------------------
 render_header() {
     clear
     echo -e "${C_CYAN}${C_BOLD}"
     echo "┌──────────────────────────────────────────────────────────────────────────────┐"
     echo "│                 H O M E L A B   A I   D E P L O Y E R                        │"
-    echo "│         Zero-Config Hardware Discovery & AI Environment Router               │"
+    echo "│         Hardware Discovery & Environment Router (v0.3 Multi-Node)            │"
     echo "└──────────────────────────────────────────────────────────────────────────────┘${C_RESET}"
     echo -e "${C_DIM} Virtualization:${C_RESET} ${C_BOLD}$(detect_environment)${C_RESET}"
-    echo -e "${C_DIM} Architecture  :${C_RESET} ${C_BOLD}$(uname -m) / Linux $(uname -r)${C_RESET}\n"
+    echo -e "${C_DIM} Kernel        :${C_RESET} ${C_BOLD}$(uname -s -r -m)${C_RESET}\n"
 }
 
 render_hardware_summary() {
-    echo -e "${C_BOLD}❖ RILEVAMENTO RISORSE DI SISTEMA${C_RESET}"
+    echo -e "${C_BOLD}❖ DIAGNOSTICA RISORSE E REPOSITORY SISTEMA${C_RESET}"
     echo -e "${C_CYAN}┌──────────────────────────────────────────────────────────────────────────────┐${C_RESET}"
-    
-    # CPU
-    echo -e "${C_CYAN}│${C_RESET} ${C_BOLD}🖥️  CPU    :${C_RESET} ${CPU_MODEL}"
-    echo -e "${C_CYAN}│${C_RESET}            └─ ${C_GREEN}${CPU_CORES} Core Logic${C_RESET} | Istruzioni: ${C_YELLOW}${CPU_EXT}${C_RESET}"
-    
-    # RAM
-    local ram_color="${C_GREEN}"
-    [[ $RAM_TOTAL_GB -lt 16 ]] && ram_color="${C_YELLOW}"
-    echo -e "${C_CYAN}│${C_RESET} ${C_BOLD}🧠 RAM    :${C_RESET} ${ram_color}${RAM_TOTAL_GB} GB Totali${C_RESET} (${RAM_AVAIL_GB} GB Disponibili)"
-    
-    # Storage
+    echo -e "${C_CYAN}│${C_RESET} ${C_BOLD}🖥️  CPU    :${C_RESET} ${CPU_MODEL} (${CPU_CORES} Core | Istruzioni: ${C_YELLOW}${CPU_EXT}${C_RESET})"
+    echo -e "${C_CYAN}│${C_RESET} ${C_BOLD}🧠 RAM    :${C_RESET} ${C_GREEN}${RAM_TOTAL_GB} GB Totali${C_RESET} (${RAM_AVAIL_GB} GB Liberi per caricamento pesi)"
     echo -e "${C_CYAN}│${C_RESET} ${C_BOLD}💾 Storage:${C_RESET} ${DISK_FREE_GB} GB Liberi su Partizione Root (/)"
     
-    # GPU / Accelerator
-    case "${GPU_TYPE}" in
-        "NVIDIA")
-            echo -e "${C_CYAN}│${C_RESET} ${C_BOLD}🚀 GPU    :${C_RESET} ${C_GREEN}[NVIDIA CUDA]${C_RESET} ${GPU_NAME}"
-            ;;
-        "AMD")
-            echo -e "${C_CYAN}│${C_RESET} ${C_BOLD}🚀 GPU    :${C_RESET} ${C_RED}[AMD ROCm/Vulkan]${C_RESET} ${GPU_NAME}"
-            ;;
-        *)
-            echo -e "${C_CYAN}│${C_RESET} ${C_BOLD}⚡ GPU    :${C_RESET} ${C_YELLOW}[NATIVE CPU MODE]${C_RESET} Nessun acceleratore discreto"
-            echo -e "${C_CYAN}│${C_RESET}            └─ Stack Ottimizzato: OpenMP / Vector Extensions / GGML CPU"
-            ;;
-    esac
-    
+    if $HAS_NVIDIA; then
+        echo -e "${C_CYAN}│${C_RESET} ${C_BOLD}🚀 GPU    :${C_RESET} ${C_GREEN}[NVIDIA ACCELERATION]${C_RESET} ${GPU_DESC}"
+    elif $HAS_AMD; then
+        echo -e "${C_CYAN}│${C_RESET} ${C_BOLD}🚀 GPU    :${C_RESET} ${C_RED}[AMD ROCm / VULKAN]${C_RESET} ${GPU_DESC}"
+    else
+        echo -e "${C_CYAN}│${C_RESET} ${C_BOLD}⚡ GPU    :${C_RESET} ${C_YELLOW}[MODE CPU ENHANCED]${C_RESET} OpenMP & Vector Acceleration Active"
+    fi
     echo -e "${C_CYAN}└──────────────────────────────────────────────────────────────────────────────┘${C_RESET}\n"
 }
 
 # ------------------------------------------------------------------------------
-# Orchestrazione & Routing Servizi
+# Routing & Esecuzione Controller
 # ------------------------------------------------------------------------------
-execute_manager() {
-    local target_script="$1"
-    
-    if [[ ! -f "${target_script}" ]]; then
-        echo -e "${C_RED}[ERRORE] Impossibile trovare lo script controller: ${target_script}${C_RESET}"
-        echo -e "Verifica che tutti i file manager-*.sh siano presenti nella directory del progetto."
-        exit 1
+launch_manager() {
+    local script_name="$1"
+    local full_path="${SCRIPT_DIR}/${script_name}"
+
+    if [[ ! -f "${full_path}" ]]; then
+        whiptail --title "Errore Controller Mancante" --msgbox "Impossibile trovare lo script:\n${full_path}\n\nAssicurati che il file sia presente nella stessa cartella di main.sh." 10 70
+        return
     fi
 
-    # Assicura che i permessi di esecuzione siano presenti
-    chmod +x "${target_script}"
-    
-    echo -e "${C_GREEN}[OK] Avvio del controller dedicato:${C_RESET} ${C_BOLD}$(basename "${target_script}")${C_RESET}\n"
+    chmod +x "${full_path}"
+    echo -e "${C_GREEN}[OK] Avvio controller:${C_RESET} ${C_BOLD}${script_name}${C_RESET}\n"
     sleep 1
-    exec "${target_script}"
+    exec "${full_path}"
 }
 
 main_menu() {
-    render_header
-    render_hardware_summary
+    while true; do
+        render_header
+        render_hardware_summary
 
-    echo -e "${C_BOLD}❖ SELEZIONA OBIETTIVO DEL NODO AI${C_RESET}"
-    echo "──────────────────────────────────────────────────────────────────────────────"
-    
-    local choice
-    choice=$(whiptail --title "Homelab AI Deployer - Menu Principale" \
-        --menu "\nSeleziona l'operazione da eseguire per questo nodo:" 18 80 4 \
-        "1" "Avvia Controller Auto-Rilevato [Raccomandato per questo sistema]" \
-        "2" "Forza Controller CPU (Inferenza via RAM / System Memory)" \
-        "3" "Forza Controller NVIDIA (CUDA / TensorRT Stack)" \
-        "4" "Forza Controller AMD (ROCm / Vulkan Stack)" \
-        3>&1 1>&2 2>&3) || exit 0
+        local default_item="1"
+        if $HAS_NVIDIA; then default_item="2";
+        elif $HAS_AMD; then default_item="3"; fi
 
-    case "$choice" in
-        1) execute_manager "${MANAGER_SCRIPT}" ;;
-        2) execute_manager "${SCRIPT_DIR}/manager-cpu.sh" ;;
-        3) execute_manager "${SCRIPT_DIR}/manager-nvidia.sh" ;;
-        4) execute_manager "${SCRIPT_DIR}/manager-amd.sh" ;;
-        *) exit 0 ;;
-    esac
+        local choice
+        choice=$(whiptail --title "Homelab AI Deployer - Seleziona Modulo Operativo" \
+            --default-item "${default_item}" \
+            --menu "\nScegli il profilo di deployment per questo nodo di calcolo:" 20 88 5 \
+            "1" "[INFERENZA CPU] llama.cpp + Open WebUI (Ottimizzato RAM/OpenMP)" \
+            "2" "[INFERENZA NVIDIA] llama.cpp + CUDA + Driver Check + Open WebUI" \
+            "3" "[INFERENZA AMD] llama.cpp + ROCm / Vulkan + Open WebUI" \
+            "4" "[FINE-TUNING NVIDIA] Unsloth Studio + PyTorch CUDA + llama.cpp" \
+            "5" "[FIX REPO / SYSTEM] Ri-Esegui Aggiornamento Repository e Pacchetti" \
+            3>&1 1>&2 2>&3) || exit 0
+
+        case "$choice" in
+            1) launch_manager "manager-cpu.sh" ;;
+            2) launch_manager "manager-nvidia.sh" ;;
+            3) launch_manager "manager-amd.sh" ;;
+            4) launch_manager "manager-fine-tuning-nvidia.sh" ;;
+            5) 
+                fix_os_repositories
+                whiptail --title "Fix Completato" --msgbox "I repository e i pacchetti di base sono stati configurati e aggiornati." 8 65
+                ;;
+            *) exit 0 ;;
+        esac
+    done
 }
 
 # ------------------------------------------------------------------------------
-# Entrypoint Script
+# Entrypoint
 # ------------------------------------------------------------------------------
 if [[ $EUID -ne 0 ]]; then
-    echo -e "${C_RED}[ERRORE] Homelab AI Deployer richiede i privilegi di root.${C_RESET}"
-    echo -e "Esegui lo script con: ${C_BOLD}sudo ./main.sh${C_RESET}"
+    echo -e "${C_RED}[ERRORE] Homelab AI Deployer richiede i privilegi di root per configurare i repo.${C_RESET}"
+    echo -e "Avvia con: ${C_BOLD}sudo ./main.sh${C_RESET}"
     exit 1
 fi
 
+fix_os_repositories
 main_menu
