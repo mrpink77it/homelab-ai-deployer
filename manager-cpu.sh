@@ -15,6 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
 WEBUI_VENV="${INSTALL_DIR}/openwebui_env"
+MODELS_DIR="${INSTALL_DIR}/models"
 
 C_RESET='\033[0m'
 C_BOLD='\033[1m'
@@ -64,7 +65,7 @@ install_system_deps() {
         python3-dev \
         whiptail >/dev/null 2>&1
 
-    mkdir -p "${INSTALL_DIR}"
+    mkdir -p "${INSTALL_DIR}" "${MODELS_DIR}"
     log_info "Dipendenze di sistema installate correttamente su ${OS_NAME}."
 }
 
@@ -185,6 +186,42 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
+# Benchmark Prestazioni CPU
+# ------------------------------------------------------------------------------
+run_benchmark() {
+    mkdir -p "${MODELS_DIR}"
+
+    if [[ ! -f "${LLAMA_DIR}/build/bin/llama-bench" ]]; then
+        log_err "Binario llama-bench non trovato. Esegui prima la compilazione (Opzione 1)."
+        pause
+        return
+    fi
+
+    # Cerca il primo file .gguf presente nella cartella modelli o sottocartelle
+    local model_file
+    model_file=$(find "${MODELS_DIR}" -name "*.gguf" 2>/dev/null | head -n 1 || true)
+
+    if [[ -z "${model_file}" ]]; then
+        log_warn "Nessun modello .gguf trovato in ${MODELS_DIR}."
+        if whiptail --title "Download Modello Benchmark" --yesno "Nessun file .gguf trovato in ${MODELS_DIR}.\n\nVuoi scaricare un modello di test leggero (Qwen2.5-0.5B ~390MB) per eseguire il benchmark della CPU?" 10 75; then
+            log_info "Download del modello di test Qwen2.5-0.5B-Instruct-Q4_K_M.gguf..."
+            wget -c "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf" -O "${MODELS_DIR}/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+            model_file="${MODELS_DIR}/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+        else
+            log_err "Esecuzione annullata: llama-bench richiede un file .gguf valido."
+            pause
+            return
+        fi
+    fi
+
+    log_info "Avvio benchmark CPU con il modello: $(basename "${model_file}")"
+    echo -e "${C_CYAN}Thread allocati: $(nproc)${C_RESET}\n"
+    
+    "${LLAMA_DIR}/build/bin/llama-bench" -m "${model_file}" -t "$(nproc)"
+    pause
+}
+
+# ------------------------------------------------------------------------------
 # Menu TUI del Controller CPU
 # ------------------------------------------------------------------------------
 render_header() {
@@ -216,14 +253,7 @@ main_menu() {
             1) build_llama_cpp ;;
             2) install_open_webui ;;
             3) setup_systemd_services ;;
-            4) 
-                if [[ -f "${LLAMA_DIR}/build/bin/llama-bench" ]]; then
-                    "${LLAMA_DIR}/build/bin/llama-bench" -t "$(nproc)"
-                else
-                    log_err "Binario llama-bench non trovato. Esegui prima la compilazione (Opzione 1)."
-                fi
-                pause
-                ;;
+            4) run_benchmark ;;
             0) 
                 exec "${SCRIPT_DIR}/main.sh"
                 ;;
