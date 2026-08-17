@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-cpu.sh (Homelab AI Deployer - CPU Manager)
+# Versione: 1.0.0 (First Stable Release)
 # Descrizione: Deploy & Management stack AI per nodi CPU (llama.cpp + Open WebUI)
 # Ambienti: Bare-Metal & LXC Proxmox (Debian 12/13 / Ubuntu 22.04/24.04+)
 # Repository: homelab-ai-deployer
@@ -9,7 +10,7 @@
 set -euo pipefail
 
 # ------------------------------------------------------------------------------
-# Configurazione Ambiente e Stili ANSI 
+# Configurazione Ambiente e Stili ANSI (Sobri)
 # ------------------------------------------------------------------------------
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -40,7 +41,7 @@ pause() {
 }
 
 # ------------------------------------------------------------------------------
-# Dashboard Finale
+# Dashboard Finale Sobria & Compatta (Registrata con TRAP)
 # ------------------------------------------------------------------------------
 show_exit_summary() {
     # Disattiva temporaneamente l'uscita su errore per garantire il rendering
@@ -92,7 +93,7 @@ show_exit_summary() {
         models_summary=$(find "${MODELS_DIR}" -name "*.gguf" -exec ls -lh {} \; 2>/dev/null | awk '{print $9 " (" $5 ")"}' | sed "s|${MODELS_DIR}/||g" | tr '\n' ', ' | sed 's/, $//')
         [[ -z "${models_summary}" ]] && models_summary="Nessun modello presente"
     else
-        models_summary="N/D"
+        models_summary="Nessun modello presente"
     fi
 
     local llama_st webui_st llama_fmt webui_fmt
@@ -103,7 +104,7 @@ show_exit_summary() {
     [[ "$webui_st" == "active" ]] && webui_fmt="${C_GREEN}ONLINE${C_RESET}" || webui_fmt="${C_RED}OFFLINE${C_RESET}"
 
     printf "%s--------------------------------------------------------------------------------%s\n" "${C_CYAN}" "${C_RESET}"
-    printf "%s HOMELAB AI DEPLOYER — STATO NODO INFERENZA CPU%s\n" "${C_BOLD}" "${C_RESET}"
+    printf "%s HOMELAB AI DEPLOYER — STATO NODO INFERENZA CPU (v1.0.0)%s\n" "${C_BOLD}" "${C_RESET}"
     printf "%s--------------------------------------------------------------------------------%s\n" "${C_CYAN}" "${C_RESET}"
     printf " %s• OS / Host%s        : %s (Virt: %s)\n" "${C_BOLD}" "${C_RESET}" "${OS_NAME}" "${virt_type}"
     printf " %s• CPU / Load%s       : %s (%sC/%sT) — Load: %s\n" "${C_BOLD}" "${C_RESET}" "${cpu_model}" "${phys_cores}" "${log_cores}" "${load_avg}"
@@ -364,7 +365,7 @@ run_all_automated() {
     AUTO_MODE=true
     clear
     printf "%s================================================================================%s\n" "${C_CYAN}" "${C_RESET}"
-    printf "%s  HOMELAB AI DEPLOYER — EXPRESS AUTOMATED DEPLOYMENT (CPU)%s\n" "${C_BOLD}" "${C_RESET}"
+    printf "%s  HOMELAB AI DEPLOYER — EXPRESS AUTOMATED DEPLOYMENT (CPU v1.0.0)%s\n" "${C_BOLD}" "${C_RESET}"
     printf "%s================================================================================%s\n\n" "${C_CYAN}" "${C_RESET}"
 
     build_llama_cpp
@@ -387,7 +388,7 @@ welcome_wizard() {
     # Pagina 1: Panoramica
     clear
     printf "%s================================================================================%s\n" "${C_CYAN}" "${C_RESET}"
-    printf "  %sHOMELAB AI DEPLOYER — NODE INFERENCE CONTROLLER (CPU)%s\n" "${C_BOLD}" "${C_RESET}"
+    printf "  %sHOMELAB AI DEPLOYER — NODE INFERENCE CONTROLLER (CPU v1.0.0)%s\n" "${C_BOLD}" "${C_RESET}"
     printf "%s================================================================================%s\n\n" "${C_CYAN}" "${C_RESET}"
 
     printf "%s[ PANORAMICA ]%s\n" "${C_BOLD}" "${C_RESET}"
@@ -438,7 +439,7 @@ render_header() {
     clear
     detect_os
     printf "%s--------------------------------------------------------------------------------%s\n" "${C_CYAN}" "${C_RESET}"
-    printf "  %sHOMELAB AI DEPLOYER — CPU MANAGER%s (%s)\n" "${C_BOLD}" "${OS_NAME}" "${C_RESET}"
+    printf "  %sHOMELAB AI DEPLOYER — CPU MANAGER v1.0.0%s (%s)\n" "${C_BOLD}" "${OS_NAME}" "${C_RESET}"
     printf "%s--------------------------------------------------------------------------------%s\n\n" "${C_CYAN}" "${C_RESET}"
 }
 
