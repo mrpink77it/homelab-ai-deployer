@@ -127,10 +127,13 @@ build_llama_cpp() {
 
     if [[ -f "${LLAMA_DIR}/build/bin/llama-cli" || -f "${LLAMA_DIR}/build/bin/llama-server" ]]; then
         log_info "Compilazione completata con successo! Binari pronti in: ${LLAMA_DIR}/build/bin/"
+        pause
+        return 0
     else
         log_err "Compilazione fallita. Verifica i log sopra indicati."
+        pause
+        return 1
     fi
-    pause
 }
 
 # ------------------------------------------------------------------------------
@@ -155,6 +158,7 @@ install_open_webui() {
     deactivate
     log_info "Open WebUI installato con successo nell'ambiente virtuale."
     pause
+    return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -213,23 +217,24 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# Configurazione Iniziale Servizi Systemd
+# Configurazione Iniziale Servizi Systemd (con Gestione Errori e Ripristino Menu)
 # ------------------------------------------------------------------------------
 setup_systemd_services() {
     if [[ ! -f "${LLAMA_DIR}/build/bin/llama-server" ]]; then
         log_err "Binario llama-server non trovato! Compila prima llama.cpp dall'opzione 1."
         pause
-        return
+        return 1
     fi
 
     if [[ ! -f "${WEBUI_VENV}/bin/open-webui" ]]; then
         log_err "Open WebUI non installato! Esegui prima l'opzione 2."
         pause
-        return
+        return 2
     fi
 
     apply_systemd_config
     pause
+    return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -239,13 +244,14 @@ run_autotune() {
     if [[ ! -f /etc/systemd/system/llama-server.service ]]; then
         log_err "I servizi systemd non sono ancora stati configurati. Esegui prima l'opzione 3."
         pause
-        return
+        return 1
     fi
 
     log_info "Avvio procedura di Auto-Tuning per modifiche hardware..."
     apply_systemd_config
     log_info "Auto-Tuning completato! Il motore si è adattato alla nuova configurazione."
     pause
+    return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -257,7 +263,7 @@ run_benchmark() {
     if [[ ! -f "${LLAMA_DIR}/build/bin/llama-bench" ]]; then
         log_err "Binario llama-bench non trovato. Esegui prima la compilazione (Opzione 1)."
         pause
-        return
+        return 1
     fi
 
     local model_file
@@ -272,7 +278,7 @@ run_benchmark() {
         else
             log_err "Esecuzione annullata: llama-bench richiede un file .gguf valido."
             pause
-            return
+            return 2
         fi
     fi
 
@@ -283,6 +289,7 @@ run_benchmark() {
     
     "${LLAMA_DIR}/build/bin/llama-bench" -m "${model_file}" -t "${OPTIMIZED_THREADS}"
     pause
+    return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -402,7 +409,7 @@ show_exit_summary() {
 }
 
 # ------------------------------------------------------------------------------
-# Menu TUI del Controller CPU con Avanzamento Automatico
+# Menu TUI del Controller CPU con Avanzamento Dinamico e Intelligente
 # ------------------------------------------------------------------------------
 render_header() {
     clear
@@ -435,24 +442,43 @@ main_menu() {
 
         case "$choice" in
             1) 
-                build_llama_cpp 
-                default_choice="2"
+                if build_llama_cpp; then
+                    default_choice="2"
+                fi
                 ;;
             2) 
-                install_open_webui 
-                default_choice="3"
+                if install_open_webui; then
+                    default_choice="3"
+                fi
                 ;;
             3) 
-                setup_systemd_services 
-                default_choice="4"
+                if setup_systemd_services; then
+                    default_choice="4"
+                else
+                    local res=$?
+                    if [[ $res -eq 1 ]]; then
+                        default_choice="1"
+                    elif [[ $res -eq 2 ]]; then
+                        default_choice="2"
+                    fi
+                fi
                 ;;
             4) 
-                run_autotune 
-                default_choice="5"
+                if run_autotune; then
+                    default_choice="5"
+                else
+                    default_choice="3"
+                fi
                 ;;
             5) 
-                run_benchmark 
-                default_choice="0"
+                if run_benchmark; then
+                    default_choice="0"
+                else
+                    local res=$?
+                    if [[ $res -eq 1 ]]; then
+                        default_choice="1"
+                    fi
+                fi
                 ;;
             0) 
                 show_exit_summary
