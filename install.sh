@@ -1,3 +1,5 @@
+
+sudo apt install git -y
 sudo rm -rf homelab-ai-deployer homelab-ai-logs && \
 git clone https://github.com/mrpink77it/homelab-ai-deployer.git && \
 cd homelab-ai-deployer && \
