@@ -40,6 +40,86 @@ pause() {
 }
 
 # ------------------------------------------------------------------------------
+# Dashboard Finale Sobria & Compatta (Registrata con TRAP)
+# ------------------------------------------------------------------------------
+show_exit_summary() {
+    # Disattiva temporaneamente l'uscita su errore per garantire il rendering
+    set +e
+
+    clear
+    detect_os
+
+    local primary_ip
+    primary_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    [[ -z "${primary_ip}" ]] && primary_ip="127.0.0.1"
+
+    local virt_type cpu_model phys_cores log_cores load_avg
+    virt_type=$(systemd-detect-virt 2>/dev/null) || virt_type="Bare-Metal"
+    cpu_model=$(lscpu 2>/dev/null | grep "Model name:" | sed 's/Model name:\s*//' | head -n1 | sed 's/Intel(R) Core(TM) //g; s/CPU @ //g; s/  */ /g')
+    [[ -z "${cpu_model}" ]] && cpu_model="x86_64 CPU"
+    phys_cores=$(lscpu -p=CORE 2>/dev/null | grep -v '^#' | sort -u | wc -l)
+    [[ "${phys_cores}" -eq 0 ]] && phys_cores=$(nproc 2>/dev/null || echo "1")
+    log_cores=$(nproc 2>/dev/null || echo "1")
+    load_avg=$(uptime 2>/dev/null | awk -F'load average:' '{ print $2 }' | sed 's/^ //' | tr -d ' ')
+
+    local ram_used ram_tot ram_pct disk_info
+    ram_used=$(free -h 2>/dev/null | awk '/^Mem:/{print $3}')
+    ram_tot=$(free -h 2>/dev/null | awk '/^Mem:/{print $2}')
+    ram_pct=$(free 2>/dev/null | awk '/^Mem:/{printf "%.1f%%", $3/$2*100}')
+    disk_info=$(df -h "${INSTALL_DIR}" 2>/dev/null | awk 'NR==2{printf "%s / %s (%s)", $3, $2, $5}')
+
+    local cpu_temps="" fan_speeds=""
+    if command -v sensors >/dev/null 2>&1; then
+        local pkg_t core_t
+        pkg_t=$(sensors 2>/dev/null | grep -iE 'Package|Tdie|temp1' | head -n1 | awk '{print $2}' | tr -d '+')
+        core_t=$(sensors 2>/dev/null | grep -i 'Core' | awk '{print $3}' | tr -d '+' | tr '\n' ' ')
+        
+        if [[ -n "${pkg_t}" ]]; then
+            cpu_temps="Pkg: ${pkg_t}"
+            [[ -n "${core_t}" ]] && cpu_temps="${cpu_temps} | Cores: [ ${core_t}]"
+        elif [[ -n "${core_t}" ]]; then
+            cpu_temps="Cores: [ ${core_t}]"
+        fi
+
+        fan_speeds=$(sensors 2>/dev/null | grep -iE 'fan[0-9]*:' | awk '{print $1 " " $2 " " $3}' | tr '\n' ' | ' | sed 's/ | $//')
+    fi
+
+    [[ -z "${cpu_temps}" ]] && cpu_temps="N/D"
+    [[ -z "${fan_speeds}" ]] && fan_speeds="N/D"
+
+    local models_summary
+    if [[ -d "${MODELS_DIR}" ]]; then
+        models_summary=$(find "${MODELS_DIR}" -name "*.gguf" -exec ls -lh {} \; 2>/dev/null | awk '{print $9 " (" $5 ")"}' | sed "s|${MODELS_DIR}/||g" | tr '\n' ', ' | sed 's/, $//')
+        [[ -z "${models_summary}" ]] && models_summary="Nessun modello presente"
+    else
+        models_summary="N/D"
+    fi
+
+    local llama_st webui_st llama_fmt webui_fmt
+    llama_st=$(systemctl is-active llama-server 2>/dev/null || echo "inattivo")
+    webui_st=$(systemctl is-active open-webui 2>/dev/null || echo "inattivo")
+
+    [[ "$llama_st" == "active" ]] && llama_fmt="${C_GREEN}ONLINE${C_RESET}" || llama_fmt="${C_RED}OFFLINE${C_RESET}"
+    [[ "$webui_st" == "active" ]] && webui_fmt="${C_GREEN}ONLINE${C_RESET}" || webui_fmt="${C_RED}OFFLINE${C_RESET}"
+
+    printf "%s--------------------------------------------------------------------------------%s\n" "${C_CYAN}" "${C_RESET}"
+    printf "%s HOMELAB AI DEPLOYER — STATO NODO INFERENZA CPU%s\n" "${C_BOLD}" "${C_RESET}"
+    printf "%s--------------------------------------------------------------------------------%s\n" "${C_CYAN}" "${C_RESET}"
+    printf " %s• OS / Host%s        : %s (Virt: %s)\n" "${C_BOLD}" "${C_RESET}" "${OS_NAME}" "${virt_type}"
+    printf " %s• CPU / Load%s       : %s (%sC/%sT) — Load: %s\n" "${C_BOLD}" "${C_RESET}" "${cpu_model}" "${phys_cores}" "${log_cores}" "${load_avg}"
+    printf " %s• RAM / Disk%s       : %s / %s (%s) | Storage: %s\n" "${C_BOLD}" "${C_RESET}" "${ram_used}" "${ram_tot}" "${ram_pct}" "${disk_info}"
+    printf " %s• Temp / Ventole%s   : %s | Ventole: %s\n" "${C_BOLD}" "${C_RESET}" "${cpu_temps}" "${fan_speeds}"
+    printf " %s• Modelli GGUF%s     : %s\n" "${C_BOLD}" "${C_RESET}" "${models_summary}"
+    printf " %s• Llama.cpp%s        : [%s] http://%s:8080/v1\n" "${C_BOLD}" "${C_RESET}" "${llama_fmt}" "${primary_ip}"
+    printf " %s• Open WebUI%s       : [%s] http://%s:8081\n" "${C_BOLD}" "${C_RESET}" "${webui_fmt}" "${primary_ip}"
+    printf "%s--------------------------------------------------------------------------------%s\n" "${C_CYAN}" "${C_RESET}"
+    printf " %sSessione terminata. Riavvio: ./manager-cpu.sh%s\n\n" "${C_DIM}" "${C_RESET}"
+}
+
+# Registrazione dell'hook di uscita globale
+trap show_exit_summary EXIT
+
+# ------------------------------------------------------------------------------
 # Rilevamento Dinamico Hardware e Sistema
 # ------------------------------------------------------------------------------
 detect_os() {
@@ -295,81 +375,7 @@ run_all_automated() {
 
     log_info "Installazione automatica completata."
     sleep 2
-    show_exit_summary
     exit 0
-}
-
-# ------------------------------------------------------------------------------
-# Dashboard Finale Sobria & Compatta
-# ------------------------------------------------------------------------------
-show_exit_summary() {
-    clear
-    detect_os
-
-    local primary_ip
-    primary_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
-
-    local virt_type cpu_model phys_cores log_cores load_avg
-    virt_type=$(systemd-detect-virt 2>/dev/null || echo "Bare-Metal")
-    cpu_model=$(lscpu 2>/dev/null | grep "Model name:" | sed 's/Model name:\s*//' | head -n1 | sed 's/Intel(R) Core(TM) //g; s/CPU @ //g; s/  */ /g')
-    [[ -z "${cpu_model}" ]] && cpu_model="x86_64 CPU"
-    phys_cores=$(lscpu -p=CORE 2>/dev/null | grep -v '^#' | sort -u | wc -l)
-    [[ "${phys_cores}" -eq 0 ]] && phys_cores=$(nproc)
-    log_cores=$(nproc)
-    load_avg=$(uptime | awk -F'load average:' '{ print $2 }' | sed 's/^ //' | tr -d ' ')
-
-    local ram_used ram_tot ram_pct disk_info
-    ram_used=$(free -h | awk '/^Mem:/{print $3}')
-    ram_tot=$(free -h | awk '/^Mem:/{print $2}')
-    ram_pct=$(free | awk '/^Mem:/{printf "%.1f%%", $3/$2*100}')
-    disk_info=$(df -h "${INSTALL_DIR}" 2>/dev/null | awk 'NR==2{printf "%s / %s (%s)", $3, $2, $5}')
-
-    local cpu_temps="" fan_speeds=""
-    if command -v sensors >/dev/null 2>&1; then
-        local pkg_t core_t
-        pkg_t=$(sensors 2>/dev/null | grep -iE 'Package|Tdie|temp1' | head -n1 | awk '{print $2}' | tr -d '+')
-        core_t=$(sensors 2>/dev/null | grep -i 'Core' | awk '{print $3}' | tr -d '+' | tr '\n' ' ')
-        
-        if [[ -n "${pkg_t}" ]]; then
-            cpu_temps="Pkg: ${pkg_t}"
-            [[ -n "${core_t}" ]] && cpu_temps="${cpu_temps} | Cores: [ ${core_t}]"
-        elif [[ -n "${core_t}" ]]; then
-            cpu_temps="Cores: [ ${core_t}]"
-        fi
-
-        fan_speeds=$(sensors 2>/dev/null | grep -iE 'fan[0-9]*:' | awk '{print $1 " " $2 " " $3}' | tr '\n' ' | ' | sed 's/ | $//')
-    fi
-
-    [[ -z "${cpu_temps}" ]] && cpu_temps="N/D"
-    [[ -z "${fan_speeds}" ]] && fan_speeds="N/D"
-
-    local models_summary
-    if [[ -d "${MODELS_DIR}" ]]; then
-        models_summary=$(find "${MODELS_DIR}" -name "*.gguf" -exec ls -lh {} \; 2>/dev/null | awk '{print $9 " (" $5 ")"}' | sed "s|${MODELS_DIR}/||g" | tr '\n' ', ' | sed 's/, $//')
-        [[ -z "${models_summary}" ]] && models_summary="Nessun modello presente"
-    else
-        models_summary="N/D"
-    fi
-
-    local llama_st webui_st llama_fmt webui_fmt
-    llama_st=$(systemctl is-active llama-server 2>/dev/null || echo "inattivo")
-    webui_st=$(systemctl is-active open-webui 2>/dev/null || echo "inattivo")
-
-    [[ "$llama_st" == "active" ]] && llama_fmt="${C_GREEN}ONLINE${C_RESET}" || llama_fmt="${C_RED}OFFLINE${C_RESET}"
-    [[ "$webui_st" == "active" ]] && webui_fmt="${C_GREEN}ONLINE${C_RESET}" || webui_fmt="${C_RED}OFFLINE${C_RESET}"
-
-    printf "%s--------------------------------------------------------------------------------%s\n" "${C_CYAN}" "${C_RESET}"
-    printf "%s HOMELAB AI DEPLOYER — STATO NODO INFERENZA CPU%s\n" "${C_BOLD}" "${C_RESET}"
-    printf "%s--------------------------------------------------------------------------------%s\n" "${C_CYAN}" "${C_RESET}"
-    printf " %s• OS / Host%s       : %s (Virt: %s)\n" "${C_BOLD}" "${C_RESET}" "${OS_NAME}" "${virt_type}"
-    printf " %s• CPU / Load%s      : %s (%sC/%sT) — Load: %s\n" "${C_BOLD}" "${C_RESET}" "${cpu_model}" "${phys_cores}" "${log_cores}" "${load_avg}"
-    printf " %s• RAM / Disk%s      : %s / %s (%s) | Storage: %s\n" "${C_BOLD}" "${C_RESET}" "${ram_used}" "${ram_tot}" "${ram_pct}" "${disk_info}"
-    printf " %s• Temp / Ventole%s  : %s | Ventole: %s\n" "${C_BOLD}" "${C_RESET}" "${cpu_temps}" "${fan_speeds}"
-    printf " %s• Modelli GGUF%s    : %s\n" "${C_BOLD}" "${C_RESET}" "${models_summary}"
-    printf " %s• Llama.cpp%s       : [%s] http://%s:8080/v1\n" "${C_BOLD}" "${C_RESET}" "${llama_fmt}" "${primary_ip}"
-    printf " %s• Open WebUI%s      : [%s] http://%s:8081\n" "${C_BOLD}" "${C_RESET}" "${webui_fmt}" "${primary_ip}"
-    printf "%s--------------------------------------------------------------------------------%s\n" "${C_CYAN}" "${C_RESET}"
-    printf " %sSessione terminata. Riavvio: ./manager-cpu.sh%s\n\n" "${C_DIM}" "${C_RESET}"
 }
 
 # ------------------------------------------------------------------------------
@@ -389,7 +395,7 @@ welcome_wizard() {
     printf "  ottimizzato per sola CPU.\n\n"
 
     printf "%s[ ARCHITETTURA ]%s\n" "${C_BOLD}" "${C_RESET}"
-    printf "  • %sEngine%s        : llama.cpp (compilazione nativa C++, OpenMP, AVX2/AVX-512)\n" "${C_CYAN}" "${C_RESET}"
+    printf "  • %sEngine%s         : llama.cpp (compilazione nativa C++, OpenMP, AVX2/AVX-512)\n" "${C_CYAN}" "${C_RESET}"
     printf "  • %sInterfaccia%s   : Open WebUI (ambiente virtuale Python isolato)\n" "${C_CYAN}" "${C_RESET}"
     printf "  • %sGestore%s       : Unità Systemd con riavvio automatico ed auto-tuning\n\n" "${C_CYAN}" "${C_RESET}"
 
@@ -453,7 +459,7 @@ main_menu() {
             "4" "Auto-Tuning Hardware & Riavvio" \
             "5" "Esegui Benchmark CPU (llama-bench)" \
             "0" "Esci e Mostra Dashboard" \
-            3>&1 1>&2 2>&3) || { show_exit_summary; exit 0; }
+            3>&1 1>&2 2>&3) || exit 0
 
         case "$choice" in
             A|a) run_all_automated ;;
@@ -462,8 +468,8 @@ main_menu() {
             3) setup_systemd_services && default_choice="4" ;;
             4) run_autotune && default_choice="5" ;;
             5) run_benchmark && default_choice="0" ;;
-            0) show_exit_summary; exit 0 ;;
-            *) show_exit_summary; exit 0 ;;
+            0) exit 0 ;;
+            *) exit 0 ;;
         esac
     done
 }
