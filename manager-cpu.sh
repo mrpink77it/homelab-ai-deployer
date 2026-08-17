@@ -217,7 +217,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# Configurazione Iniziale Servizi Systemd (con Gestione Errori e Ripristino Menu)
+# Configurazione Iniziale Servizi Systemd
 # ------------------------------------------------------------------------------
 setup_systemd_services() {
     if [[ ! -f "${LLAMA_DIR}/build/bin/llama-server" ]]; then
@@ -293,7 +293,7 @@ run_benchmark() {
 }
 
 # ------------------------------------------------------------------------------
-# Stampa a Video del Report Completo di Uscita (Dashboard Hardware & Servizi)
+# Dashboard Ultra-Compatta a Schermata Singola (Single-Screen / No-Scroll)
 # ------------------------------------------------------------------------------
 show_exit_summary() {
     clear
@@ -302,114 +302,100 @@ show_exit_summary() {
     local primary_ip
     primary_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
 
-    echo -e "${C_CYAN}${C_BOLD}"
-    echo "================================================================================"
-    echo "            HOMELAB AI DEPLOYER - DASHBOARD NODO INFERENZA CPU                  "
-    echo "================================================================================"
-    echo -e "${C_RESET}"
-
-    # 1. Modello Macchina e OS
-    local sys_vendor sys_product virt_type
-    sys_vendor=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || echo "Generico")
-    sys_product=$(cat /sys/class/dmi/id/product_name 2>/dev/null || echo "Host / Proxmox LXC")
+    # 1. Info Hardware e Virtualizzazione
+    local virt_type cpu_model phys_cores log_cores load_avg
     virt_type=$(systemd-detect-virt 2>/dev/null || echo "Bare-Metal")
-
-    echo -e "${C_BOLD}${C_GREEN}► HARDWARE & SISTEMA OPERATIVO${C_RESET}"
-    echo -e "  • OS / Kernel        : ${OS_NAME} ($(uname -r))"
-    echo -e "  • Piattaforma        : ${sys_vendor} ${sys_product} (Virtualizzazione: ${virt_type})"
-
-    # 2. CPU Cores & Impegno Attuale
-    local cpu_model phys_cores log_cores load_avg
-    cpu_model=$(lscpu 2>/dev/null | grep "Model name:" | sed 's/Model name:\s*//' | head -n1)
-    [[ -z "${cpu_model}" ]] && cpu_model="Processore Generico x86_64"
+    cpu_model=$(lscpu 2>/dev/null | grep "Model name:" | sed 's/Model name:\s*//' | head -n1 | sed 's/Intel(R) Core(TM) //g; s/CPU @ //g; s/  */ /g')
+    [[ -z "${cpu_model}" ]] && cpu_model="x86_64 CPU"
     phys_cores=$(lscpu -p=CORE 2>/dev/null | grep -v '^#' | sort -u | wc -l)
     [[ "${phys_cores}" -eq 0 ]] && phys_cores=$(nproc)
     log_cores=$(nproc)
-    load_avg=$(uptime | awk -F'load average:' '{ print $2 }' | sed 's/^ //')
+    load_avg=$(uptime | awk -F'load average:' '{ print $2 }' | sed 's/^ //' | tr -d ' ')
 
-    echo -e "  • Processore (CPU)   : ${cpu_model}"
-    echo -e "  • Core / Thread      : ${phys_cores} Core Fisici / ${log_cores} Thread Logici"
-    echo -e "  • Carico CPU (Load)  :${load_avg}"
-
-    # 3. RAM (Totale, Usata, Percentuale Impegno)
-    local ram_summary ram_pct
-    ram_summary=$(free -h | awk '/^Mem:/{print $3 " usati / " $2 " totali (Liberi: " $4 ")"}')
+    # 2. RAM e Storage
+    local ram_used ram_tot ram_pct disk_info
+    ram_used=$(free -h | awk '/^Mem:/{print $3}')
+    ram_tot=$(free -h | awk '/^Mem:/{print $2}')
     ram_pct=$(free | awk '/^Mem:/{printf "%.1f%%", $3/$2*100}')
-    echo -e "  • Memoria RAM        : ${ram_summary} [Impegno: ${ram_pct}]"
+    disk_info=$(df -h "${INSTALL_DIR}" 2>/dev/null | awk 'NR==2{printf "%s usati / %s tot (%s)", $3, $2, $5}')
 
-    # 4. Dischi e Partizioni
-    echo -e "\n${C_BOLD}${C_GREEN}► STATO DISCHI E STORAGE${C_RESET}"
-    df -h / "${INSTALL_DIR}" 2>/dev/null | awk 'NR==1 || !seen[$1]++' | awk '{printf "  • %-22s Tot: %-8s Usato: %-8s Lib: %-8s Uso: %s\n", $1, $2, $3, $4, $5}'
-
-    # 5. Sensori Temperatura Hardware
-    echo -e "\n${C_BOLD}${C_GREEN}► SENSORI TEMPERATURA${C_RESET}"
+    # 3. Rilevamento Avanzato Sensori (CPU, Cores, Ventole)
+    local cpu_temps="" fan_speeds=""
     if command -v sensors >/dev/null 2>&1; then
-        local temp_data
-        temp_data=$(sensors 2>/dev/null | grep -E 'Package|Core|temp1' | head -n 5 || true)
-        if [[ -n "${temp_data}" ]]; then
-            echo "${temp_data}" | sed 's/^/  • /'
-        else
-            echo "  • Sensori rilevati ma nessuna temperatura letta."
+        local pkg_t core_t
+        pkg_t=$(sensors 2>/dev/null | grep -iE 'Package|Tdie|temp1' | head -n1 | awk '{print $2}' | tr -d '+')
+        core_t=$(sensors 2>/dev/null | grep -i 'Core' | awk '{print $3}' | tr -d '+' | tr '\n' ' ')
+        
+        if [[ -n "${pkg_t}" ]]; then
+            cpu_temps="Package: ${pkg_t}"
+            [[ -n "${core_t}" ]] && cpu_temps="${cpu_temps} | Core: [ ${core_t}]"
+        elif [[ -n "${core_t}" ]]; then
+            cpu_temps="Core: [ ${core_t}]"
         fi
-    elif [[ -d /sys/class/thermal ]]; then
-        local found_thermal=0
+
+        fan_speeds=$(sensors 2>/dev/null | grep -iE 'fan[0-9]*:' | awk '{print $1 " " $2 " " $3}' | tr '\n' ' | ' | sed 's/ | $//')
+    fi
+
+    # Fallback Thermal Zones se lm-sensors è parziale/LXC
+    if [[ -z "${cpu_temps}" ]] && [[ -d /sys/class/thermal ]]; then
+        local tz_list=""
         for zone in /sys/class/thermal/thermal_zone*/temp; do
             if [[ -f "$zone" ]]; then
-                local raw_temp
-                raw_temp=$(cat "$zone" 2>/dev/null || echo 0)
-                if [[ "$raw_temp" -gt 0 ]]; then
-                    echo "  • Zone Thermal ($(basename "$(dirname "$zone")")): $((raw_temp / 1000))°C"
-                    found_thermal=1
-                fi
+                local raw_t
+                raw_t=$(cat "$zone" 2>/dev/null || echo 0)
+                [[ "$raw_t" -gt 0 ]] && tz_list="${tz_list}$((raw_t / 1000))°C "
             fi
         done
-        [[ $found_thermal -eq 0 ]] && echo "  • Nessun sensore termico diretto (Ambiente Container LXC/VM)."
-    else
-        echo "  • Sensori non disponibili o ambiente virtualizzato senza pass-through."
+        [[ -n "${tz_list}" ]] && cpu_temps="Thermal Zones: ${tz_list}"
     fi
 
-    # 6. Modelli AI Presenti/Caricati
-    echo -e "\n${C_BOLD}${C_GREEN}► MODELLI AI (GGUF)${C_RESET}"
+    [[ -z "${cpu_temps}" ]] && cpu_temps="N/D (LXC/VM senza pass-through)"
+    [[ -z "${fan_speeds}" ]] && fan_speeds="N/D (Gestite da Host BIOS)"
+
+    # 4. Modelli AI
+    local models_summary=""
     if [[ -d "${MODELS_DIR}" ]]; then
-        local count_models
-        count_models=$(find "${MODELS_DIR}" -name "*.gguf" 2>/dev/null | wc -l)
-        if [[ "${count_models}" -gt 0 ]]; then
-            echo -e "  • Modelli archiviati in ${MODELS_DIR}:"
-            find "${MODELS_DIR}" -name "*.gguf" -exec ls -lh {} \; | awk '{print "    - " $9 " (" $5 ")"}'
-        else
-            echo -e "  • Nessun file .gguf presente in ${MODELS_DIR}"
-        fi
+        models_summary=$(find "${MODELS_DIR}" -name "*.gguf" -exec ls -lh {} \; 2>/dev/null | awk '{print $9 " (" $5 ")"}' | sed "s|${MODELS_DIR}/||g" | tr '\n' ', ' | sed 's/, $//')
+        [[ -z "${models_summary}" ]] && models_summary="Nessun modello .gguf presente"
     else
-        echo -e "  • Cartella modelli non presente."
+        models_summary="Directory non trovata"
     fi
 
-    # 7. Stato Servizi, Porte, Indirizzi IP e Protocolli
-    echo -e "\n${C_BOLD}${C_GREEN}► STATO SERVIZI, PORTE & ENDPOINT CONNESIONE${C_RESET}"
-    
-    local llama_st webui_st
+    # 5. Stato Servizi
+    local llama_st webui_st llama_fmt webui_fmt
     llama_st=$(systemctl is-active llama-server 2>/dev/null || echo "inattivo")
     webui_st=$(systemctl is-active open-webui 2>/dev/null || echo "inattivo")
 
-    echo -e "  [1] Llama.cpp Engine (API Server)"
-    echo -e "      • Stato Servizio : ${llama_st}"
-    echo -e "      • Protocollo     : HTTP / REST (Compatibile OpenAI)"
-    echo -e "      • Indirizzo/Porta: ${primary_ip}:8080 (0.0.0.0:8080)"
-    echo -e "      • Endpoint API   : http://${primary_ip}:8080/v1"
-    echo -e "      • Health Check   : http://${primary_ip}:8080/health"
+    [[ "$llama_st" == "active" ]] && llama_fmt="${C_GREEN}● ONLINE${C_RESET}" || llama_fmt="${C_RED}○ OFFLINE${C_RESET}"
+    [[ "$webui_st" == "active" ]] && webui_fmt="${C_GREEN}● ONLINE${C_RESET}" || webui_fmt="${C_RED}○ OFFLINE${C_RESET}"
 
-    echo -e "  [2] Open WebUI (Interfaccia Grafica Web)"
-    echo -e "      • Stato Servizio : ${webui_st}"
-    echo -e "      • Protocollo     : HTTP"
-    echo -e "      • Indirizzo/Porta: ${primary_ip}:8081"
-    echo -e "      • Web UI URL     : http://${primary_ip}:8081"
-
-    echo -e "\n================================================================================"
-    echo -e " Sessione terminata. Per riaprire il manager esegui: ${C_BOLD}./manager-cpu.sh${C_RESET}"
-    echo -e "================================================================================\n"
+    # --------------------------------------------------------------------------
+    # Output Grafico (Compatto per schermi 80x24)
+    # --------------------------------------------------------------------------
+    echo -e "${C_CYAN}┌──────────────────────────────────────────────────────────────────────────────┐${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET} ${C_BOLD}HOMELAB AI DEPLOYER — DASHBOARD NODO INFERENZA CPU${C_RESET}                       ${C_CYAN}│${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET} ${C_GREEN}${C_BOLD}SYSTEM & HARDWARE${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET}  • OS / Virt   : ${OS_NAME} [Virtualizzazione: ${virt_type}]"
+    echo -e "${C_CYAN}│${C_RESET}  • CPU / Load  : ${cpu_model} (${phys_cores}C/${log_cores}T) — Load: ${load_avg}"
+    echo -e "${C_CYAN}│${C_RESET}  • RAM / Disk  : RAM: ${ram_used} / ${ram_tot} (${ram_pct}) | Storage: ${disk_info}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET} ${C_GREEN}${C_BOLD}SENSORI, TEMPERATURE & VENTOLE${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET}  • Temperature : ${cpu_temps}"
+    echo -e "${C_CYAN}│${C_RESET}  • Ventole     : ${fan_speeds}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET} ${C_GREEN}${C_BOLD}MODELLI AI (GGUF)${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET}  • Modelli     : ${models_summary}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET} ${C_GREEN}${C_BOLD}SERVIZI & ENDPOINT DI CONNESIONE${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET}  • Llama.cpp   : [${llama_fmt}] http://${primary_ip}:8080 (API OpenAI /v1)"
+    echo -e "${C_CYAN}│${C_RESET}  • Open WebUI  : [${webui_fmt}] http://${primary_ip}:8081 (Interfaccia Web)"
+    echo -e "${C_CYAN}└──────────────────────────────────────────────────────────────────────────────┘${C_RESET}"
+    echo -e " ${C_DIM}Sessione terminata. Per riaprire il manager esegui: ./manager-cpu.sh${C_RESET}\n"
 }
 
 # ------------------------------------------------------------------------------
-# Menu TUI del Controller CPU con Avanzamento Dinamico e Intelligente
+# Menu TUI del Controller CPU con Avanzamento Dinamico
 # ------------------------------------------------------------------------------
 render_header() {
     clear
