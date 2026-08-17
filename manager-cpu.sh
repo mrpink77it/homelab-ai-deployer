@@ -2,7 +2,7 @@
 # ==============================================================================
 # Script: manager-cpu.sh (Homelab AI Deployer - CPU Manager)
 # Descrizione: Deploy & Management stack AI per nodi solo CPU (llama.cpp + Open WebUI)
-# Ambienti: Bare-Metal & LXC Proxmox (Debian 13 Trixie / Ubuntu 24.04+)
+# Ambienti: Bare-Metal & LXC Proxmox (Debian 12/13 / Ubuntu 22.04/24.04+)
 # Repository: homelab-ai-deployer
 # ==============================================================================
 
@@ -29,14 +29,25 @@ log_warn()  { echo -e "${C_YELLOW}[WARN]${C_RESET} $1"; }
 log_err()   { echo -e "${C_RED}[ERRORE]${C_RESET} $1"; }
 
 pause() {
-    read -rp $'Premio [INVIO] per continuare...'
+    read -rp $'Premere [INVIO] per continuare...'
+}
+
+# ------------------------------------------------------------------------------
+# Rilevamento Dinamico OS
+# ------------------------------------------------------------------------------
+detect_os() {
+    OS_NAME="Linux Generico"
+    if [[ -f /etc/os-release ]]; then
+        OS_NAME=$(grep -E '^PRETTY_NAME=' /etc/os-release | cut -d'=' -f2 | tr -d '"')
+    fi
 }
 
 # ------------------------------------------------------------------------------
 # Verifica e Installazione Dipendenze di Sistema
 # ------------------------------------------------------------------------------
 install_system_deps() {
-    echo -e "${C_CYAN}❖ Aggiornamento pacchetti e installazione build tools per Debian 13...${C_RESET}"
+    detect_os
+    echo -e "${C_CYAN}❖ Aggiornamento pacchetti e installazione build tools per ${OS_NAME}...${C_RESET}"
     export DEBIAN_FRONTEND=noninteractive
     
     apt-get update -qq
@@ -54,7 +65,7 @@ install_system_deps() {
         whiptail >/dev/null 2>&1
 
     mkdir -p "${INSTALL_DIR}"
-    log_info "Dipendenze di sistema installate correttamente."
+    log_info "Dipendenze di sistema installate correttamente su ${OS_NAME}."
 }
 
 # ------------------------------------------------------------------------------
@@ -101,7 +112,7 @@ install_open_webui() {
     source "${WEBUI_VENV}/bin/activate"
 
     pip install --upgrade pip setuptools wheel --quiet
-    log_info "Installazione Open WebUI (può richiedere un paio di minuti)..."
+    log_info "Installazione Open WebUI in corso..."
     pip install open-webui --quiet
 
     deactivate
@@ -178,11 +189,13 @@ EOF
 # ------------------------------------------------------------------------------
 render_header() {
     clear
+    detect_os
     echo -e "${C_CYAN}${C_BOLD}"
     echo "┌──────────────────────────────────────────────────────────────────────────────┐"
     echo "│               M A N A G E R   C P U   I N F E R E N C E                      │"
     echo "│                 Homelab AI Deployer - Native Vector Engine                   │"
-    echo "└──────────────────────────────────────────────────────────────────────────────┘${C_RESET}\n"
+    echo "└──────────────────────────────────────────────────────────────────────────────┘${C_RESET}"
+    echo -e "${C_DIM} Sistema Operativo:${C_RESET} ${C_BOLD}${OS_NAME}${C_RESET}\n"
 }
 
 main_menu() {
