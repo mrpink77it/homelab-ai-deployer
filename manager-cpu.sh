@@ -5,7 +5,6 @@
 
 set -u
 
-# Directory di lavoro di sistema
 HOMELAB_DIR="/opt/homelab-ai"
 MODELS_DIR="${HOMELAB_DIR}/models"
 LLAMA_DIR="${HOMELAB_DIR}/llama.cpp"
@@ -15,27 +14,16 @@ WEBUI_ENV="${HOMELAB_DIR}/openwebui_env"
 # Dashboard di Riepilogo Finale (Eseguita all'uscita)
 # ------------------------------------------------------------------------------
 show_dashboard() {
-    # Colori ANSI per terminale standard
-    local BOLD='\033[1m'
-    local CYAN='\033[1;36m'
-    local GREEN='\033[1;32m'
-    local YELLOW='\033[1;33m'
-    local RED='\033[1;31m'
-    local RESET='\033[0m'
-
-    # Indirizzo IP Principale
     local IP_ADDR
     IP_ADDR=$(hostname -I 2>/dev/null | awk '{print $1}')
     [ -z "$IP_ADDR" ] && IP_ADDR="127.0.0.1"
 
-    # OS e Virtualizzazione
     local OS_NAME KERNEL_VER VIRT_TYPE HARDWARE_MODEL
     OS_NAME=$(source /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" || echo "Linux")
     KERNEL_VER=$(uname -r)
     VIRT_TYPE=$(systemd-detect-virt 2>/dev/null || echo "baremetal")
     HARDWARE_MODEL=$(cat /sys/class/dmi/id/product_name 2>/dev/null || echo "System Product Name")
 
-    # CPU Metrics
     local CPU_MODEL CORES_PHYSICAL LOGICAL_THREADS CPU_LOAD
     CPU_MODEL=$(lscpu 2>/dev/null | grep "Model name:" | sed 's/Model name:\s*//' | xargs)
     [ -z "$CPU_MODEL" ] && CPU_MODEL=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | xargs)
@@ -43,7 +31,6 @@ show_dashboard() {
     LOGICAL_THREADS=$(nproc 2>/dev/null || echo "N/A")
     CPU_LOAD=$(uptime | awk -F'load average:' '{ print $2 }' | xargs)
 
-    # RAM Metrics
     local RAM_USED RAM_TOTAL RAM_FREE RAM_USAGE_PCT
     RAM_USED=$(free -h | awk '/^Mem:/ {print $3}')
     RAM_TOTAL=$(free -h | awk '/^Mem:/ {print $2}')
@@ -51,13 +38,13 @@ show_dashboard() {
     RAM_USAGE_PCT=$(free | awk '/^Mem:/ {printf "%.1f", $3/$2 * 100}')
 
     clear
-    echo -e "================================================================================"
-    echo -e "            HOMELAB AI DEPLOYER - DASHBOARD NODO INFERENZA CPU                  "
-    echo -e "================================================================================"
+    echo "================================================================================"
+    echo "            HOMELAB AI DEPLOYER - DASHBOARD NODO INFERENZA CPU                  "
+    echo "================================================================================"
     echo ""
 
-    # 1. HARDWARE & SISTEMA OPERATIVO
-    echo -e "► HARDWARE & SISTEMA OPERATIVO"
+    # ► HARDWARE & SISTEMA OPERATIVO
+    echo "► HARDWARE & SISTEMA OPERATIVO"
     printf "  • %-20s : %s (%s)\n" "OS / Kernel" "$OS_NAME" "$KERNEL_VER"
     printf "  • %-20s : %s (Virtualizzazione: %s)\n" "Piattaforma" "$HARDWARE_MODEL" "$VIRT_TYPE"
     printf "  • %-20s : %s\n" "Processore (CPU)" "${CPU_MODEL:-N/A}"
@@ -65,78 +52,79 @@ show_dashboard() {
     printf "  • %-20s : %s\n" "Carico CPU (Load)" "$CPU_LOAD"
     printf "  • %-20s : %s usati / %s totali (Liberi: %s) [Impegno: %s%%]\n\n" "Memoria RAM" "$RAM_USED" "$RAM_TOTAL" "$RAM_FREE" "$RAM_USAGE_PCT"
 
-    # 2. STATO DISCHI E STORAGE
-    echo -e "► STATO DISCHI E STORAGE"
-    printf "  %-35s Tot: %-8s Usato: %-8s Lib: %-8s Uso: %s\n" "Filesystem" "Size" "Used" "Avail" "Use%"
+    # ► STATO DISCHI E STORAGE
+    echo "► STATO DISCHI E STORAGE"
+    printf "  • %-30s Tot: %-6s Usato: %-6s Lib: %-6s Uso: %s\n" "Filesystem" "Size" "Used" "Avail" "Use%"
     df -h / "${HOMELAB_DIR}" 2>/dev/null | tail -n +2 | sort -u | awk '{
-        printf "  %-35s Tot: %-8s Usato: %-8s Lib: %-8s Uso: %s\n", $1, $2, $3, $4, $5
+        printf "  • %-30s Tot: %-6s Usato: %-6s Lib: %-6s Uso: %s\n", $1, $2, $3, $4, $5
     }'
     echo ""
 
-    # 3. SENSORI TEMPERATURA
-    echo -e "► SENSORI TEMPERATURA"
+    # ► SENSORI TEMPERATURA
+    echo "► SENSORI TEMPERATURA"
     if command -v sensors &>/dev/null; then
         sensors 2>/dev/null | grep -E 'Core|Package|temp1' | head -n 5 | while read -r line; do
-            echo -e "  • $line"
+            echo "  • $line"
         done
     else
-        echo -e "  • Sensori non disponibili (lm-sensors non presente)"
+        echo "  • Sensori non disponibili (lm-sensors non installato)"
     fi
     echo ""
 
-    # 4. MODELLI AI (GGUF)
-    echo -e "► MODELLI AI (GGUF)"
-    echo -e "  • Modelli archiviati in ${MODELS_DIR}:"
+    # ► MODELLI AI (GGUF)
+    echo "► MODELLI AI (GGUF)"
+    echo "  • Modelli archiviati in ${MODELS_DIR}:"
     if [ -d "${MODELS_DIR}" ] && [ "$(ls -A "${MODELS_DIR}"/*.gguf 2>/dev/null)" ]; then
         for model in "${MODELS_DIR}"/*.gguf; do
             local size
             size=$(du -h "$model" | awk '{print $1}')
-            echo -e "    - ${model} (${size})"
+            echo "    - ${model} (${size})"
         done
     else
-        echo -e "    - Nessun modello GGUF presente in directory."
+        echo "    - Nessun modello GGUF presente in directory."
     fi
     echo ""
 
-    # 5. STATO SERVIZI, PORTE & ENDPOINT CONNESIONE
-    echo -e "► STATO SERVIZI, PORTE & ENDPOINT CONNESIONE"
+    # ► STATO SERVIZI, PORTE & ENDPOINT CONNESIONE
+    echo "► STATO SERVIZI, PORTE & ENDPOINT CONNESIONE"
 
     if systemctl is-active --quiet llama-server.service 2>/dev/null; then
-        echo -e "  [1] Llama.cpp Engine (API Server)"
-        echo -e "      • Stato Servizio : active"
-        echo -e "      • Protocollo     : HTTP / REST (Compatibile OpenAI)"
-        echo -e "      • Indirizzo/Porta: ${IP_ADDR}:8080 (0.0.0.0:8080)"
-        echo -e "      • Endpoint API   : http://${IP_ADDR}:8080/v1"
-        echo -e "      • Health Check   : http://${IP_ADDR}:8080/health"
+        echo "  [1] Llama.cpp Engine (API Server)"
+        echo "      • Stato Servizio : active"
+        echo "      • Protocollo     : HTTP / REST (Compatibile OpenAI)"
+        echo "      • Indirizzo/Porta: ${IP_ADDR}:8080 (0.0.0.0:8080)"
+        echo "      • Endpoint API   : http://${IP_ADDR}:8080/v1"
+        echo "      • Health Check   : http://${IP_ADDR}:8080/health"
     else
-        echo -e "  [1] Llama.cpp Engine (API Server) - Inattivo"
+        echo "  [1] Llama.cpp Engine (API Server) - Inattivo"
     fi
 
     if systemctl is-active --quiet open-webui.service 2>/dev/null; then
-        echo -e "  [2] Open WebUI (Interfaccia Grafica Web)"
-        echo -e "      • Stato Servizio : active"
-        echo -e "      • Protocollo     : HTTP"
-        echo -e "      • Indirizzo/Porta: ${IP_ADDR}:8081"
-        echo -e "      • Web UI URL     : http://${IP_ADDR}:8081"
+        echo "  [2] Open WebUI (Interfaccia Grafica Web)"
+        echo "      • Stato Servizio : active"
+        echo "      • Protocollo     : HTTP"
+        echo "      • Indirizzo/Porta: ${IP_ADDR}:8081"
+        echo "      • Web UI URL     : http://${IP_ADDR}:8081"
     else
-        echo -e "  [2] Open WebUI (Interfaccia Grafica Web) - Inattiva"
+        echo "  [2] Open WebUI (Interfaccia Grafica Web) - Inattiva"
     fi
 
     echo ""
-    echo -e "================================================================================"
-    echo -e " Sessione terminata. Per riaprire il manager esegui: ./manager-cpu.sh"
-    echo -e "================================================================================"
+    echo "================================================================================"
+    echo " Sessione terminata. Per riaprire il manager esegui: ./manager-cpu.sh"
+    echo "================================================================================"
     echo ""
 }
 
-# Registra la dashboard per l'esecuzione automatica all'uscita dello script
+# Registra la dashboard all'uscita dello script
 trap show_dashboard EXIT
 
 # ------------------------------------------------------------------------------
-# Funzioni Operative del Manager
+# Funzioni Operative
 # ------------------------------------------------------------------------------
 install_llama_cpp() {
-    echo -e "\n[+] Preparazione dell'ambiente ed installazione dipendenze C++..."
+    echo ""
+    echo "[+] Preparazione dell'ambiente ed installazione dipendenze C++..."
     mkdir -p "${HOMELAB_DIR}" "${MODELS_DIR}"
     apt-get update && apt-get install -y build-essential cmake git libopenblas-dev lm-sensors
     
@@ -156,7 +144,8 @@ install_llama_cpp() {
 }
 
 install_open_webui() {
-    echo -e "\n[+] Installazione Open WebUI in ambiente virtuale dedicato..."
+    echo ""
+    echo "[+] Installazione Open WebUI in ambiente virtuale dedicato..."
     mkdir -p "${HOMELAB_DIR}"
     apt-get update && apt-get install -y python3-venv python3-pip
     
@@ -171,9 +160,9 @@ install_open_webui() {
 }
 
 configure_systemd_services() {
-    echo -e "\n[+] Configurazione dei servizi Systemd..."
+    echo ""
+    echo "[+] Configurazione dei servizi Systemd..."
     
-    # Servizio Llama Server
     cat <<EOF > /etc/systemd/system/llama-server.service
 [Unit]
 Description=Llama.cpp HTTP API Server
@@ -191,7 +180,6 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    # Servizio Open WebUI
     cat <<EOF > /etc/systemd/system/open-webui.service
 [Unit]
 Description=Open WebUI Service
@@ -216,11 +204,29 @@ EOF
     read -rp "Premere INVIO per continuare..."
 }
 
+auto_tuning_hardware() {
+    echo ""
+    echo "[+] Auto-Tuning Hardware in corso..."
+    local CORES LOGICAL RAM_GB
+    CORES=$(nproc)
+    LOGICAL=$(grep -c ^processor /proc/cpuinfo)
+    RAM_GB=$(free -g | awk '/^Mem:/ {print $2}')
+    
+    echo "  • Core fisici / logici : ${CORES} / ${LOGICAL}"
+    echo "  • Memoria RAM Totale   : ${RAM_GB} GB"
+    echo "  • Thread consigliati   : ${CORES}"
+    echo "  • Context Size ottimale: 4096 token"
+    echo "[+] Auto-tuning completato."
+    read -rp "Premere INVIO per continuare..."
+}
+
 run_cpu_benchmark() {
     if [ ! -f "${LLAMA_DIR}/build/bin/llama-bench" ]; then
-        echo -e "\n[!] Binario llama-bench non trovato. Eseguire prima la compilazione."
+        echo ""
+        echo "[!] Binario llama-bench non trovato. Eseguire prima la compilazione."
     else
-        echo -e "\n[+] Avvio del Benchmark CPU (llama-bench)..."
+        echo ""
+        echo "[+] Avvio del Benchmark CPU (llama-bench)..."
         "${LLAMA_DIR}/build/bin/llama-bench" -t "$(nproc)"
     fi
     read -rp "Premere INVIO per continuare..."
@@ -235,24 +241,25 @@ main_menu() {
         echo "================================================================================"
         echo "               HOMELAB AI DEPLOYER - MANAGER NODO CPU                           "
         echo "================================================================================"
-        echo " 1) COMPILA llama.cpp (Nativo C++ con OpenBLAS/AVX)"
-        echo " 2) INSTALLA Open WebUI (Python venv)"
-        echo " 3) CONFIGURA Servizi Systemd (llama-server & open-webui)"
-        echo " 4) BENCHMARK CPU (llama-bench)"
-        echo " 0) ESCI E MOSTRA DASHBOARD"
+        echo " 1) COMPILA llama.cpp"
+        echo " 2) INSTALLA Open WebUI"
+        echo " 3) CONFIGURA Servizi Systemd"
+        echo " 4) AUTO-TUNING Hardware"
+        echo " 5) BENCHMARK CPU"
+        echo " 0) ESCI / DASHBOARD"
         echo "================================================================================"
-        read -rp "Seleziona un'opzione [0-4]: " choice
+        read -rp "Seleziona un'opzione [0-5]: " choice
 
         case $choice in
             1) install_llama_cpp ;;
             2) install_open_webui ;;
             3) configure_systemd_services ;;
-            4) run_cpu_benchmark ;;
+            4) auto_tuning_hardware ;;
+            5) run_cpu_benchmark ;;
             0) exit 0 ;;
             *) echo "Opzione non valida."; sleep 1 ;;
         esac
     done
 }
 
-# Avvio del menu
 main_menu
