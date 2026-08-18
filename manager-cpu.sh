@@ -1,259 +1,291 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Script: manager-cpu.sh (Homelab AI Deployer - CPU Manager)
-# Versione: 1.0.0 (First Stable Release)
-# Descrizione: Deploy & Management stack AI per nodi CPU (llama.cpp + Open WebUI)
-# Ambienti: Bare-Metal & LXC Proxmox (Debian 12/13 / Ubuntu 22.04/24.04+)
-# Repository: homelab-ai-deployer
+# Script Name: manager-cpu.sh
+# Project:     homelab-ai-deployer
+# Description: CPU Manager per llama.cpp (AVX2/AVX-512 + OpenMP) & Open WebUI
 # ==============================================================================
 
 set -euo pipefail
 
-# ------------------------------------------------------------------------------
-# Configurazione Ambiente e Stili ANSI (Sobri)
-# ------------------------------------------------------------------------------
-INSTALL_DIR="/opt/homelab-ai"
-LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
-WEBUI_VENV="${INSTALL_DIR}/openwebui_env"
-MODELS_DIR="${INSTALL_DIR}/models"
+# --- VARIABILI GLOBALI DI SISTEMA ---
+BASE_DIR="/opt/homelab-ai"
+MODELS_DIR="${BASE_DIR}/models"
+LLAMA_DIR="${BASE_DIR}/llama.cpp"
+WEBUI_DIR="${BASE_DIR}/open-webui"
+WEBUI_VENV="${WEBUI_DIR}/venv"
 
-AUTO_MODE=false
+ACTIVE_MODEL=""
+OPTIMIZED_THREADS=4
+OPTIMIZED_CTX=4096
+OPTIMIZED_BATCH=512
+AUTO_MODE="false"
 
-C_RESET=$'\033[0m'
-C_BOLD=$'\033[1m'
-C_CYAN=$'\033[36m'
-C_GREEN=$'\033[32m'
-C_YELLOW=$'\033[33m'
-C_RED=$'\033[31m'
-C_DIM=$'\033[2m'
+if [[ "${1:-}" == "--auto" ]]; then
+    AUTO_MODE="true"
+fi
 
-log_info()  { printf "%s[INFO]%s %s\n" "${C_GREEN}" "${C_RESET}" "$1"; }
-log_warn()  { printf "%s[WARN]%s %s\n" "${C_YELLOW}" "${C_RESET}" "$1"; }
-log_err()   { printf "%s[ERRORE]%s %s\n" "${C_RED}" "${C_RESET}" "$1"; }
+# --- CATALOGO MODELLI CPU PRESETTATI (Tutti Open Weights, Nessun Token Richiesto) ---
+declare -A CPU_MODELS=(
+    ["01. Qwen2.5-3B-Instruct"]="https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf|Qwen2.5-3B-Instruct-Q4_K_M.gguf|16384|1024|4"
+    ["02. Phi-3.5-mini-instruct"]="https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf|Phi-3.5-mini-instruct-Q4_K_M.gguf|8192|512|6"
+    ["03. Qwen2.5-7B-Instruct"]="https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf|Qwen2.5-7B-Instruct-Q4_K_M.gguf|8192|512|8"
+    ["04. DeepSeek-R1-Distill-Qwen-7B"]="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf|DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf|8192|256|8"
+    ["05. Hermes-3-Llama-3.1-8B"]="https://huggingface.co/bartowski/Hermes-3-Llama-3.1-8B-GGUF/resolve/main/Hermes-3-Llama-3.1-8B-Q4_K_M.gguf|Hermes-3-Llama-3.1-8B-Q4_K_M.gguf|8192|512|8"
+    ["06. Mistral-Nemo-Instruct (12B)"]="https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF/resolve/main/Mistral-Nemo-Instruct-2407-Q4_K_M.gguf|Mistral-Nemo-Instruct-2407-Q4_K_M.gguf|8192|512|16"
+    ["07. Qwen2.5-14B-Instruct"]="https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf|Qwen2.5-14B-Instruct-Q4_K_M.gguf|8192|512|16"
+    ["08. Qwen2.5-32B-Instruct"]="https://huggingface.co/bartowski/Qwen2.5-32B-Instruct-GGUF/resolve/main/Qwen2.5-32B-Instruct-Q4_K_M.gguf|Qwen2.5-32B-Instruct-Q4_K_M.gguf|8192|256|32"
+    ["09. DeepSeek-R1-Distill-Qwen-32B"]="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|8192|256|32"
+    ["10. DeepSeek-R1-Distill-Llama-70B"]="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Llama-70B-GGUF/resolve/main/DeepSeek-R1-Distill-Llama-70B-Q4_K_M.gguf|DeepSeek-R1-Distill-Llama-70B-Q4_K_M.gguf|4096|128|64"
+    ["11. Qwen2.5-72B-Instruct"]="https://huggingface.co/bartowski/Qwen2.5-72B-Instruct-GGUF/resolve/main/Qwen2.5-72B-Instruct-Q4_K_M.gguf|Qwen2.5-72B-Instruct-Q4_K_M.gguf|4096|128|64"
+)
 
-pause() {
-    if [[ "${AUTO_MODE}" == "true" ]]; then
-        printf "%s[AUTO] Proseguimento automatico in corso...%s\n" "${C_DIM}" "${C_RESET}"
-        sleep 1.5
-    else
-        read -rp $'Premere [INVIO] per continuare...'
+# --- LOGGING HELPERS ---
+log_info() { echo -e "\e[32m[INFO]\e[0m $1"; }
+log_warn() { echo -e "\e[33m[WARN]\e[0m $1"; }
+log_err()  { echo -e "\e[31m[ERROR]\e[0m $1"; }
+
+# --- CONTROLLO PRIVILEGI E DIPENDENZE ---
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        log_err "Questo script deve essere eseguito come root (sudo)."
+        exit 1
     fi
 }
 
-# ------------------------------------------------------------------------------
-# Dashboard Finale Sobria & Compatta (Registrata con TRAP)
-# ------------------------------------------------------------------------------
-show_exit_summary() {
-    # Disattiva temporaneamente l'uscita su errore per garantire il rendering
-    set +e
+check_dependencies() {
+    local deps=(build-essential cmake git python3 python3-venv python3-pip whiptail curl wget pciutils htop)
+    local missing=()
+    for pkg in "${deps[@]}"; do
+        if ! dpkg -s "$pkg" >/dev/null 2>&1; then missing+=("$pkg"); fi
+    done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        log_warn "Installazione pacchetti mancanti: ${missing[*]}"
+        apt-get update -qq && apt-get install -y -qq "${missing[@]}"
+    fi
+    mkdir -p "${MODELS_DIR}" "${BASE_DIR}"
+}
 
-    clear
-    detect_os
+# --- RILEVAMENTO MODELLO IN ESECUZIONE ---
+detect_running_model() {
+    local svc_file="/etc/systemd/system/llama-server.service"
+    if [[ -f "${svc_file}" ]]; then
+        local detected
+        detected=$(grep -oP '(?<=-m )/opt/homelab-ai/models/[^ ]+' "${svc_file}" 2>/dev/null || true)
+        if [[ -n "${detected}" && -f "${detected}" ]]; then
+            ACTIVE_MODEL="${detected}"
+        fi
+    fi
+}
 
-    local primary_ip
-    primary_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
-    [[ -z "${primary_ip}" ]] && primary_ip="127.0.0.1"
+# --- AUTO-TUNING HARDWARE ---
+generate_hardware_profile() {
+    local physical_cores
+    physical_cores=$(lscpu -p=CORE,SOCKET 2>/dev/null | grep -v '^#' | sort -u | wc -l || true)
+    if [[ -z "${physical_cores}" || "${physical_cores}" -eq 0 ]]; then physical_cores=$(nproc); fi
+    OPTIMIZED_THREADS="${physical_cores}"
+}
 
-    local virt_type cpu_model phys_cores log_cores load_avg
-    virt_type=$(systemd-detect-virt 2>/dev/null) || virt_type="Bare-Metal"
-    cpu_model=$(lscpu 2>/dev/null | grep "Model name:" | sed 's/Model name:\s*//' | head -n1 | sed 's/Intel(R) Core(TM) //g; s/CPU @ //g; s/  */ /g')
-    [[ -z "${cpu_model}" ]] && cpu_model="x86_64 CPU"
-    phys_cores=$(lscpu -p=CORE 2>/dev/null | grep -v '^#' | sort -u | wc -l)
-    [[ "${phys_cores}" -eq 0 ]] && phys_cores=$(nproc 2>/dev/null || echo "1")
-    log_cores=$(nproc 2>/dev/null || echo "1")
-    load_avg=$(uptime 2>/dev/null | awk -F'load average:' '{ print $2 }' | sed 's/^ //' | tr -d ' ')
+show_hardware_profile() {
+    generate_hardware_profile
+    local ram_total_mb
+    ram_total_mb=$(free -m | awk '/^Mem:/ {print $2}')
+    local ram_free_mb
+    ram_free_mb=$(free -m | awk '/^Mem:/ {print $7}')
+    
+    local msg="Risultati dell'analisi hardware:\n\n"
+    msg+="• CPU Thread Allocati: ${OPTIMIZED_THREADS}\n"
+    msg+="• RAM Totale di sistema: ${ram_total_mb} MB\n"
+    msg+="• RAM Libera disponibile: ${ram_free_mb} MB\n\n"
+    msg+="Questi parametri verranno usati automaticamente\nper l'ottimizzazione del server llama.cpp."
+    
+    whiptail --title "Auto-Tuning Hardware (CPU & RAM)" --msgbox "${msg}" 13 60
+}
 
-    local ram_used ram_tot ram_pct disk_info
-    ram_used=$(free -h 2>/dev/null | awk '/^Mem:/{print $3}')
-    ram_tot=$(free -h 2>/dev/null | awk '/^Mem:/{print $2}')
-    ram_pct=$(free 2>/dev/null | awk '/^Mem:/{printf "%.1f%%", $3/$2*100}')
-    disk_info=$(df -h "${INSTALL_DIR}" 2>/dev/null | awk 'NR==2{printf "%s / %s (%s)", $3, $2, $5}')
+# --- DOWNLOAD MASSIVO ---
+download_all_models() {
+    local msg="Stai per scaricare TUTTI i modelli in elenco.\n\n"
+    msg+="Questo richiederà circa 160 GB di spazio libero\nsu disco e molta banda.\n\n"
+    msg+="I modelli già presenti verranno ignorati.\n\n"
+    msg+="Vuoi procedere?"
 
-    local cpu_temps="" fan_speeds=""
-    if command -v sensors >/dev/null 2>&1; then
-        local pkg_t core_t
-        pkg_t=$(sensors 2>/dev/null | grep -iE 'Package|Tdie|temp1' | head -n1 | awk '{print $2}' | tr -d '+')
-        core_t=$(sensors 2>/dev/null | grep -i 'Core' | awk '{print $3}' | tr -d '+' | tr '\n' ' ')
+    if ! whiptail --title "Download Massivo" --yesno "${msg}" 14 65; then
+        return 0
+    fi
+    
+    local sorted_keys=()
+    while IFS= read -r k; do sorted_keys+=("$k"); done < <(printf "%s\n" "${!CPU_MODELS[@]}" | sort)
+    
+    for key in "${sorted_keys[@]}"; do
+        [[ -z "$key" ]] && continue
+        IFS='|' read -r final_url filename ctx batch min_ram <<< "${CPU_MODELS[${key}]}"
+        local target_path="${MODELS_DIR}/${filename}"
         
-        if [[ -n "${pkg_t}" ]]; then
-            cpu_temps="Pkg: ${pkg_t}"
-            [[ -n "${core_t}" ]] && cpu_temps="${cpu_temps} | Cores: [ ${core_t}]"
-        elif [[ -n "${core_t}" ]]; then
-            cpu_temps="Cores: [ ${core_t}]"
+        if [[ -f "${target_path}" ]]; then
+            log_info "Modello già presente: ${filename}, salto..."
+            continue
+        fi
+        
+        log_info "Download del modello: ${key}..."
+        if ! wget --continue --show-progress -O "${target_path}" "${final_url}"; then
+            log_warn "Errore durante il download di ${filename}, passo al successivo."
+            rm -f "${target_path}"
+        fi
+    done
+    
+    whiptail --msgbox "Download di massa completato!\nOra puoi tornare al menu e selezionare quale avviare." 10 65
+}
+
+# --- SELEZIONE O DOWNLOAD MODELLI ---
+select_active_model() {
+    local model_files=()
+    while IFS= read -r -d '' file; do model_files+=("$file"); done < <(find "${MODELS_DIR}" -maxdepth 2 -name "*.gguf" -print0 2>/dev/null)
+
+    if [[ ${#model_files[@]} -eq 0 ]]; then
+        log_warn "Nessun file .gguf presente."
+        download_and_tune_model_menu
+        return 0
+    fi
+
+    if [[ ${#model_files[@]} -eq 1 || "${AUTO_MODE}" == "true" ]]; then
+        ACTIVE_MODEL="${model_files[0]}"
+        return 0
+    fi
+
+    local menu_items=()
+    for file in "${model_files[@]}"; do
+        local fname fsize
+        fname=$(basename "${file}")
+        fsize=$(ls -lh "${file}" | awk '{print $5}')
+        menu_items+=("${fname}" "Dim: ${fsize}")
+    done
+
+    local chosen_fname
+    chosen_fname=$(whiptail --title "Selezione Modello Attivo" \
+        --menu "\nSeleziona il modello GGUF da caricare sul server:" 20 80 10 \
+        "${menu_items[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    ACTIVE_MODEL="${MODELS_DIR}/${chosen_fname}"
+}
+
+download_and_tune_model_menu() {
+    generate_hardware_profile
+    local total_ram_gb
+    total_ram_gb=$(free -g | awk '/^Mem:/ {print $2}')
+
+    local menu_options=(
+        "AA. Scarica TUTTI i modelli" "[Richiede ~160GB di spazio]"
+        "00. Inserisci URL Custom"    "[Da HuggingFace o link diretto]"
+    )
+    
+    local sorted_keys=()
+    while IFS= read -r k; do sorted_keys+=("$k"); done < <(printf "%s\n" "${!CPU_MODELS[@]}" | sort)
+
+    for key in "${sorted_keys[@]}"; do
+        [[ -z "$key" ]] && continue
+        IFS='|' read -r url filename ctx batch min_ram <<< "${CPU_MODELS[${key}]}"
+        local status="[Scaricabile - Min RAM: ${min_ram}GB]"
+        if [[ -f "${MODELS_DIR}/${filename}" ]]; then status="[GIA PRESENTE IN LOCALE]"; fi
+        menu_options+=("${key}" "${status}")
+    done
+
+    local choice
+    choice=$(whiptail --title "Download & Model-Aware Tuning" \
+        --menu "\nRAM Rilevata: ${total_ram_gb} GB\nScegli un'opzione:" 22 85 14 \
+        "${menu_options[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    if [[ "${choice}" == "AA. Scarica TUTTI i modelli" ]]; then
+        download_all_models
+        return 0
+    fi
+
+    local target_path=""
+    local final_url=""
+
+    if [[ "${choice}" == "00. Inserisci URL Custom" ]]; then
+        final_url=$(whiptail --inputbox "Inserisci il link diretto al file .gguf:" 10 75 3>&1 1>&2 2>&3) || return 0
+        local filename
+        filename=$(basename "${final_url}" | cut -d'?' -f1)
+        target_path="${MODELS_DIR}/${filename}"
+        OPTIMIZED_CTX=$(whiptail --inputbox "Context Window:" 10 40 "8192" 3>&1 1>&2 2>&3) || OPTIMIZED_CTX=8192
+        OPTIMIZED_BATCH=$(whiptail --inputbox "Batch Size:" 10 40 "512" 3>&1 1>&2 2>&3) || OPTIMIZED_BATCH=512
+    else
+        IFS='|' read -r final_url filename ctx batch min_ram <<< "${CPU_MODELS[${choice}]}"
+        target_path="${MODELS_DIR}/${filename}"
+        
+        if [[ "${total_ram_gb}" -lt "${min_ram}" ]]; then
+            if ! whiptail --title "Avviso Risorse" --yesno "RAM inferiore al minimo consigliato.\nVuoi proseguire comunque?" 10 60; then return 0; fi
         fi
 
-        fan_speeds=$(sensors 2>/dev/null | grep -iE 'fan[0-9]*:' | awk '{print $1 " " $2 " " $3}' | tr '\n' ' | ' | sed 's/ | $//')
+        OPTIMIZED_CTX="${ctx}"
+        OPTIMIZED_BATCH="${batch}"
     fi
 
-    [[ -z "${cpu_temps}" ]] && cpu_temps="N/D"
-    [[ -z "${fan_speeds}" ]] && fan_speeds="N/D"
-
-    local models_summary
-    if [[ -d "${MODELS_DIR}" ]]; then
-        models_summary=$(find "${MODELS_DIR}" -name "*.gguf" -exec ls -lh {} \; 2>/dev/null | awk '{print $9 " (" $5 ")"}' | sed "s|${MODELS_DIR}/||g" | tr '\n' ', ' | sed 's/, $//')
-        [[ -z "${models_summary}" ]] && models_summary="Nessun modello presente"
-    else
-        models_summary="Nessun modello presente"
+    if [[ ! -f "${target_path}" ]]; then
+        log_info "Avvio download per: $(basename "${target_path}")"
+        
+        if ! wget --continue --show-progress -O "${target_path}" "${final_url}"; then
+            rm -f "${target_path}"
+            whiptail --msgbox "Errore di rete durante il download.\nVerifica il link o la connessione." 10 60
+            return 1
+        fi
+        
+        # Controllo sicurezza: Evita che scarichi pagine HTML di errore
+        local filesize
+        filesize=$(stat -c%s "${target_path}" 2>/dev/null || echo 0)
+        if [[ ${filesize} -lt 5000000 ]]; then
+            rm -f "${target_path}"
+            whiptail --msgbox "Download fallito!\n\nIl file scaricato è troppo piccolo (< 5MB).\nIl link potrebbe essere scaduto o errato." 12 65
+            return 1
+        fi
     fi
 
-    local llama_st webui_st llama_fmt webui_fmt
-    llama_st=$(systemctl is-active llama-server 2>/dev/null || echo "inattivo")
-    webui_st=$(systemctl is-active open-webui 2>/dev/null || echo "inattivo")
-
-    [[ "$llama_st" == "active" ]] && llama_fmt="${C_GREEN}ONLINE${C_RESET}" || llama_fmt="${C_RED}OFFLINE${C_RESET}"
-    [[ "$webui_st" == "active" ]] && webui_fmt="${C_GREEN}ONLINE${C_RESET}" || webui_fmt="${C_RED}OFFLINE${C_RESET}"
-
-    printf "%s--------------------------------------------------------------------------------%s\n" "${C_CYAN}" "${C_RESET}"
-    printf "%s HOMELAB AI DEPLOYER — STATO NODO INFERENZA CPU (v1.0.0)%s\n" "${C_BOLD}" "${C_RESET}"
-    printf "%s--------------------------------------------------------------------------------%s\n" "${C_CYAN}" "${C_RESET}"
-    printf " %s• OS / Host%s        : %s (Virt: %s)\n" "${C_BOLD}" "${C_RESET}" "${OS_NAME}" "${virt_type}"
-    printf " %s• CPU / Load%s       : %s (%sC/%sT) — Load: %s\n" "${C_BOLD}" "${C_RESET}" "${cpu_model}" "${phys_cores}" "${log_cores}" "${load_avg}"
-    printf " %s• RAM / Disk%s       : %s / %s (%s) | Storage: %s\n" "${C_BOLD}" "${C_RESET}" "${ram_used}" "${ram_tot}" "${ram_pct}" "${disk_info}"
-    printf " %s• Temp / Ventole%s   : %s | Ventole: %s\n" "${C_BOLD}" "${C_RESET}" "${cpu_temps}" "${fan_speeds}"
-    printf " %s• Modelli GGUF%s     : %s\n" "${C_BOLD}" "${C_RESET}" "${models_summary}"
-    printf " %s• Llama.cpp%s        : [%s] http://%s:8080/v1\n" "${C_BOLD}" "${C_RESET}" "${llama_fmt}" "${primary_ip}"
-    printf " %s• Open WebUI%s       : [%s] http://%s:8081\n" "${C_BOLD}" "${C_RESET}" "${webui_fmt}" "${primary_ip}"
-    printf "%s--------------------------------------------------------------------------------%s\n" "${C_CYAN}" "${C_RESET}"
-    printf " %sSessione terminata. Riavvio: ./manager-cpu.sh%s\n\n" "${C_DIM}" "${C_RESET}"
+    ACTIVE_MODEL="${target_path}"
+    whiptail --msgbox "Modello pronto!\n\nI servizi verranno riavviati con i nuovi parametri." 10 65
+    apply_systemd_config
 }
 
-# Registrazione dell'hook di uscita globale
-trap show_exit_summary EXIT
+# --- COMPILAZIONE NATIVA LLAMA.CPP ---
+compile_llama_cpu() {
+    log_info "Compilazione nativa di llama.cpp..."
+    if [[ ! -d "${LLAMA_DIR}" ]]; then git clone https://github.com/ggml-org/llama.cpp "${LLAMA_DIR}"; else cd "${LLAMA_DIR}" && git pull; fi
+    cd "${LLAMA_DIR}" && rm -rf build && mkdir build && cd build
 
-# ------------------------------------------------------------------------------
-# Rilevamento Dinamico Hardware e Sistema
-# ------------------------------------------------------------------------------
-detect_os() {
-    OS_NAME="Linux Generico"
-    if [[ -f /etc/os-release ]]; then
-        OS_NAME=$(grep -E '^PRETTY_NAME=' /etc/os-release | cut -d'=' -f2 | tr -d '"')
-    fi
+    local cmake_flags=("-DGGML_OPENMP=ON" "-DCMAKE_BUILD_TYPE=Release")
+    if grep -q "avx512" /proc/cpuinfo; then cmake_flags+=("-DGGML_AVX512=ON"); elif grep -q "avx2" /proc/cpuinfo; then cmake_flags+=("-DGGML_AVX2=ON"); fi
+
+    cmake .. "${cmake_flags[@]}"
+    cmake --build . --config Release -j "${OPTIMIZED_THREADS}" --target llama-server llama-bench
+    log_info "Compilazione completata."
 }
 
-generate_hardware_profile() {
-    log_info "Analisi delle risorse hardware..."
-
-    TOTAL_RAM_GB=$(free -g | awk '/^Mem:/{print $2}')
-    if [[ -z "${TOTAL_RAM_GB}" || "${TOTAL_RAM_GB}" -eq 0 ]]; then
-        TOTAL_RAM_GB=4
-    fi
-
-    PHYSICAL_CORES=$(lscpu -p=CORE 2>/dev/null | grep -v '^#' | sort -u | wc -l)
-    if [[ "${PHYSICAL_CORES}" -eq 0 ]]; then
-        PHYSICAL_CORES=$(nproc)
-    fi
-
-    OPTIMIZED_CTX=2048
-    OPTIMIZED_BATCH=256
-
-    if [[ "${TOTAL_RAM_GB}" -ge 30 ]]; then
-        OPTIMIZED_CTX=8192
-        OPTIMIZED_BATCH=1024
-    elif [[ "${TOTAL_RAM_GB}" -ge 14 ]]; then
-        OPTIMIZED_CTX=4096
-        OPTIMIZED_BATCH=512
-    fi
-
-    OPTIMIZED_THREADS="${PHYSICAL_CORES}"
-
-    printf "  • RAM Rilevata     : %s GB\n" "${TOTAL_RAM_GB}"
-    printf "  • Core Fisici CPU  : %s\n" "${OPTIMIZED_THREADS}"
-    printf "  • Context Window   : %s token\n" "${OPTIMIZED_CTX}"
-    printf "  • Batch Size       : %s\n" "${OPTIMIZED_BATCH}"
-}
-
-# ------------------------------------------------------------------------------
-# Dipendenze e Compilazione
-# ------------------------------------------------------------------------------
-install_system_deps() {
-    detect_os
-    log_info "Verifica e installazione pacchetti base per ${OS_NAME}..."
-    export DEBIAN_FRONTEND=noninteractive
-    
-    apt-get update -qq
-    apt-get install -y -qq \
-        build-essential \
-        cmake \
-        git \
-        curl \
-        wget \
-        pkg-config \
-        libopenblas-dev \
-        python3 \
-        python3-venv \
-        python3-dev \
-        lm-sensors \
-        whiptail >/dev/null 2>&1
-
-    mkdir -p "${INSTALL_DIR}" "${MODELS_DIR}"
-}
-
-build_llama_cpp() {
-    install_system_deps
-
-    log_info "Sincronizzazione repository llama.cpp..."
-    if [[ -d "${LLAMA_DIR}" ]]; then
-        git -C "${LLAMA_DIR}" pull --quiet
-    else
-        git clone https://github.com/ggerganov/llama.cpp.git "${LLAMA_DIR}"
-    fi
-
-    log_info "Compilazione nativa CPU (OpenMP & Vectorization)..."
-    
-    cd "${LLAMA_DIR}"
-    rm -rf build
-    cmake -B build -DGGML_NATIVE=ON -DGGML_OPENMP=ON -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS
-    cmake --build build --config Release -j"$(nproc)"
-
-    if [[ -f "${LLAMA_DIR}/build/bin/llama-cli" || -f "${LLAMA_DIR}/build/bin/llama-server" ]]; then
-        log_info "Compilazione completata."
-        pause
-        return 0
-    else
-        log_err "Compilazione fallita."
-        pause
-        return 1
-    fi
-}
-
+# --- INSTALLAZIONE OPEN WEBUI ---
 install_open_webui() {
-    install_system_deps
-
-    log_info "Configurazione virtualenv in: ${WEBUI_VENV}"
-    if [[ -d "${WEBUI_VENV}" ]]; then
-        rm -rf "${WEBUI_VENV}"
-    fi
-
-    python3 -m venv "${WEBUI_VENV}"
-    source "${WEBUI_VENV}/bin/activate"
-
-    pip install --upgrade pip setuptools wheel --quiet
-    log_info "Installazione Open WebUI..."
-    pip install open-webui --quiet
-
-    deactivate
-    log_info "Open WebUI installato correttamente."
-    pause
-    return 0
+    log_info "Setup Open WebUI..."
+    mkdir -p "${WEBUI_DIR}"
+    if [[ ! -d "${WEBUI_VENV}" ]]; then python3 -m venv "${WEBUI_VENV}"; fi
+    "${WEBUI_VENV}/bin/pip" install --upgrade pip
+    "${WEBUI_VENV}/bin/pip" install open-webui
+    log_info "Open WebUI installato."
 }
 
-# ------------------------------------------------------------------------------
-# Gestione Servizi Systemd
-# ------------------------------------------------------------------------------
+# --- GENERAZIONE CONFIGURAZIONE SYSTEMD ---
 apply_systemd_config() {
-    systemctl stop llama-server open-webui 2>/dev/null || true
     generate_hardware_profile
+    if [[ -z "${ACTIVE_MODEL}" || ! -f "${ACTIVE_MODEL}" ]]; then select_active_model; fi
+    if [[ -z "${ACTIVE_MODEL}" || ! -f "${ACTIVE_MODEL}" ]]; then return 1; fi
+
+    log_info "Configurazione Systemd per: $(basename "${ACTIVE_MODEL}")"
 
     cat <<EOF > /etc/systemd/system/llama-server.service
 [Unit]
-Description=Llama.cpp HTTP Server (CPU Mode)
+Description=Llama.cpp HTTP Server (CPU Optimized)
 After=network.target
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=${LLAMA_DIR}
-ExecStart=${LLAMA_DIR}/build/bin/llama-server --host 0.0.0.0 --port 8080 -c ${OPTIMIZED_CTX} -b ${OPTIMIZED_BATCH} --threads ${OPTIMIZED_THREADS}
+ExecStart=${LLAMA_DIR}/build/bin/llama-server -m ${ACTIVE_MODEL} --host 0.0.0.0 --port 8080 -c ${OPTIMIZED_CTX} -b ${OPTIMIZED_BATCH} --threads ${OPTIMIZED_THREADS}
 Restart=always
 RestartSec=3
 
@@ -269,7 +301,7 @@ After=network.target llama-server.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=${INSTALL_DIR}
+WorkingDirectory=${WEBUI_DIR}
 Environment="OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1"
 Environment="OPENAI_API_KEY=sk-no-key-required"
 ExecStart=${WEBUI_VENV}/bin/open-webui serve --port 8081
@@ -283,205 +315,84 @@ EOF
     systemctl daemon-reload
     systemctl enable llama-server open-webui
     systemctl restart llama-server open-webui
-    log_info "Servizi Systemd configurati e avviati."
+    log_info "Servizi riavviati."
 }
 
-setup_systemd_services() {
-    if [[ ! -f "${LLAMA_DIR}/build/bin/llama-server" ]]; then
-        log_err "Binario llama-server mancante. Esegui prima la compilazione (Opzione 1)."
-        pause
-        return 1
-    fi
+# --- BENCHMARK CPU ---
+run_cpu_benchmark() {
+    if [[ -z "${ACTIVE_MODEL}" || ! -f "${ACTIVE_MODEL}" ]]; then select_active_model; fi
+    if [[ ! -f "${LLAMA_DIR}/build/bin/llama-bench" ]]; then log_err "Esegui prima la compilazione."; return 1; fi
 
-    if [[ ! -f "${WEBUI_VENV}/bin/open-webui" ]]; then
-        log_err "Open WebUI mancante. Esegui prima l'installazione (Opzione 2)."
-        pause
-        return 2
-    fi
-
-    apply_systemd_config
-    pause
-    return 0
-}
-
-run_autotune() {
-    if [[ ! -f /etc/systemd/system/llama-server.service ]]; then
-        log_err "Servizi non configurati. Esegui prima il setup (Opzione 3)."
-        pause
-        return 1
-    fi
-
-    log_info "Esecuzione Auto-Tuning..."
-    apply_systemd_config
-    pause
-    return 0
-}
-
-# ------------------------------------------------------------------------------
-# Benchmark
-# ------------------------------------------------------------------------------
-run_benchmark() {
-    mkdir -p "${MODELS_DIR}"
-
-    if [[ ! -f "${LLAMA_DIR}/build/bin/llama-bench" ]]; then
-        log_err "Binario llama-bench non trovato. Compila llama.cpp."
-        pause
-        return 1
-    fi
-
-    local model_file
-    model_file=$(find "${MODELS_DIR}" -name "*.gguf" 2>/dev/null | head -n 1 || true)
-
-    if [[ -z "${model_file}" ]]; then
-        local download_confirm=0
-        if [[ "${AUTO_MODE}" == "true" ]]; then
-            download_confirm=0
-        else
-            whiptail --title "Download Modello Benchmark" --yesno "Nessun modello GGUF trovato in ${MODELS_DIR}.\n\nScaricare un modello leggero di test (Qwen2.5-0.5B ~390MB)?" 10 70 || download_confirm=1
-        fi
-
-        if [[ $download_confirm -eq 0 ]]; then
-            log_info "Download modello di test Qwen2.5-0.5B..."
-            wget -c "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf" -O "${MODELS_DIR}/qwen2.5-0.5b-instruct-q4_k_m.gguf"
-            model_file="${MODELS_DIR}/qwen2.5-0.5b-instruct-q4_k_m.gguf"
-        else
-            log_err "Nessun modello disponibile per il benchmark."
-            pause
-            return 2
-        fi
-    fi
-
-    generate_hardware_profile
-    log_info "Avvio benchmark CPU: $(basename "${model_file}")"
-    "${LLAMA_DIR}/build/bin/llama-bench" -m "${model_file}" -t "${OPTIMIZED_THREADS}"
-    pause
-    return 0
-}
-
-# ------------------------------------------------------------------------------
-# Pipeline Automatica Non-Interattiva
-# ------------------------------------------------------------------------------
-run_all_automated() {
-    AUTO_MODE=true
-    clear
-    printf "%s================================================================================%s\n" "${C_CYAN}" "${C_RESET}"
-    printf "%s  HOMELAB AI DEPLOYER — EXPRESS AUTOMATED DEPLOYMENT (CPU v1.0.0)%s\n" "${C_BOLD}" "${C_RESET}"
-    printf "%s================================================================================%s\n\n" "${C_CYAN}" "${C_RESET}"
-
-    build_llama_cpp
-    install_open_webui
-    setup_systemd_services
-    run_autotune
-    run_benchmark
-
-    log_info "Installazione automatica completata."
-    sleep 2
-    exit 0
-}
-
-# ------------------------------------------------------------------------------
-# Wizard di Benvenuto Semplificato & Pulito
-# ------------------------------------------------------------------------------
-welcome_wizard() {
-    detect_os
+    log_info "Esecuzione benchmark sul modello: $(basename "${ACTIVE_MODEL}") con ${OPTIMIZED_THREADS} thread..."
+    "${LLAMA_DIR}/build/bin/llama-bench" -m "${ACTIVE_MODEL}" -t "${OPTIMIZED_THREADS}" -p 512 -n 128
     
-    # Pagina 1: Panoramica
-    clear
-    printf "%s================================================================================%s\n" "${C_CYAN}" "${C_RESET}"
-    printf "  %sHOMELAB AI DEPLOYER — NODE INFERENCE CONTROLLER (CPU v1.0.0)%s\n" "${C_BOLD}" "${C_RESET}"
-    printf "%s================================================================================%s\n\n" "${C_CYAN}" "${C_RESET}"
-
-    printf "%s[ PANORAMICA ]%s\n" "${C_BOLD}" "${C_RESET}"
-    printf "  Deploy nativo (Bare-Metal / LXC Proxmox) dello stack di inferenza LLM\n"
-    printf "  ottimizzato per sola CPU.\n\n"
-
-    printf "%s[ ARCHITETTURA ]%s\n" "${C_BOLD}" "${C_RESET}"
-    printf "  • %sEngine%s         : llama.cpp (compilazione nativa C++, OpenMP, AVX2/AVX-512)\n" "${C_CYAN}" "${C_RESET}"
-    printf "  • %sInterfaccia%s   : Open WebUI (ambiente virtuale Python isolato)\n" "${C_CYAN}" "${C_RESET}"
-    printf "  • %sGestore%s       : Unità Systemd con riavvio automatico ed auto-tuning\n\n" "${C_CYAN}" "${C_RESET}"
-
-    read -rp $'Premere [INVIO] per continuare (Specifiche e Modalità)...'
-
-    # Pagina 2: Risorse & Scelta
-    clear
-    printf "%s================================================================================%s\n" "${C_CYAN}" "${C_RESET}"
-    printf "  %sCONFIGURAZIONE AMBIENTE E PORTE RETE%s\n" "${C_BOLD}" "${C_RESET}"
-    printf "%s================================================================================%s\n\n" "${C_CYAN}" "${C_RESET}"
-
-    printf "%s[ PERCORSI LOCAL ]%s\n" "${C_BOLD}" "${C_RESET}"
-    printf "  • Root Directory   : %s/opt/homelab-ai%s\n" "${C_CYAN}" "${C_RESET}"
-    printf "  • Modelli GGUF     : %s/opt/homelab-ai/models%s\n\n" "${C_CYAN}" "${C_RESET}"
-
-    printf "%s[ PORTE SERVIZI ]%s\n" "${C_BOLD}" "${C_RESET}"
-    printf "  • Llama API (v1)   : %sHTTP 8080%s\n" "${C_CYAN}" "${C_RESET}"
-    printf "  • Open WebUI GUI   : %sHTTP 8081%s\n\n" "${C_CYAN}" "${C_RESET}"
-
-    printf "%s--------------------------------------------------------------------------------%s\n\n" "${C_CYAN}" "${C_RESET}"
-
-    if command -v whiptail >/dev/null 2>&1; then
-        local mode
-        mode=$(whiptail --title "Modalità di Esecuzione" \
-            --menu "\nSeleziona la modalità di avvio:" 12 70 2 \
-            "AUTO" "Express Auto-Deploy (Passi 1->5 automatici senza prompt)" \
-            "MENU" "Menu Interattivo (Seleziona le opzioni singolarmente)" \
-            3>&1 1>&2 2>&3) || exit 0
-
-        if [[ "$mode" == "AUTO" ]]; then
-            run_all_automated
-        fi
-    fi
+    read -p "Premi [INVIO] per tornare al menu..."
 }
 
-# ------------------------------------------------------------------------------
-# Menu Principale TUI
-# ------------------------------------------------------------------------------
-render_header() {
-    clear
-    detect_os
-    printf "%s--------------------------------------------------------------------------------%s\n" "${C_CYAN}" "${C_RESET}"
-    printf "  %sHOMELAB AI DEPLOYER — CPU MANAGER v1.0.0%s (%s)\n" "${C_BOLD}" "${OS_NAME}" "${C_RESET}"
-    printf "%s--------------------------------------------------------------------------------%s\n\n" "${C_CYAN}" "${C_RESET}"
+# --- EXPRESS AUTO-DEPLOY ---
+run_express_deploy() {
+    generate_hardware_profile
+    compile_llama_cpu
+    install_open_webui
+    select_active_model
+    apply_systemd_config
 }
 
-main_menu() {
-    local default_choice="1"
+# --- DASHBOARD DI USCITA ---
+show_exit_summary() {
+    local exit_code=$?
+    echo -e "\n================================================================="
+    echo -e "              HOMELAB AI DEPLOYER - CPU DASHBOARD                "
+    echo -e "================================================================="
+    local ip_addr
+    ip_addr=$(hostname -I | awk '{print $1}' || echo "127.0.0.1")
+
+    echo -e " Stato Servizi:"
+    echo -e "  • llama-server: $(systemctl is-active llama-server 2>/dev/null || echo 'inactive')"
+    echo -e "  • open-webui:   $(systemctl is-active open-webui 2>/dev/null || echo 'inactive')"
+    echo -e "-----------------------------------------------------------------"
+    echo -e " Modello Attivo: $(basename "${ACTIVE_MODEL:-'Nessuno'}")"
+    echo -e " Endpoint API:   http://${ip_addr}:8080/v1"
+    echo -e " Web Interface:  http://${ip_addr}:8081"
+    echo -e "=================================================================\n"
+    exit ${exit_code}
+}
+
+trap show_exit_summary EXIT
+
+# --- MENU PRINCIPALE ---
+show_menu() {
+    check_root
+    check_dependencies
+    generate_hardware_profile
+    detect_running_model
+
+    if [[ "${AUTO_MODE}" == "true" ]]; then run_express_deploy; exit 0; fi
 
     while true; do
-        render_header
-        
         local choice
-        choice=$(whiptail --title "Menu Operazioni" \
-            --default-item "${default_choice}" \
-            --menu "\nScegli un'opzione:" 18 75 7 \
-            "A" "Express Auto-Deploy (Passi 1->5 automatici)" \
+        choice=$(whiptail --title "Homelab AI Deployer - Manager CPU (v1.3.1)" \
+            --menu "\nSeleziona un'operazione:" 20 80 8 \
+            "A" "Express Auto-Deploy (Pipeline Completa)" \
             "1" "Compila llama.cpp (AVX2/AVX-512 + OpenMP)" \
-            "2" "Installa Open WebUI (Virtualenv)" \
-            "3" "Configura e Avvia Servizi Systemd" \
-            "4" "Auto-Tuning Hardware & Riavvio" \
-            "5" "Esegui Benchmark CPU (llama-bench)" \
-            "0" "Esci e Mostra Dashboard" \
-            3>&1 1>&2 2>&3) || exit 0
+            "2" "Installa Open WebUI (Python venv)" \
+            "3" "Configura & Avvia Servizi Systemd" \
+            "4" "Mostra Profilo Hardware (CPU & RAM)" \
+            "5" "Download & Tuning Modelli CPU" \
+            "6" "Esegui Benchmark CPU (llama-bench)" \
+            "0" "Esci e Mostra Dashboard" 3>&1 1>&2 2>&3) || exit 0
 
-        case "$choice" in
-            A|a) run_all_automated ;;
-            1) build_llama_cpp && default_choice="2" ;;
-            2) install_open_webui && default_choice="3" ;;
-            3) setup_systemd_services && default_choice="4" ;;
-            4) run_autotune && default_choice="5" ;;
-            5) run_benchmark && default_choice="0" ;;
+        case "${choice}" in
+            A) run_express_deploy ;;
+            1) compile_llama_cpu ;;
+            2) install_open_webui ;;
+            3) apply_systemd_config ;;
+            4) show_hardware_profile ;;
+            5) download_and_tune_model_menu ;;
+            6) run_cpu_benchmark ;;
             0) exit 0 ;;
-            *) exit 0 ;;
         esac
     done
 }
 
-# ------------------------------------------------------------------------------
-# Main
-# ------------------------------------------------------------------------------
-if [[ $EUID -ne 0 ]]; then
-    log_err "Lo script richiede i privilegi di root."
-    exit 1
-fi
-
-welcome_wizard
-main_menu
+show_menu
