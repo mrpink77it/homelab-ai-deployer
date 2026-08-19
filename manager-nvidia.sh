@@ -2,6 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
+# Version: V.1.0.1
 # ==============================================================================
 
 set -e
@@ -54,7 +55,13 @@ setup_nvidia_stack() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         if [ "$ID" = "debian" ]; then
-            os_str="debian${VERSION_ID}"
+            # Fallback a debian12 se siamo su debian13 (NVIDIA non ha ancora il repo pronto)
+            if [ -z "$VERSION_ID" ] || [ "$VERSION_ID" -ge 13 ] 2>/dev/null; then
+                echo -e "${YELLOW}[WARN] Rilevato Debian 13+. Forzatura repository debian12 per compatibilità NVIDIA...${NC}"
+                os_str="debian12"
+            else
+                os_str="debian${VERSION_ID}"
+            fi
         elif [ "$ID" = "ubuntu" ]; then
             os_str="ubuntu$(echo $VERSION_ID | tr -d .)"
         fi
@@ -129,7 +136,7 @@ install_services() {
     # 1. Aggiornamento Pacchetti di Sistema base
     echo -e "${YELLOW}[1/5] Installazione Dipendenze di Sistema e Node.js...${NC}"
     apt update || true
-    apt install -y curl wget git build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils nodejs
+    apt install -y curl wget git gnupg ca-certificates build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils nodejs
 
     # 2. Setup Driver e Stack NVIDIA (Bare-Metal/LXC)
     setup_nvidia_stack
