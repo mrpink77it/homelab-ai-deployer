@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script Name: manager-cpu.sh
-# Version:     1.3.6
+# Version:     1.3.7
 # Project:     homelab-ai-deployer
-# Description: CPU Manager per llama.cpp (AVX2/AVX-512 + OpenMP) & Open WebUI (uv/Py3.11)
+# Description: CPU Manager per llama.cpp (AVX2/AVX-512) & Open WebUI (uv / Python 3.11)
 # ==============================================================================
 
 set -euo pipefail
@@ -66,10 +66,10 @@ check_dependencies() {
     mkdir -p "${MODELS_DIR}" "${BASE_DIR}"
 }
 
-# --- INSTALLAZIONE UV (Package & Python Manager) ---
+# --- GESTORE UV (Binario Standalone) ---
 ensure_uv() {
     if ! command -v uv >/dev/null 2>&1; then
-        log_info "Installazione del package manager 'uv'..."
+        log_info "Installazione del gestore pacchetti 'uv'..."
         curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
     fi
 }
@@ -270,10 +270,13 @@ install_open_webui() {
     log_info "Rimozione venv precedente per garantire un ambiente pulito..."
     rm -rf "${WEBUI_VENV}"
 
-    log_info "Download binario Python 3.11 e creazione venv isolato..."
+    log_info "Download runtime Python 3.11 standalone via uv..."
+    uv python install 3.11
+
+    log_info "Creazione venv isolato con Python 3.11..."
     uv venv --python 3.11 "${WEBUI_VENV}"
     
-    log_info "Installazione Open WebUI nel venv..."
+    log_info "Installazione Open WebUI..."
     uv pip install --python "${WEBUI_VENV}/bin/python" open-webui
     log_info "Open WebUI installato con successo."
 }
@@ -381,7 +384,7 @@ show_menu() {
 
     while true; do
         local choice
-        choice=$(whiptail --title "Homelab AI Deployer - Manager CPU (v1.3.6)" \
+        choice=$(whiptail --title "Homelab AI Deployer - Manager CPU (v1.3.7)" \
             --menu "\nSeleziona un'operazione:" 20 80 8 \
             "A" "Express Auto-Deploy (Pipeline Completa)" \
             "1" "Compila llama.cpp (AVX2/AVX-512 + OpenMP)" \
