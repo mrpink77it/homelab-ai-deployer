@@ -12,7 +12,7 @@ set -euo pipefail
 # Colors & Layout Definition
 # ------------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_FILE="/var/log/homelab-ai-deployer.log"
+LOG_FILE="/opt/homelab-ai-deployer/homelab-ai-deployer.log"
 
 C_RESET='\033[0m'
 C_BOLD='\033[1m'
