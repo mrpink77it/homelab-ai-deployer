@@ -40,7 +40,7 @@ fix_os_repositories() {
 
     # 1. Dipendenze base per la gestione repo e TUI
     apt-get update -qq || true
-    apt-get install -y -qq pciutils whiptail curl wget git build-essential >/dev/null 2>&1
+    apt-get install -y -qq pciutils python3 python3-pip python3-venv gnupg ca-certificates openssh-server openssh-client net-tools pciutils nodejs whiptail curl wget git build-essential g++ freeglut3-dev libx11-dev libxmu-dev libxi-dev libglu1-mesa-dev libfreeimage-dev libglfw3-dev wget htop btop nvtop nano glances git pciutils cmake curl libcurl4-openssl-dev mc >/dev/null 2>&1
 
     # 2. Fix specifici per Distribuzione
     if [[ "${os_id}" == "debian" ]]; then
