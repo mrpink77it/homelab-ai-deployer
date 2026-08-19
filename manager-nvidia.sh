@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.0.4
+# Version: V.1.0.5
 # ==============================================================================
 
 set -e
@@ -86,7 +86,6 @@ setup_nvidia_stack() {
     if grep -q "container=lxc" /proc/1/environ 2>/dev/null; then
         echo -e "${YELLOW}[INFO] Ambiente LXC Proxmox rilevato.${NC}"
         if [ -n "$NVRM_VERSION" ]; then
-            # Controllo se le librerie user-space sono già presenti (nvidia-smi di solito viene installato col driver)
             if ! command -v nvidia-smi &> /dev/null; then
                 echo -e "${YELLOW}[INFO] Scaricamento installer NVIDIA .run per versione ${NVRM_VERSION}...${NC}"
                 wget -q "https://us.download.nvidia.com/XFree86/Linux-x86_64/${NVRM_VERSION}/NVIDIA-Linux-x86_64-${NVRM_VERSION}.run" -O /tmp/nvidia.run
@@ -122,7 +121,6 @@ setup_nvidia_stack() {
     echo "/usr/local/cuda/lib64" > /etc/ld.so.conf.d/cuda.conf
     ldconfig 2>/dev/null || true
 
-    # 6. Export PATH CUDA nel .bashrc (ridondante ma mantenuto per sicurezza shell)
     if ! grep -q "cuda-13.2" /root/.bashrc; then
         echo -e "${YELLOW}[INFO] Aggiornamento variabile PATH in .bashrc...${NC}"
         cp /root/.bashrc /root/.bashrc.bak
@@ -152,7 +150,10 @@ install_services() {
     if [ ! -d "$UNSLOTH_ENV" ]; then
         python3 -m venv "$UNSLOTH_ENV"
     fi
-    "$UNSLOTH_ENV/bin/pip" install --upgrade pip setuptools wheel
+    
+    # Fix: Vincolo della versione di setuptools per compatibilità con PyTorch 2.11
+    "$UNSLOTH_ENV/bin/pip" install --upgrade pip wheel "setuptools<82"
+    
     "$UNSLOTH_ENV/bin/pip" install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu121
     "$UNSLOTH_ENV/bin/pip" install jupyterlab unsloth trl xformers
 
@@ -176,7 +177,6 @@ EOF
 
     echo -e "${YELLOW}[4/4] Setup OpenCode AI e Code Runner API...${NC}"
     
-    # OpenCode AI via NPM
     mkdir -p "$OPENCODE_DIR"
     npm install -g opencode-ai 2>/dev/null || true
     OPENCODE_BIN=$(which opencode 2>/dev/null || echo "/usr/local/bin/opencode")
@@ -199,12 +199,11 @@ Environment=BROWSER=echo
 WantedBy=multi-user.target
 EOF
 
-    # Code Runner API
     mkdir -p "$CODE_RUNNER_DIR"
     if [ ! -d "$CODE_RUNNER_ENV" ]; then
         python3 -m venv "$CODE_RUNNER_ENV"
     fi
-    "$CODE_RUNNER_ENV/bin/pip" install --upgrade pip setuptools wheel fastapi uvicorn pydantic
+    "$CODE_RUNNER_ENV/bin/pip" install --upgrade pip wheel "setuptools<82" fastapi uvicorn pydantic
 
     cat <<EOF > "$CODE_RUNNER_DIR/code_runner_api.py"
 from fastapi import FastAPI, HTTPException
@@ -267,7 +266,6 @@ EOF
 # OPZIONE 2: VERIFICA STATO
 # ------------------------------------------------------------------------------
 check_status() {
-    # Non serve più forzare l'export del path grazie ai symlink, ma lo lasciamo in fallback
     export PATH=/usr/local/cuda-13.2/bin${PATH:+:${PATH}}
     echo -e "${BLUE}====================================================${NC}"
     echo -e "${BLUE}             VERIFICA STATO DEL SISTEMA             ${NC}"
@@ -354,7 +352,7 @@ update_components() {
     if [ ! -d "$CODE_RUNNER_ENV" ]; then
         python3 -m venv "$CODE_RUNNER_ENV"
     fi
-    "$CODE_RUNNER_ENV/bin/pip" install --upgrade fastapi uvicorn pydantic
+    "$CODE_RUNNER_ENV/bin/pip" install --upgrade pip wheel "setuptools<82" fastapi uvicorn pydantic
 
     if [ -d "$UNSLOTH_ENV" ]; then
         echo -e "${YELLOW}---> Aggiornamento PyTorch + CUDA Wheels nel VENV Unsloth...${NC}"
