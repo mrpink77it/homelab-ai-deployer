@@ -27,14 +27,14 @@ fi
 # --- CATALOGO MODELLI CPU PRESETTATI (Tutti Open Weights, Nessun Token Richiesto) ---
 declare -A CPU_MODELS=(
     ["01. Qwen2.5-3B-Instruct"]="https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf|Qwen2.5-3B-Instruct-Q4_K_M.gguf|16384|1024|4"
-    ["02. Phi-3.5-mini-instruct"]="https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf|Phi-3.5-mini-instruct-Q4_K_M.gguf|8192|512|6"
-    ["03. Qwen2.5-7B-Instruct"]="https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf|Qwen2.5-7B-Instruct-Q4_K_M.gguf|8192|512|8"
-    ["04. DeepSeek-R1-Distill-Qwen-7B"]="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf|DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf|8192|256|8"
-    ["05. Hermes-3-Llama-3.1-8B"]="https://huggingface.co/bartowski/Hermes-3-Llama-3.1-8B-GGUF/resolve/main/Hermes-3-Llama-3.1-8B-Q4_K_M.gguf|Hermes-3-Llama-3.1-8B-Q4_K_M.gguf|8192|512|8"
-    ["06. Mistral-Nemo-Instruct (12B)"]="https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF/resolve/main/Mistral-Nemo-Instruct-2407-Q4_K_M.gguf|Mistral-Nemo-Instruct-2407-Q4_K_M.gguf|8192|512|16"
-    ["07. Qwen2.5-14B-Instruct"]="https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf|Qwen2.5-14B-Instruct-Q4_K_M.gguf|8192|512|16"
-    ["08. Qwen2.5-32B-Instruct"]="https://huggingface.co/bartowski/Qwen2.5-32B-Instruct-GGUF/resolve/main/Qwen2.5-32B-Instruct-Q4_K_M.gguf|Qwen2.5-32B-Instruct-Q4_K_M.gguf|8192|256|32"
-    ["09. DeepSeek-R1-Distill-Qwen-32B"]="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|8192|256|32"
+    ["02. Phi-3.5-mini-instruct"]="https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf|Phi-3.5-mini-instruct-Q4_K_M.gguf|32768|512|6"
+    ["03. Qwen2.5-7B-Instruct"]="https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf|Qwen2.5-7B-Instruct-Q4_K_M.gguf|32768|512|8"
+    ["04. DeepSeek-R1-Distill-Qwen-7B"]="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf|DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf|32768|256|8"
+    ["05. Hermes-3-Llama-3.1-8B"]="https://huggingface.co/bartowski/Hermes-3-Llama-3.1-8B-GGUF/resolve/main/Hermes-3-Llama-3.1-8B-Q4_K_M.gguf|Hermes-3-Llama-3.1-8B-Q4_K_M.gguf|32768|512|8"
+    ["06. Mistral-Nemo-Instruct (12B)"]="https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF/resolve/main/Mistral-Nemo-Instruct-2407-Q4_K_M.gguf|Mistral-Nemo-Instruct-2407-Q4_K_M.gguf|32768|512|16"
+    ["07. Qwen2.5-14B-Instruct"]="https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf|Qwen2.5-14B-Instruct-Q4_K_M.gguf|32768|512|16"
+    ["08. Qwen2.5-32B-Instruct"]="https://huggingface.co/bartowski/Qwen2.5-32B-Instruct-GGUF/resolve/main/Qwen2.5-32B-Instruct-Q4_K_M.gguf|Qwen2.5-32B-Instruct-Q4_K_M.gguf|32768|256|32"
+    ["09. DeepSeek-R1-Distill-Qwen-32B"]="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|32768|256|32"
     ["10. DeepSeek-R1-Distill-Llama-70B"]="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Llama-70B-GGUF/resolve/main/DeepSeek-R1-Distill-Llama-70B-Q4_K_M.gguf|DeepSeek-R1-Distill-Llama-70B-Q4_K_M.gguf|4096|128|64"
     ["11. Qwen2.5-72B-Instruct"]="https://huggingface.co/bartowski/Qwen2.5-72B-Instruct-GGUF/resolve/main/Qwen2.5-72B-Instruct-Q4_K_M.gguf|Qwen2.5-72B-Instruct-Q4_K_M.gguf|4096|128|64"
 )
@@ -206,7 +206,7 @@ download_and_tune_model_menu() {
         local filename
         filename=$(basename "${final_url}" | cut -d'?' -f1)
         target_path="${MODELS_DIR}/${filename}"
-        OPTIMIZED_CTX=$(whiptail --inputbox "Context Window:" 10 40 "8192" 3>&1 1>&2 2>&3) || OPTIMIZED_CTX=8192
+        OPTIMIZED_CTX=$(whiptail --inputbox "Context Window:" 10 40 "32768" 3>&1 1>&2 2>&3) || OPTIMIZED_CTX=32768
         OPTIMIZED_BATCH=$(whiptail --inputbox "Batch Size:" 10 40 "512" 3>&1 1>&2 2>&3) || OPTIMIZED_BATCH=512
     else
         IFS='|' read -r final_url filename ctx batch min_ram <<< "${CPU_MODELS[${choice}]}"
