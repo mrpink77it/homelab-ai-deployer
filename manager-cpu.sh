@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script Name: manager-cpu.sh
-# Version:     1.3.7
+# Version:     1.3.3
 # Project:     homelab-ai-deployer
-# Description: CPU Manager per llama.cpp (AVX2/AVX-512) & Open WebUI (uv / Python 3.11)
+# Description: CPU Manager per llama.cpp (AVX2/AVX-512) & Open WebUI
 # ==============================================================================
 
 set -euo pipefail
@@ -54,7 +54,7 @@ check_root() {
 }
 
 check_dependencies() {
-    local deps=(build-essential cmake git whiptail curl wget pciutils htop)
+    local deps=(build-essential cmake git whiptail curl wget pciutils htop python3-venv python3-pip)
     local missing=()
     for pkg in "${deps[@]}"; do
         if ! dpkg -s "$pkg" >/dev/null 2>&1; then missing+=("$pkg"); fi
@@ -64,14 +64,6 @@ check_dependencies() {
         apt-get update -qq && apt-get install -y -qq "${missing[@]}"
     fi
     mkdir -p "${MODELS_DIR}" "${BASE_DIR}"
-}
-
-# --- GESTORE UV (Binario Standalone) ---
-ensure_uv() {
-    if ! command -v uv >/dev/null 2>&1; then
-        log_info "Installazione del gestore pacchetti 'uv'..."
-        curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
-    fi
 }
 
 # --- RILEVAMENTO MODELLO IN ESECUZIONE ---
@@ -209,8 +201,9 @@ download_and_tune_model_menu() {
         local filename
         filename=$(basename "${final_url}" | cut -d'?' -f1)
         target_path="${MODELS_DIR}/${filename}"
-        OPTIMIZED_CTX=$(whiptail --inputbox "Context Window:" 10 40 "32768" 3>&1 1>&2 2>&3) || OPTIMIZED_CTX=32768
-        OPTIMIZED_BATCH=$(whiptail --inputbox "Batch Size:" 10 40 "512" 3>&1 1>&2 2>&3) || OPTIMIZED_BATCH=512
+        
+        OPTIMIZED_CTX=$(whiptail --inputbox "Imposta Context Size:" 10 40 "32768" 3>&1 1>&2 2>&3) || OPTIMIZED_CTX=32768
+        OPTIMIZED_BATCH=$(whiptail --inputbox "Imposta Batch Size:" 10 40 "512" 3>&1 1>&2 2>&3) || OPTIMIZED_BATCH=512
     else
         IFS='|' read -r final_url filename ctx batch min_ram <<< "${CPU_MODELS[${choice}]}"
         target_path="${MODELS_DIR}/${filename}"
@@ -242,7 +235,7 @@ download_and_tune_model_menu() {
     fi
 
     ACTIVE_MODEL="${target_path}"
-    whiptail --msgbox "Modello pronto! Applicazione configurazione..." 10 60
+    whiptail --msgbox "Modello pronto! Applicazione configurazione Systemd..." 10 60
     apply_systemd_config
 }
 
@@ -262,22 +255,11 @@ compile_llama_cpu() {
 
 # --- INSTALLAZIONE OPEN WEBUI ---
 install_open_webui() {
-    log_info "Setup Open WebUI via 'uv'..."
-    ensure_uv
-    
+    log_info "Setup Open WebUI..."
     mkdir -p "${WEBUI_DIR}"
-    
-    log_info "Rimozione venv precedente per garantire un ambiente pulito..."
-    rm -rf "${WEBUI_VENV}"
-
-    log_info "Download runtime Python 3.11 standalone via uv..."
-    uv python install 3.11
-
-    log_info "Creazione venv isolato con Python 3.11..."
-    uv venv --python 3.11 "${WEBUI_VENV}"
-    
-    log_info "Installazione Open WebUI..."
-    uv pip install --python "${WEBUI_VENV}/bin/python" open-webui
+    if [[ ! -d "${WEBUI_VENV}" ]]; then python3 -m venv "${WEBUI_VENV}"; fi
+    "${WEBUI_VENV}/bin/pip" install --upgrade pip
+    "${WEBUI_VENV}/bin/pip" install open-webui
     log_info "Open WebUI installato con successo."
 }
 
@@ -287,7 +269,7 @@ apply_systemd_config() {
     if [[ -z "${ACTIVE_MODEL}" || ! -f "${ACTIVE_MODEL}" ]]; then select_active_model; fi
     if [[ -z "${ACTIVE_MODEL}" || ! -f "${ACTIVE_MODEL}" ]]; then return 1; fi
 
-    log_info "Configurazione Systemd per: $(basename "${ACTIVE_MODEL}")"
+    log_info "Configurazione Systemd per: $(basename "${ACTIVE_MODEL}") (Context: ${OPTIMIZED_CTX})"
 
     cat <<EOF > /etc/systemd/system/llama-server.service
 [Unit]
@@ -328,7 +310,7 @@ EOF
     systemctl daemon-reload
     systemctl enable llama-server open-webui
     systemctl restart llama-server open-webui
-    log_info "Servizi riavviati."
+    log_info "Servizi riavviati con successo."
 }
 
 # --- BENCHMARK CPU ---
@@ -384,11 +366,11 @@ show_menu() {
 
     while true; do
         local choice
-        choice=$(whiptail --title "Homelab AI Deployer - Manager CPU (v1.3.7)" \
+        choice=$(whiptail --title "Homelab AI Deployer - Manager CPU (v1.3.3)" \
             --menu "\nSeleziona un'operazione:" 20 80 8 \
             "A" "Express Auto-Deploy (Pipeline Completa)" \
             "1" "Compila llama.cpp (AVX2/AVX-512 + OpenMP)" \
-            "2" "Installa Open WebUI (Python venv via uv)" \
+            "2" "Installa Open WebUI" \
             "3" "Configura & Avvia Servizi Systemd" \
             "4" "Mostra Profilo Hardware (CPU & RAM)" \
             "5" "Download & Tuning Modelli CPU" \
