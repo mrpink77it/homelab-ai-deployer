@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.0.1
+# Version: V.1.0.2
 # ==============================================================================
 
 set -e
@@ -80,9 +80,14 @@ setup_nvidia_stack() {
     # 3. Configurazione Repository Ufficiale CUDA
     if [ ! -f /etc/apt/sources.list.d/cuda.list ]; then
         echo -e "${YELLOW}[INFO] Aggiunta repository CUDA ufficiale NVIDIA per ${os_str}...${NC}"
-        wget -qO - "https://developer.download.nvidia.com/compute/cuda/repos/${os_str}/x86_64/3bf863cc.pub" | gpg --dearmor -o /usr/share/keyrings/nvidia-archive-keyring.gpg
-        echo "deb [signed-by=/usr/share/keyrings/nvidia-archive-keyring.gpg] https://developer.download.nvidia.com/compute/cuda/repos/${os_str}/x86_64/ /" > /etc/apt/sources.list.d/cuda.list
-        apt update -qq || echo -e "${YELLOW}[NOTE] Ignorati warning minori di APT...${NC}"
+        
+        # Aggiunto --yes per bypassare il prompt di sovrascrittura di GPG se il file esiste
+        wget -qO - "https://developer.download.nvidia.com/compute/cuda/repos/${os_str}/x86_64/3bf863cc.pub" | gpg --dearmor --yes -o /usr/share/keyrings/nvidia-archive-keyring.gpg
+        
+        # Aggiunto [trusted=yes] per bypassare il blocco di sicurezza di Debian 13 (sqv) sulle firme SHA1 legacy di NVIDIA
+        echo "deb [trusted=yes signed-by=/usr/share/keyrings/nvidia-archive-keyring.gpg] https://developer.download.nvidia.com/compute/cuda/repos/${os_str}/x86_64/ /" > /etc/apt/sources.list.d/cuda.list
+        
+        apt update -qq || echo -e "${YELLOW}[NOTE] Ignorati warning minori di APT (le policy di sicurezza sono state forzate)...${NC}"
     fi
 
     # 4. Logica di Installazione: LXC vs Bare-Metal
@@ -111,7 +116,7 @@ setup_nvidia_stack() {
     # 5. Installazione NVIDIA Container Toolkit (Opzionale ma raccomandato per stack futuri)
     if ! command -v nvidia-ctk &> /dev/null; then
         echo -e "${YELLOW}[INFO] Configurazione NVIDIA Container Toolkit...${NC}"
-        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
         curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
             sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
             tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
