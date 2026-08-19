@@ -43,7 +43,7 @@ Il progetto supporta un'architettura **Multi-Backend** in grado di rilevare auto
 
 ### Setup del Controller AI (Host Principale)
 
-Copiare ed incollare questo comando per eseguire l'installazione
+Copiare ed incollare questo comando per eseguire l'installazione. Eseguire come root (su) o super user (sudo)
 
 ```bash
 cd /opt && sudo wget -q https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/install.sh && sudo chmod +x install.sh && sudo ./install.sh
