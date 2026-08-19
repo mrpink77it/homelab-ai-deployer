@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.0.3
+# Version: V.1.0.4
 # ==============================================================================
 
 set -e
@@ -114,9 +114,17 @@ setup_nvidia_stack() {
         fi
     fi
 
-    # 5. Export PATH CUDA nel .bashrc
+    # 5. Configurazione Globale CUDA (Symlink & LD_LIBRARY_PATH)
+    echo -e "${YELLOW}[INFO] Configurazione Symlink e Librerie Globali per CUDA 13.2...${NC}"
+    ln -sfn /usr/local/cuda-13.2 /usr/local/cuda
+    ln -sf /usr/local/cuda/bin/nvcc /usr/local/bin/nvcc
+    ln -sf /usr/local/cuda/bin/nvrtc /usr/local/bin/nvrtc
+    echo "/usr/local/cuda/lib64" > /etc/ld.so.conf.d/cuda.conf
+    ldconfig 2>/dev/null || true
+
+    # 6. Export PATH CUDA nel .bashrc (ridondante ma mantenuto per sicurezza shell)
     if ! grep -q "cuda-13.2" /root/.bashrc; then
-        echo -e "${YELLOW}[INFO] Aggiornamento variabile PATH in .bashrc per CUDA 13.2...${NC}"
+        echo -e "${YELLOW}[INFO] Aggiornamento variabile PATH in .bashrc...${NC}"
         cp /root/.bashrc /root/.bashrc.bak
         echo 'export PATH=/usr/local/cuda-13.2/bin${PATH:+:${PATH}}' >> /root/.bashrc
     fi
@@ -157,7 +165,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/root
-Environment="PATH=/usr/local/cuda-13.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ExecStart=$UNSLOTH_ENV/bin/jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --ServerApp.token='' --ServerApp.password=''
 Restart=always
 RestartSec=5
@@ -251,16 +259,15 @@ EOF
     done
 
     echo -e "${GREEN}====================================================${NC}"
-    echo -e "${GREEN}     INSTALLAZIONE COMPLETATA E PATH ESPORTATO!     ${NC}"
+    echo -e "${GREEN}     INSTALLAZIONE COMPLETATA CON SUCCESSO!         ${NC}"
     echo -e "${GREEN}====================================================${NC}"
-    echo -e "${YELLOW}NOTA: Il PATH è stato iniettato. Per avere i binari CUDA disponibili${NC}"
-    echo -e "${YELLOW}nella shell corrente fuori dallo script, digita:${NC} source ~/.bashrc"
 }
 
 # ------------------------------------------------------------------------------
-# MENU E OPZIONI SECONDARIE (Identiche ma con PATH env integrato)
+# OPZIONE 2: VERIFICA STATO
 # ------------------------------------------------------------------------------
 check_status() {
+    # Non serve più forzare l'export del path grazie ai symlink, ma lo lasciamo in fallback
     export PATH=/usr/local/cuda-13.2/bin${PATH:+:${PATH}}
     echo -e "${BLUE}====================================================${NC}"
     echo -e "${BLUE}             VERIFICA STATO DEL SISTEMA             ${NC}"
@@ -289,6 +296,13 @@ check_status() {
         echo -e "${GREEN}Driver NVIDIA Smi:${NC}"
         nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader | sed 's/^/  /'
     fi
+    
+    if command -v nvcc &> /dev/null; then
+        NVCC_VER=$(nvcc -V | grep release | awk '{print $5,$6}' | tr -d ',')
+        echo -e "  ${GREEN}Compilatore CUDA (nvcc) rilevato: ${NVCC_VER}${NC}"
+    else
+        echo -e "  ${RED}Attenzione: compilatore nvcc non trovato nel PATH globale.${NC}"
+    fi
 
     if [ -f "$UNSLOTH_ENV/bin/python3" ]; then
         "$UNSLOTH_ENV/bin/python3" -c "
@@ -303,22 +317,141 @@ if cuda_avail:
     fi
 }
 
+# ------------------------------------------------------------------------------
+# OPZIONE 3: AGGIORNA COMPONENTI
+# ------------------------------------------------------------------------------
 update_components() {
-    # Omesso per brevità nel blocco, ma mantiene la logica originaria (Git pull, pip upgrade, systemctl restart)
-    echo -e "${YELLOW}Esecuzione aggiornamento componenti...${NC}"
-    # ... Inserisci qui la logica di aggiornamento esistente
+    echo -e "${BLUE}====================================================${NC}"
+    echo -e "${BLUE}               AGGIORNAMENTO COMPONENTI             ${NC}"
+    echo -e "${BLUE}====================================================${NC}"
+
+    if ! command -v git &> /dev/null; then
+        apt update || true
+        apt install -y git
+    fi
+
+    if [ -d ".git" ]; then
+        echo -e "${YELLOW}---> Aggiornamento Repository Git locale...${NC}"
+        git pull origin main || echo -e "${RED}Impossibile eseguire git pull.${NC}"
+    else
+        echo -e "${YELLOW}[INFO] Scarico/Aggiorno repository ufficiale da GitHub in $TARGET_REPO_DIR...${NC}"
+        if [ -d "$TARGET_REPO_DIR/.git" ]; then
+            cd "$TARGET_REPO_DIR"
+            git pull origin main
+        else
+            rm -rf "$TARGET_REPO_DIR"
+            git clone "$REPO_URL" "$TARGET_REPO_DIR"
+            cd "$TARGET_REPO_DIR"
+        fi
+        chmod +x manager.sh
+        echo -e "${GREEN}[OK] Repository aggiornata.${NC}"
+        echo -e "${YELLOW}---> Riavvio dello script aggiornato...${NC}"
+        sleep 2
+        exec ./manager.sh
+    fi
+
+    echo -e "${YELLOW}---> Aggiornamento dipendenze Code Runner API nel relativo VENV...${NC}"
+    if [ ! -d "$CODE_RUNNER_ENV" ]; then
+        python3 -m venv "$CODE_RUNNER_ENV"
+    fi
+    "$CODE_RUNNER_ENV/bin/pip" install --upgrade fastapi uvicorn pydantic
+
+    if [ -d "$UNSLOTH_ENV" ]; then
+        echo -e "${YELLOW}---> Aggiornamento PyTorch + CUDA Wheels nel VENV Unsloth...${NC}"
+        "$UNSLOTH_ENV/bin/pip" install --upgrade torch torchvision --extra-index-url https://download.pytorch.org/whl/cu121
+        
+        echo -e "${YELLOW}---> Aggiornamento Jupyter Lab, Unsloth, Trl, Xformers...${NC}"
+        "$UNSLOTH_ENV/bin/pip" install --upgrade jupyterlab unsloth trl xformers
+    fi
+
+    if command -v npm &> /dev/null; then
+        echo -e "${YELLOW}---> Aggiornamento OpenCode AI via NPM...${NC}"
+        npm install -g opencode-ai@latest 2>/dev/null || true
+    fi
+
+    echo -e "${YELLOW}---> Riavvio dei servizi systemd...${NC}"
+    systemctl daemon-reload
+    systemctl restart unsloth-studio opencode code-runner
+    echo -e "${GREEN}[OK] Aggiornamento completato con successo senza toccare il Python di sistema!${NC}"
 }
 
+# ------------------------------------------------------------------------------
+# OPZIONE 4: CONFIGURA SANDBOX
+# ------------------------------------------------------------------------------
 configure_sandbox() {
-    # ... Inserisci qui la logica di SSH sandbox esistente
-    echo -e "${YELLOW}Configurazione sandbox...${NC}"
+    echo -e "${BLUE}====================================================${NC}"
+    echo -e "${BLUE}               CONFIGURAZIONE SANDBOX               ${NC}"
+    echo -e "${BLUE}====================================================${NC}"
+
+    if [ ! -f /root/.ssh/id_ed25519 ]; then
+        echo -e "${YELLOW}[1/3] Generazione chiave SSH sul Controller...${NC}"
+        ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519
+    else
+        echo -e "${GREEN}[1/3] Chiave SSH presente su /root/.ssh/id_ed25519${NC}"
+    fi
+
+    echo -ne "\n${YELLOW}Inserisci l'IP della macchina Sandbox remota: ${NC}"
+    read -r SANDBOX_IP
+
+    if [ -z "$SANDBOX_IP" ]; then
+        echo -e "${RED}IP non valido. Operazione annullata.${NC}"
+        return
+    fi
+
+    echo -e "${YELLOW}[2/3] Invio chiave SSH a root@$SANDBOX_IP...${NC}"
+    ssh-copy-id -i /root/.ssh/id_ed25519.pub "root@$SANDBOX_IP"
+
+    echo -e "${YELLOW}[3/3] Test di esecuzione remota tramite API Code Runner (:9000)...${NC}"
+    
+    systemctl restart code-runner.service 2>/dev/null || true
+    sleep 2
+
+    TEST_PAYLOAD=$(cat <<EOF
+{
+  "code": "import sys, platform; print(f'Sandbox OK! Node: {platform.node()} - Python: {sys.version}')",
+  "sandbox_ip": "$SANDBOX_IP"
+}
+EOF
+)
+
+    curl -s -X POST http://localhost:9000/execute \
+      -H "Content-Type: application/json" \
+      -d "$TEST_PAYLOAD"
+    
+    echo -e "\n${GREEN}[OK] Configurazione Sandbox completata.${NC}"
 }
 
+# ------------------------------------------------------------------------------
+# OPZIONE 5: DISINSTALLA
+# ------------------------------------------------------------------------------
 uninstall_services() {
-    # ... Inserisci qui la logica di rimozione esistente
-    echo -e "${YELLOW}Disinstallazione...${NC}"
+    echo -e "${RED}====================================================${NC}"
+    echo -e "${RED}                DISINSTALLAZIONE STACK             ${NC}"
+    echo -e "${RED}====================================================${NC}"
+    echo -ne "${YELLOW}Sei sicuro di voler rimuovere tutti i servizi systemd e le directory? (s/N): ${NC}"
+    read -r CONFIRM
+
+    if [[ "$CONFIRM" =~ ^[Ss]$ ]]; then
+        echo -e "${YELLOW}---> Arresto e disattivazione servizi systemd...${NC}"
+        for srv in unsloth-studio opencode code-runner; do
+            systemctl stop "$srv.service" 2>/dev/null || true
+            systemctl disable "$srv.service" 2>/dev/null || true
+            rm -f "/etc/systemd/system/$srv.service"
+        done
+        systemctl daemon-reload
+
+        echo -e "${YELLOW}---> Pulizia directory di lavoro e virtualenv...${NC}"
+        rm -rf "$CODE_RUNNER_DIR" "$OPENCODE_DIR" "$UNSLOTH_ENV" "$TARGET_REPO_DIR"
+
+        echo -e "${GREEN}[OK] Disinstallazione completata con successo.${NC}"
+    else
+        echo -e "${BLUE}Operazione annullata.${NC}"
+    fi
 }
 
+# ------------------------------------------------------------------------------
+# MENU INTERATTIVO TUI
+# ------------------------------------------------------------------------------
 show_menu() {
     clear
     echo -e "${BLUE}====================================================${NC}"
