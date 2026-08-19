@@ -40,7 +40,7 @@ fix_os_repositories() {
 
     # 1. Dipendenze base per la gestione repo e TUI
     apt-get update -qq || true
-    apt-get install -y -qq software-properties-common pciutils whiptail curl wget git build-essential >/dev/null 2>&1
+    apt-get install -y -qq pciutils whiptail curl wget git build-essential >/dev/null 2>&1
 
     # 2. Fix specifici per Distribuzione
     if [[ "${os_id}" == "debian" ]]; then
