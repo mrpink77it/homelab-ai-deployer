@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script Name: manager-cpu.sh
-# Version:     1.3.5
+# Version:     1.3.6
 # Project:     homelab-ai-deployer
-# Description: CPU Manager per llama.cpp (AVX2/AVX-512 + OpenMP) & Open WebUI
+# Description: CPU Manager per llama.cpp (AVX2/AVX-512 + OpenMP) & Open WebUI (uv/Py3.11)
 # ==============================================================================
 
 set -euo pipefail
@@ -54,7 +54,7 @@ check_root() {
 }
 
 check_dependencies() {
-    local deps=(build-essential cmake git python3 python3-pip whiptail curl wget pciutils htop)
+    local deps=(build-essential cmake git whiptail curl wget pciutils htop)
     local missing=()
     for pkg in "${deps[@]}"; do
         if ! dpkg -s "$pkg" >/dev/null 2>&1; then missing+=("$pkg"); fi
@@ -66,55 +66,12 @@ check_dependencies() {
     mkdir -p "${MODELS_DIR}" "${BASE_DIR}"
 }
 
-# --- INSTALLAZIONE PYTHON 3.11 (Gestione Ubuntu/Debian) ---
-install_python311() {
-    if command -v python3.11 >/dev/null 2>&1; then
-        log_info "Python 3.11 è già presente nel sistema."
-        return 0
+# --- INSTALLAZIONE UV (Package & Python Manager) ---
+ensure_uv() {
+    if ! command -v uv >/dev/null 2>&1; then
+        log_info "Installazione del package manager 'uv'..."
+        curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
     fi
-
-    log_warn "Python 3.11 non trovato. Inizio installazione automatica..."
-    
-    if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
-        local OS_ID="${ID}"
-        
-        if [[ "${OS_ID}" == "ubuntu" ]]; then
-            log_info "Rilevato sistema Ubuntu. Utilizzo repository PPA deadsnakes..."
-            apt-get update -qq
-            apt-get install -y -qq software-properties-common
-            add-apt-repository ppa:deadsnakes/ppa -y || true
-            apt-get update -qq
-            apt-get install -y -qq python3.11 python3.11-venv python3.11-dev
-            
-        elif [[ "${OS_ID}" == "debian" ]]; then
-            log_info "Rilevato sistema Debian. Compilazione da sorgente..."
-            apt-get update -qq
-            apt-get install -y -qq build-essential libssl-dev zlib1g-dev libncurses5-dev libncursesw5-dev \
-                libreadline-dev libsqlite3-dev libgdbm-dev libdb5.3-dev libbz2-dev libexpat1-dev liblzma-dev \
-                tk-dev libffi-dev wget
-            
-            local tmp_dir
-            tmp_dir=$(mktemp -d)
-            pushd "${tmp_dir}" >/dev/null
-            wget --show-progress -q https://www.python.org/ftp/python/3.11.9/Python-3.11.9.tgz
-            tar -xf Python-3.11.9.tgz
-            cd Python-3.11.9
-            ./configure --enable-optimizations
-            make -j "$(nproc)"
-            make altinstall
-            popd >/dev/null
-            rm -rf "${tmp_dir}"
-        else
-            log_err "Sistema operativo non supportato (${OS_ID}). Installa Python 3.11 manualmente."
-            exit 1
-        fi
-    else
-        log_err "Impossibile determinare l'OS. Installa Python 3.11 manualmente."
-        exit 1
-    fi
-    
-    log_info "Python 3.11 installato con successo."
 }
 
 # --- RILEVAMENTO MODELLO IN ESECUZIONE ---
@@ -305,21 +262,19 @@ compile_llama_cpu() {
 
 # --- INSTALLAZIONE OPEN WEBUI ---
 install_open_webui() {
-    log_info "Setup Open WebUI..."
-    install_python311
+    log_info "Setup Open WebUI via 'uv'..."
+    ensure_uv
     
     mkdir -p "${WEBUI_DIR}"
     
-    # Rimozione forzata e ricreazione ambiente venv pulito con Python 3.11
-    log_info "Rimozione eventuale venv precedente per evitare conflitti..."
+    log_info "Rimozione venv precedente per garantire un ambiente pulito..."
     rm -rf "${WEBUI_VENV}"
 
-    log_info "Creazione venv isolato con Python 3.11..."
-    python3.11 -m venv "${WEBUI_VENV}"
+    log_info "Download binario Python 3.11 e creazione venv isolato..."
+    uv venv --python 3.11 "${WEBUI_VENV}"
     
-    log_info "Aggiornamento pip e installazione Open WebUI..."
-    "${WEBUI_VENV}/bin/pip" install --upgrade pip
-    "${WEBUI_VENV}/bin/pip" install open-webui
+    log_info "Installazione Open WebUI nel venv..."
+    uv pip install --python "${WEBUI_VENV}/bin/python" open-webui
     log_info "Open WebUI installato con successo."
 }
 
@@ -426,11 +381,11 @@ show_menu() {
 
     while true; do
         local choice
-        choice=$(whiptail --title "Homelab AI Deployer - Manager CPU (v1.3.5)" \
+        choice=$(whiptail --title "Homelab AI Deployer - Manager CPU (v1.3.6)" \
             --menu "\nSeleziona un'operazione:" 20 80 8 \
             "A" "Express Auto-Deploy (Pipeline Completa)" \
             "1" "Compila llama.cpp (AVX2/AVX-512 + OpenMP)" \
-            "2" "Installa Open WebUI (Python venv)" \
+            "2" "Installa Open WebUI (Python venv via uv)" \
             "3" "Configura & Avvia Servizi Systemd" \
             "4" "Mostra Profilo Hardware (CPU & RAM)" \
             "5" "Download & Tuning Modelli CPU" \
