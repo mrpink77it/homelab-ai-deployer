@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script Name: manager-cpu.sh
-# Version:     1.3.3
+# Version:     1.3.4
 # Project:     homelab-ai-deployer
 # Description: CPU Manager per llama.cpp (AVX2/AVX-512 + OpenMP) & Open WebUI
 # ==============================================================================
@@ -25,8 +25,7 @@ if [[ "${1:-}" == "--auto" ]]; then
     AUTO_MODE="true"
 fi
 
-# --- CATALOGO MODELLI CPU PRESETTATI (Tutti Open Weights, Nessun Token Richiesto) ---
-# Contesto portato a 32768 (32k) su tutti i modelli.
+# --- CATALOGO MODELLI CPU PRESETTATI ---
 declare -A CPU_MODELS=(
     ["01. Qwen2.5-3B-Instruct"]="https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf|Qwen2.5-3B-Instruct-Q4_K_M.gguf|32768|1024|4"
     ["02. Phi-3.5-mini-instruct"]="https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf|Phi-3.5-mini-instruct-Q4_K_M.gguf|32768|512|6"
@@ -46,7 +45,7 @@ log_info() { echo -e "\e[32m[INFO]\e[0m $1"; }
 log_warn() { echo -e "\e[33m[WARN]\e[0m $1"; }
 log_err()  { echo -e "\e[31m[ERROR]\e[0m $1"; }
 
-# --- CONTROLLO PRIVILEGI E DIPENDENZE ---
+# --- CONTROLLO PRIVILEGI E DIPENDENZE BASE ---
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         log_err "Questo script deve essere eseguito come root (sudo)."
@@ -55,7 +54,7 @@ check_root() {
 }
 
 check_dependencies() {
-    local deps=(build-essential cmake git python3 python3-venv python3-pip whiptail curl wget pciutils htop)
+    local deps=(build-essential cmake git python3 python3-pip whiptail curl wget pciutils htop)
     local missing=()
     for pkg in "${deps[@]}"; do
         if ! dpkg -s "$pkg" >/dev/null 2>&1; then missing+=("$pkg"); fi
@@ -65,6 +64,57 @@ check_dependencies() {
         apt-get update -qq && apt-get install -y -qq "${missing[@]}"
     fi
     mkdir -p "${MODELS_DIR}" "${BASE_DIR}"
+}
+
+# --- INSTALLAZIONE PYTHON 3.11 (Gestione Ubuntu/Debian) ---
+install_python311() {
+    if command -v python3.11 >/dev/null 2>&1; then
+        log_info "Python 3.11 è già presente nel sistema."
+        return 0
+    fi
+
+    log_warn "Python 3.11 non trovato. Inizio installazione automatica..."
+    
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        local OS_ID="${ID}"
+        
+        if [[ "${OS_ID}" == "ubuntu" ]]; then
+            log_info "Rilevato sistema Ubuntu. Utilizzo repository PPA deadsnakes..."
+            apt-get update -qq
+            apt-get install -y -qq software-properties-common
+            add-apt-repository ppa:deadsnakes/ppa -y || true
+            apt-get update -qq
+            apt-get install -y -qq python3.11 python3.11-venv python3.11-dev
+            
+        elif [[ "${OS_ID}" == "debian" ]]; then
+            log_info "Rilevato sistema Debian. Compilazione da sorgente (richiederà qualche minuto)..."
+            apt-get update -qq
+            apt-get install -y -qq build-essential libssl-dev zlib1g-dev libncurses5-dev libncursesw5-dev \
+                libreadline-dev libsqlite3-dev libgdbm-dev libdb5.3-dev libbz2-dev libexpat1-dev liblzma-dev \
+                tk-dev libffi-dev wget
+            
+            local tmp_dir
+            tmp_dir=$(mktemp -d)
+            pushd "${tmp_dir}" >/dev/null
+            wget --show-progress -q https://www.python.org/ftp/python/3.11.9/Python-3.11.9.tgz
+            tar -xf Python-3.11.9.tgz
+            cd Python-3.11.9
+            ./configure --enable-optimizations
+            make -j "$(nproc)"
+            make altinstall
+            popd >/dev/null
+            rm -rf "${tmp_dir}"
+        else
+            log_err "Sistema operativo non supportato in automatico (${OS_ID}). Installa Python 3.11 manualmente."
+            exit 1
+        fi
+    else
+        log_err "Impossibile determinare il sistema operativo. Installa Python 3.11 manualmente."
+        exit 1
+    fi
+    
+    log_info "Python 3.11 installato con successo."
 }
 
 # --- RILEVAMENTO MODELLO IN ESECUZIONE ---
@@ -231,12 +281,11 @@ download_and_tune_model_menu() {
             return 1
         fi
         
-        # Controllo sicurezza: Evita che scarichi pagine HTML di errore
         local filesize
         filesize=$(stat -c%s "${target_path}" 2>/dev/null || echo 0)
         if [[ ${filesize} -lt 5000000 ]]; then
             rm -f "${target_path}"
-            whiptail --msgbox "Download fallito!\n\nIl file scaricato è troppo piccolo (< 5MB).\nIl link potrebbe essere scaduto o errato." 12 65
+            whiptail --msgbox "Download fallito!\n\nIl file scaricato è troppo piccolo (< 5MB)." 12 65
             return 1
         fi
     fi
@@ -263,8 +312,24 @@ compile_llama_cpu() {
 # --- INSTALLAZIONE OPEN WEBUI ---
 install_open_webui() {
     log_info "Setup Open WebUI..."
+    install_python311
+    
     mkdir -p "${WEBUI_DIR}"
-    if [[ ! -d "${WEBUI_VENV}" ]]; then python3 -m venv "${WEBUI_VENV}"; fi
+    
+    # Controllo e rimozione venv corrotto (es. creato con Python 3.12)
+    if [[ -d "${WEBUI_VENV}" ]]; then
+        local venv_py_version
+        venv_py_version=$("${WEBUI_VENV}/bin/python" --version 2>&1 || true)
+        if [[ "${venv_py_version}" != *"3.11"* ]]; then
+            log_warn "Rilevato venv con versione Python incompatibile. Ricreazione in corso..."
+            rm -rf "${WEBUI_VENV}"
+        fi
+    fi
+
+    if [[ ! -d "${WEBUI_VENV}" ]]; then 
+        python3.11 -m venv "${WEBUI_VENV}"
+    fi
+    
     "${WEBUI_VENV}/bin/pip" install --upgrade pip
     "${WEBUI_VENV}/bin/pip" install open-webui
     log_info "Open WebUI installato."
@@ -373,7 +438,7 @@ show_menu() {
 
     while true; do
         local choice
-        choice=$(whiptail --title "Homelab AI Deployer - Manager CPU (v1.3.3)" \
+        choice=$(whiptail --title "Homelab AI Deployer - Manager CPU (v1.3.4)" \
             --menu "\nSeleziona un'operazione:" 20 80 8 \
             "A" "Express Auto-Deploy (Pipeline Completa)" \
             "1" "Compila llama.cpp (AVX2/AVX-512 + OpenMP)" \
