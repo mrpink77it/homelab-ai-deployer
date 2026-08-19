@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.0.5
+# Version: V.1.0.6
 # ==============================================================================
 
 set -e
@@ -142,7 +142,7 @@ install_services() {
 
     echo -e "${YELLOW}[1/4] Installazione Dipendenze di Sistema e Node.js...${NC}"
     apt update || true
-    apt install -y curl wget git gnupg ca-certificates build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils nodejs kmod
+    apt install -y curl wget git gnupg ca-certificates build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils nodejs npm kmod
 
     setup_nvidia_stack
 
@@ -151,9 +151,7 @@ install_services() {
         python3 -m venv "$UNSLOTH_ENV"
     fi
     
-    # Fix: Vincolo della versione di setuptools per compatibilità con PyTorch 2.11
     "$UNSLOTH_ENV/bin/pip" install --upgrade pip wheel "setuptools<82"
-    
     "$UNSLOTH_ENV/bin/pip" install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu121
     "$UNSLOTH_ENV/bin/pip" install jupyterlab unsloth trl xformers
 
@@ -179,7 +177,16 @@ EOF
     
     mkdir -p "$OPENCODE_DIR"
     npm install -g opencode-ai 2>/dev/null || true
-    OPENCODE_BIN=$(which opencode 2>/dev/null || echo "/usr/local/bin/opencode")
+    
+    # FIX V.1.0.6: Ricerca dinamica e infallibile del binario globale npm
+    NPM_BIN_DIR=$(npm -g bin 2>/dev/null || echo "/usr/bin")
+    if [ -x "$NPM_BIN_DIR/opencode" ]; then
+        OPENCODE_BIN="$NPM_BIN_DIR/opencode"
+    else
+        OPENCODE_BIN=$(find /usr -name "opencode" -type l -o -type f -executable 2>/dev/null | grep bin | head -n 1)
+    fi
+    # Fallback estremo
+    [ -z "$OPENCODE_BIN" ] && OPENCODE_BIN="/usr/bin/opencode"
 
     cat <<EOF > /etc/systemd/system/opencode.service
 [Unit]
