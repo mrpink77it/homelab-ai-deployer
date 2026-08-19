@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script Name: manager-cpu.sh
-# Version:     1.3.4
+# Version:     1.3.5
 # Project:     homelab-ai-deployer
 # Description: CPU Manager per llama.cpp (AVX2/AVX-512 + OpenMP) & Open WebUI
 # ==============================================================================
@@ -88,7 +88,7 @@ install_python311() {
             apt-get install -y -qq python3.11 python3.11-venv python3.11-dev
             
         elif [[ "${OS_ID}" == "debian" ]]; then
-            log_info "Rilevato sistema Debian. Compilazione da sorgente (richiederà qualche minuto)..."
+            log_info "Rilevato sistema Debian. Compilazione da sorgente..."
             apt-get update -qq
             apt-get install -y -qq build-essential libssl-dev zlib1g-dev libncurses5-dev libncursesw5-dev \
                 libreadline-dev libsqlite3-dev libgdbm-dev libdb5.3-dev libbz2-dev libexpat1-dev liblzma-dev \
@@ -106,11 +106,11 @@ install_python311() {
             popd >/dev/null
             rm -rf "${tmp_dir}"
         else
-            log_err "Sistema operativo non supportato in automatico (${OS_ID}). Installa Python 3.11 manualmente."
+            log_err "Sistema operativo non supportato (${OS_ID}). Installa Python 3.11 manualmente."
             exit 1
         fi
     else
-        log_err "Impossibile determinare il sistema operativo. Installa Python 3.11 manualmente."
+        log_err "Impossibile determinare l'OS. Installa Python 3.11 manualmente."
         exit 1
     fi
     
@@ -139,9 +139,8 @@ generate_hardware_profile() {
 
 show_hardware_profile() {
     generate_hardware_profile
-    local ram_total_mb
+    local ram_total_mb ram_free_mb
     ram_total_mb=$(free -m | awk '/^Mem:/ {print $2}')
-    local ram_free_mb
     ram_free_mb=$(free -m | awk '/^Mem:/ {print $7}')
     
     local msg="Risultati dell'analisi hardware:\n\n"
@@ -155,12 +154,8 @@ show_hardware_profile() {
 
 # --- DOWNLOAD MASSIVO ---
 download_all_models() {
-    local msg="Stai per scaricare TUTTI i modelli in elenco.\n\n"
-    msg+="Questo richiederà circa 160 GB di spazio libero\nsu disco e molta banda.\n\n"
-    msg+="I modelli già presenti verranno ignorati.\n\n"
-    msg+="Vuoi procedere?"
-
-    if ! whiptail --title "Download Massivo" --yesno "${msg}" 14 65; then
+    local msg="Stai per scaricare TUTTI i modelli in elenco (~160 GB).\n\nVuoi procedere?"
+    if ! whiptail --title "Download Massivo" --yesno "${msg}" 10 60; then
         return 0
     fi
     
@@ -184,7 +179,7 @@ download_all_models() {
         fi
     done
     
-    whiptail --msgbox "Download di massa completato!\nOra puoi tornare al menu e selezionare quale avviare." 10 65
+    whiptail --msgbox "Download completato!" 8 45
 }
 
 # --- SELEZIONE O DOWNLOAD MODELLI ---
@@ -250,8 +245,7 @@ download_and_tune_model_menu() {
         return 0
     fi
 
-    local target_path=""
-    local final_url=""
+    local target_path="" final_url=""
 
     if [[ "${choice}" == "00. Inserisci URL Custom" ]]; then
         final_url=$(whiptail --inputbox "Inserisci il link diretto al file .gguf:" 10 75 3>&1 1>&2 2>&3) || return 0
@@ -277,7 +271,7 @@ download_and_tune_model_menu() {
         
         if ! wget --continue --show-progress -O "${target_path}" "${final_url}"; then
             rm -f "${target_path}"
-            whiptail --msgbox "Errore di rete durante il download.\nVerifica il link o la connessione." 10 60
+            whiptail --msgbox "Errore di rete durante il download." 10 60
             return 1
         fi
         
@@ -285,13 +279,13 @@ download_and_tune_model_menu() {
         filesize=$(stat -c%s "${target_path}" 2>/dev/null || echo 0)
         if [[ ${filesize} -lt 5000000 ]]; then
             rm -f "${target_path}"
-            whiptail --msgbox "Download fallito!\n\nIl file scaricato è troppo piccolo (< 5MB)." 12 65
+            whiptail --msgbox "Download fallito! Il file è troppo piccolo (< 5MB)." 10 60
             return 1
         fi
     fi
 
     ACTIVE_MODEL="${target_path}"
-    whiptail --msgbox "Modello pronto!\n\nI servizi verranno riavviati con i nuovi parametri." 10 65
+    whiptail --msgbox "Modello pronto! Applicazione configurazione..." 10 60
     apply_systemd_config
 }
 
@@ -316,23 +310,17 @@ install_open_webui() {
     
     mkdir -p "${WEBUI_DIR}"
     
-    # Controllo e rimozione venv corrotto (es. creato con Python 3.12)
-    if [[ -d "${WEBUI_VENV}" ]]; then
-        local venv_py_version
-        venv_py_version=$("${WEBUI_VENV}/bin/python" --version 2>&1 || true)
-        if [[ "${venv_py_version}" != *"3.11"* ]]; then
-            log_warn "Rilevato venv con versione Python incompatibile. Ricreazione in corso..."
-            rm -rf "${WEBUI_VENV}"
-        fi
-    fi
+    # Rimozione forzata e ricreazione ambiente venv pulito con Python 3.11
+    log_info "Rimozione eventuale venv precedente per evitare conflitti..."
+    rm -rf "${WEBUI_VENV}"
 
-    if [[ ! -d "${WEBUI_VENV}" ]]; then 
-        python3.11 -m venv "${WEBUI_VENV}"
-    fi
+    log_info "Creazione venv isolato con Python 3.11..."
+    python3.11 -m venv "${WEBUI_VENV}"
     
+    log_info "Aggiornamento pip e installazione Open WebUI..."
     "${WEBUI_VENV}/bin/pip" install --upgrade pip
     "${WEBUI_VENV}/bin/pip" install open-webui
-    log_info "Open WebUI installato."
+    log_info "Open WebUI installato con successo."
 }
 
 # --- GENERAZIONE CONFIGURAZIONE SYSTEMD ---
@@ -390,7 +378,7 @@ run_cpu_benchmark() {
     if [[ -z "${ACTIVE_MODEL}" || ! -f "${ACTIVE_MODEL}" ]]; then select_active_model; fi
     if [[ ! -f "${LLAMA_DIR}/build/bin/llama-bench" ]]; then log_err "Esegui prima la compilazione."; return 1; fi
 
-    log_info "Esecuzione benchmark sul modello: $(basename "${ACTIVE_MODEL}") con ${OPTIMIZED_THREADS} thread..."
+    log_info "Esecuzione benchmark su: $(basename "${ACTIVE_MODEL}") (${OPTIMIZED_THREADS} thread)..."
     "${LLAMA_DIR}/build/bin/llama-bench" -m "${ACTIVE_MODEL}" -t "${OPTIMIZED_THREADS}" -p 512 -n 128
     
     read -p "Premi [INVIO] per tornare al menu..."
@@ -438,7 +426,7 @@ show_menu() {
 
     while true; do
         local choice
-        choice=$(whiptail --title "Homelab AI Deployer - Manager CPU (v1.3.4)" \
+        choice=$(whiptail --title "Homelab AI Deployer - Manager CPU (v1.3.5)" \
             --menu "\nSeleziona un'operazione:" 20 80 8 \
             "A" "Express Auto-Deploy (Pipeline Completa)" \
             "1" "Compila llama.cpp (AVX2/AVX-512 + OpenMP)" \
