@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Homelab AI Deployer - Manager Script
+# Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
 # ==============================================================================
 
@@ -42,6 +42,80 @@ fix_apt_repos() {
 }
 
 # ------------------------------------------------------------------------------
+# SETUP AVANZATO NVIDIA (Bare-Metal & LXC Proxmox)
+# ------------------------------------------------------------------------------
+setup_nvidia_stack() {
+    echo -e "${BLUE}====================================================${NC}"
+    echo -e "${BLUE}        DIAGNOSTICA E SETUP STACK NVIDIA            ${NC}"
+    echo -e "${BLUE}====================================================${NC}"
+
+    # 1. Rilevamento OS (Debian/Ubuntu) per repository ufficiale
+    local os_str="debian12" # Fallback predefinito
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        if [ "$ID" = "debian" ]; then
+            os_str="debian${VERSION_ID}"
+        elif [ "$ID" = "ubuntu" ]; then
+            os_str="ubuntu$(echo $VERSION_ID | tr -d .)"
+        fi
+    fi
+
+    # 2. Rilevamento versione driver per check LXC/Passthrough
+    if [ -f /proc/driver/nvidia/version ]; then
+        NVRM_VERSION=$(grep NVRM /proc/driver/nvidia/version | awk '{print $8}')
+        MAJOR_VERSION=$(echo "$NVRM_VERSION" | cut -d. -f1)
+        echo -e "${GREEN}[OK] Modulo Kernel NVIDIA rilevato. Versione Host: ${NVRM_VERSION} (Major: ${MAJOR_VERSION})${NC}"
+    else
+        NVRM_VERSION=""
+        echo -e "${YELLOW}[WARN] Modulo kernel NVIDIA non trovato su /proc. (Bare-metal pulito o passthrough LXC assente?)${NC}"
+    fi
+
+    # 3. Configurazione Repository Ufficiale CUDA
+    if [ ! -f /etc/apt/sources.list.d/cuda.list ]; then
+        echo -e "${YELLOW}[INFO] Aggiunta repository CUDA ufficiale NVIDIA per ${os_str}...${NC}"
+        wget -qO - "https://developer.download.nvidia.com/compute/cuda/repos/${os_str}/x86_64/3bf863cc.pub" | gpg --dearmor -o /usr/share/keyrings/nvidia-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/nvidia-archive-keyring.gpg] https://developer.download.nvidia.com/compute/cuda/repos/${os_str}/x86_64/ /" > /etc/apt/sources.list.d/cuda.list
+        apt update -qq || echo -e "${YELLOW}[NOTE] Ignorati warning minori di APT...${NC}"
+    fi
+
+    # 4. Logica di Installazione: LXC vs Bare-Metal
+    if grep -q "container=lxc" /proc/1/environ 2>/dev/null; then
+        echo -e "${YELLOW}[INFO] Ambiente LXC Proxmox rilevato.${NC}"
+        if [ -n "$MAJOR_VERSION" ]; then
+            echo -e "${YELLOW}[INFO] Installazione dipendenze user-space (v${MAJOR_VERSION}) per match con l'host...${NC}"
+            # In LXC non installiamo i driver kernel, ma solo le librerie user-space e il CUDA Toolkit
+            apt install -y --no-install-recommends cuda-toolkit
+        else
+            echo -e "${RED}[ERRORE] Impossibile determinare la versione host in LXC. Assicurati che il passthrough della GPU sia configurato correttamente!${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${YELLOW}[INFO] Ambiente Bare-Metal rilevato.${NC}"
+        if ! command -v nvidia-smi &> /dev/null; then
+            echo -e "${YELLOW}[INFO] Scaricamento e installazione ultimi driver proprietari NVIDIA e CUDA Toolkit compatibili...${NC}"
+            # L'installazione di cuda-drivers dal repo ufficiale scarica l'ultimo branch proprietario supportato dall'hardware
+            apt install -y cuda-drivers cuda-toolkit
+        else
+            echo -e "${GREEN}[OK] Driver NVIDIA già presenti. Assicuro la presenza del CUDA Toolkit...${NC}"
+            apt install -y cuda-toolkit
+        fi
+    fi
+
+    # 5. Installazione NVIDIA Container Toolkit (Opzionale ma raccomandato per stack futuri)
+    if ! command -v nvidia-ctk &> /dev/null; then
+        echo -e "${YELLOW}[INFO] Configurazione NVIDIA Container Toolkit...${NC}"
+        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+        curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+            sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+            tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+        apt update -qq
+        apt install -y nvidia-container-toolkit
+    else
+        echo -e "${GREEN}[OK] NVIDIA Container Toolkit già installato.${NC}"
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # OPZIONE 1: INSTALLA SERVIZI
 # ------------------------------------------------------------------------------
 install_services() {
@@ -52,21 +126,16 @@ install_services() {
     setup_xdg_fix
     fix_apt_repos
 
-    # 1. Aggiornamento Pacchetti di Sistema
-    echo -e "${YELLOW}[1/5] Installazione Dipendenze di Sistema, Node.js e Driver CUDA...${NC}"
-    apt update || echo -e "${YELLOW}[NOTE] Ignorati warning minori di APT...${NC}"
-    
+    # 1. Aggiornamento Pacchetti di Sistema base
+    echo -e "${YELLOW}[1/5] Installazione Dipendenze di Sistema e Node.js...${NC}"
+    apt update || true
     apt install -y curl wget git build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils nodejs
 
-    if command -v nvidia-smi &> /dev/null; then
-        echo -e "${GREEN}[OK] GPU NVIDIA e Driver rilevati tramite nvidia-smi.${NC}"
-    else
-        echo -e "${YELLOW}[INFO] nvidia-smi non trovato. Tento l'installazione di nvidia-cuda-toolkit...${NC}"
-        apt install -y nvidia-cuda-toolkit || echo -e "${YELLOW}[NOTE] Se sei dentro un LXC Proxmox, assicurati di aver fatto il passthrough GPU.${NC}"
-    fi
+    # 2. Setup Driver e Stack NVIDIA (Bare-Metal/LXC)
+    setup_nvidia_stack
 
-    # 2. Configurazione Unsloth Studio nel VENV (/root/unsloth_env)
-    echo -e "${YELLOW}[2/5] Setup Unsloth Studio & PyTorch CUDA nel VENV dedicato...${NC}"
+    # 3. Configurazione Unsloth Studio nel VENV (/root/unsloth_env)
+    echo -e "${YELLOW}[3/5] Setup Unsloth Studio & PyTorch CUDA nel VENV dedicato...${NC}"
     if [ ! -d "$UNSLOTH_ENV" ]; then
         python3 -m venv "$UNSLOTH_ENV"
     fi
@@ -92,8 +161,8 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    # 3. Setup OpenCode AI Web Service via NPM
-    echo -e "${YELLOW}[3/5] Installazione OpenCode AI via NPM...${NC}"
+    # 4. Setup OpenCode AI Web Service via NPM
+    echo -e "${YELLOW}[4/5] Installazione OpenCode AI via NPM...${NC}"
     mkdir -p "$OPENCODE_DIR"
     npm install -g opencode-ai 2>/dev/null || true
 
@@ -117,8 +186,8 @@ Environment=BROWSER=echo
 WantedBy=multi-user.target
 EOF
 
-    # 4. Setup Code Runner API Service nel suo VENV dedicato (/opt/code_runner/venv)
-    echo -e "${YELLOW}[4/5] Setup Code Runner API Service e relativo VENV...${NC}"
+    # 5. Setup Code Runner API Service nel suo VENV dedicato (/opt/code_runner/venv)
+    echo -e "${YELLOW}[5/5] Setup Code Runner API Service e relativo VENV...${NC}"
     mkdir -p "$CODE_RUNNER_DIR"
 
     if [ ! -d "$CODE_RUNNER_ENV" ]; then
@@ -177,8 +246,8 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    # 5. Ricarica Systemd e Abilita al Boot
-    echo -e "${YELLOW}[5/5] Ricarico systemd, abilito ed avvio tutti i servizi...${NC}"
+    # 6. Ricarica Systemd e Abilita al Boot
+    echo -e "${YELLOW}---> Ricarico systemd, abilito ed avvio tutti i servizi...${NC}"
     systemctl daemon-reload
     
     for srv in unsloth-studio opencode code-runner; do
