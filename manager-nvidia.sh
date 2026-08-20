@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.0.6
+# Version: V.1.0.7
 # ==============================================================================
 
 set -e
@@ -12,6 +12,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 REPO_URL="https://github.com/mrpink77it/homelab-ai-deployer.git"
@@ -178,14 +179,13 @@ EOF
     mkdir -p "$OPENCODE_DIR"
     npm install -g opencode-ai 2>/dev/null || true
     
-    # FIX V.1.0.6: Ricerca dinamica e infallibile del binario globale npm
+    # Ricerca dinamica e infallibile del binario globale npm
     NPM_BIN_DIR=$(npm -g bin 2>/dev/null || echo "/usr/bin")
     if [ -x "$NPM_BIN_DIR/opencode" ]; then
         OPENCODE_BIN="$NPM_BIN_DIR/opencode"
     else
         OPENCODE_BIN=$(find /usr -name "opencode" -type l -o -type f -executable 2>/dev/null | grep bin | head -n 1)
     fi
-    # Fallback estremo
     [ -z "$OPENCODE_BIN" ] && OPENCODE_BIN="/usr/bin/opencode"
 
     cat <<EOF > /etc/systemd/system/opencode.service
@@ -270,56 +270,104 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 2: VERIFICA STATO
+# OPZIONE 2: VERIFICA STATO (Aggiornata e Strutturata)
 # ------------------------------------------------------------------------------
 check_status() {
     export PATH=/usr/local/cuda-13.2/bin${PATH:+:${PATH}}
-    echo -e "${BLUE}====================================================${NC}"
-    echo -e "${BLUE}             VERIFICA STATO DEL SISTEMA             ${NC}"
-    echo -e "${BLUE}====================================================${NC}"
+    clear
+    echo -e "${BLUE}====================================================================${NC}"
+    echo -e "${BLUE}                 DIAGNOSTICA E STATO DEL SISTEMA                    ${NC}"
+    echo -e "${BLUE}====================================================================${NC}"
 
-    echo -e "${YELLOW}---> Stato Servizi Systemd:${NC}"
-    for srv in unsloth-studio opencode code-runner; do
-        EN_STATE=$(systemctl is-enabled "$srv.service" 2>/dev/null || echo "not-found")
-        ACT_STATE=$(systemctl is-active "$srv.service" 2>/dev/null || echo "inactive")
-        [ "$ACT_STATE" = "active" ] && ACT_STR="${GREEN}ATTIVO (Running)${NC}" || ACT_STR="${RED}INATTIVO ($ACT_STATE)${NC}"
-        [ "$EN_STATE" = "enabled" ] && EN_STR="${GREEN}ENABLED${NC}" || EN_STR="${RED}DISABLED ($EN_STATE)${NC}"
-        echo -e "  $srv.service -> Boot: [$EN_STR] | Stato: [$ACT_STR]"
-    done
+    # 1. INFO DI SISTEMA E RISORSE HW
+    echo -e "\n${YELLOW}[1] RISORSE HARDWARE E SISTEMA${NC}"
+    local OS_NAME=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2 || echo "Linux")
+    local LOCAL_IP=$(hostname -I | awk '{print $1}')
+    local CPU_MODEL=$(lscpu 2>/dev/null | grep "Model name" | sed -r 's/Model name:\s+//g' || echo "N/A")
+    local CPU_CORES=$(nproc 2>/dev/null || echo "N/A")
+    local RAM_INFO=$(free -h | awk '/^Mem:/ {print $3 " / " $2}')
+    local DISK_INFO=$(df -h / | awk 'NR==2 {print $3 " / " $2 " (" $5 ")"}')
+    local VIRT_ENV=$(systemd-detect-virt 2>/dev/null || echo "bare-metal")
 
-    echo -e "\n${YELLOW}---> Porte di Rete in Ascolto:${NC}"
-    for port in 8000 8888 9000; do
-        if ss -tulpn 2>/dev/null | grep -q ":$port " || netstat -tulpn 2>/dev/null | grep -q ":$port "; then
-            echo -e "  Porta $port: ${GREEN}IN ASCOLTO${NC}"
-        else
-            echo -e "  Porta $port: ${RED}NON ATTIVA${NC}"
-        fi
-    done
+    echo -e "  • Sistema Op. : ${GREEN}$OS_NAME${NC} (Ambiente: $VIRT_ENV)"
+    echo -e "  • Indirizzo IP: ${GREEN}$LOCAL_IP${NC}"
+    echo -e "  • Processore  : ${GREEN}$CPU_MODEL${NC} ($CPU_CORES Cores)"
+    echo -e "  • Utilizzo RAM: ${GREEN}$RAM_INFO${NC}"
+    echo -e "  • Disco (Root): ${GREEN}$DISK_INFO${NC}"
 
-    echo -e "\n${YELLOW}---> Verifica GPU e CUDA PyTorch:${NC}"
+    # 2. STACK DRIVER NVIDIA E CUDA
+    echo -e "\n${YELLOW}[2] STACK DRIVER NVIDIA E CUDA${NC}"
     if command -v nvidia-smi &> /dev/null; then
-        echo -e "${GREEN}Driver NVIDIA Smi:${NC}"
-        nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader | sed 's/^/  /'
-    fi
-    
-    if command -v nvcc &> /dev/null; then
-        NVCC_VER=$(nvcc -V | grep release | awk '{print $5,$6}' | tr -d ',')
-        echo -e "  ${GREEN}Compilatore CUDA (nvcc) rilevato: ${NVCC_VER}${NC}"
+        local NV_DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader -i 0)
+        local GPU_MODEL=$(nvidia-smi --query-gpu=name --format=csv,noheader -i 0)
+        local GPU_VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader -i 0)
+        echo -e "  • Modello GPU : ${GREEN}$GPU_MODEL${NC}"
+        echo -e "  • VRAM Totale : ${GREEN}$GPU_VRAM${NC}"
+        echo -e "  • Driver Host : ${GREEN}$NV_DRIVER${NC}"
     else
-        echo -e "  ${RED}Attenzione: compilatore nvcc non trovato nel PATH globale.${NC}"
+        echo -e "  • Modello GPU : ${RED}NVIDIA-SMI non trovato o GPU assente${NC}"
+    fi
+
+    if command -v nvcc &> /dev/null; then
+        local NVCC_VER=$(nvcc -V | grep release | awk '{print $5,$6}' | tr -d ',')
+        echo -e "  • CUDA Toolkit: ${GREEN}$NVCC_VER${NC}"
+    else
+        echo -e "  • CUDA Toolkit: ${RED}Non trovato nel PATH globale${NC}"
     fi
 
     if [ -f "$UNSLOTH_ENV/bin/python3" ]; then
-        "$UNSLOTH_ENV/bin/python3" -c "
-import torch
-cuda_avail = torch.cuda.is_available()
-print(f'  CUDA PyTorch Disponibile: {\"${GREEN}SI${NC}\" if cuda_avail else \"${RED}NO${NC}\"}')
-if cuda_avail:
-    print(f'  GPU Riconosciuta da PyTorch: {torch.cuda.get_device_name(0)}')
-" 2>/dev/null || echo -e "  ${RED}Errore durante il test di PyTorch/CUDA${NC}"
+        local PYTORCH_TEST=$("$UNSLOTH_ENV/bin/python3" -c "import torch; print(f\"OK|{torch.cuda.get_device_name(0)}\") if torch.cuda.is_available() else print(\"FAIL\")" 2>/dev/null || echo "ERROR")
+        if [[ "$PYTORCH_TEST" == OK* ]]; then
+            local PT_GPU=$(echo "$PYTORCH_TEST" | cut -d'|' -f2)
+            echo -e "  • PyTorch CUDA: ${GREEN}Attivo${NC} (GPU agganciata: $PT_GPU)"
+        else
+            echo -e "  • PyTorch CUDA: ${RED}Errore di comunicazione o GPU non visibile${NC}"
+        fi
     else
-        echo -e "  ${RED}Virtualenv Unsloth non trovato su $UNSLOTH_ENV${NC}"
+        echo -e "  • PyTorch CUDA: ${RED}Ambiente virtuale Unsloth assente${NC}"
     fi
+
+    # 3. STATO SERVIZI, PORTE E API
+    echo -e "\n${YELLOW}[3] STATO SERVIZI, PORTE E API${NC}"
+    
+    print_service_status() {
+        local SRV_FILE=$1
+        local SRV_NAME=$2
+        local PORT=$3
+
+        # Controllo stato Systemd
+        local EN_STATE=$(systemctl is-enabled "$SRV_FILE" 2>/dev/null || echo "not-found")
+        local ACT_STATE=$(systemctl is-active "$SRV_FILE" 2>/dev/null || echo "inactive")
+        
+        local SYS_STR=""
+        [ "$ACT_STATE" = "active" ] && SYS_STR="${GREEN}RUNNING${NC}" || SYS_STR="${RED}$ACT_STATE${NC}"
+        local EN_STR=""
+        [ "$EN_STATE" = "enabled" ] && EN_STR="${GREEN}Abilitato al boot${NC}" || EN_STR="${RED}Disabilitato ($EN_STATE)${NC}"
+
+        # Controllo stato Rete
+        local PORT_STR=""
+        if ss -tulpn 2>/dev/null | grep -q ":$PORT " || netstat -tulpn 2>/dev/null | grep -q ":$PORT "; then
+            PORT_STR="${GREEN}IN ASCOLTO${NC}"
+        else
+            PORT_STR="${RED}PORTA CHIUSA${NC}"
+        fi
+
+        echo -e "  🔹 ${CYAN}$SRV_NAME${NC}"
+        echo -e "     Systemd : $SYS_STR ($EN_STR)"
+        echo -e "     Rete    : Porta $PORT -> $PORT_STR"
+        
+        # Stampa URL se la porta è in ascolto e abbiamo un IP
+        if [ "$PORT_STR" == "${GREEN}IN ASCOLTO${NC}" ] && [ -n "$LOCAL_IP" ]; then
+            echo -e "     URL API : http://$LOCAL_IP:$PORT"
+        fi
+        echo ""
+    }
+
+    print_service_status "unsloth-studio.service" "Unsloth Studio (Jupyter Lab)" "8888"
+    print_service_status "opencode.service" "OpenCode AI (Web Server)" "8000"
+    print_service_status "code-runner.service" "Code Runner API (FastAPI)" "9000"
+
+    echo -e "${BLUE}====================================================================${NC}"
 }
 
 # ------------------------------------------------------------------------------
