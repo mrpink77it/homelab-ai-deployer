@@ -47,7 +47,7 @@ Copiare ed incollare questo comando per eseguire l'installazione. Eseguire come 
 
 ```bash
 wget -q https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/install.sh && chmod +x install.sh &&  ./install.sh```
-
+```
 
 ---
 
