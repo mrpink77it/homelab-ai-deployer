@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-amd.sh
-# Versione: 1.0.9
-# Descrizione: Gestore deployment GPU AMD (Con Express Auto-Deploy e Validazione ZIP)
+# Versione: 1.1.0
+# Descrizione: Gestore deployment GPU AMD (Con 10 Modelli Top, Custom URL e Auto-Update Servizi)
 # ==============================================================================
 
 set -euo pipefail
@@ -10,7 +10,7 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 # Configurazione Variabili Globali
 # ------------------------------------------------------------------------------
-VERSION="1.0.9"
+VERSION="1.1.0"
 INSTALL_DIR="/opt/homelab-ai"
 MODELS_DIR="${INSTALL_DIR}/models"
 BACKEND_DIR="${INSTALL_DIR}/backend"
@@ -186,29 +186,100 @@ EOF
 download_models_menu() {
     setup_directories
     local m_choice
-    m_choice=$(whiptail --title "Download Modelli AMD" \
-        --menu "\nSeleziona il modello in base alla VRAM disponibile:" 16 70 5 \
-        "1" "[4 GB VRAM] Qwen 2.5 Coder 7B (Q4_K_M)" \
-        "2" "[8 GB VRAM] Llama 3.1 8B Instruct (Q8_0)" \
-        "3" "[16 GB VRAM] Qwen 2.5 14B Instruct (Q8_0)" \
-        "4" "[32 GB VRAM] Llama 3.1 70B Instruct (Q4_K_M)" \
+    m_choice=$(whiptail --title "Download & Tuning Modelli AMD (8GB / 16GB VRAM)" \
+        --menu "\nSeleziona un modello top per Vulkan, scarica tutti o inserisci URL custom:" 22 78 13 \
+        "1" "[8GB] Llama 3.1 8B Instruct (Q4_K_M)" \
+        "2" "[8GB] Qwen 2.5 7B Instruct (Q4_K_M)" \
+        "3" "[8GB] Qwen 2.5 Coder 7B Instruct (Q4_K_M)" \
+        "4" "[8GB] Google Gemma 2 9B Instruct (Q4_K_M)" \
+        "5" "[8GB] Llama 3.2 3B Instruct (Q8_0)" \
+        "6" "[16GB] Qwen 2.5 14B Instruct (Q4_K_M)" \
+        "7" "[16GB] DeepSeek-R1-Distill-Qwen-14B (Q4_K_M)" \
+        "8" "[16GB] Mistral Nemo 12B Instruct (Q4_K_M)" \
+        "9" "[16GB] DeepSeek-Coder-V2-Lite-Instruct 16B (Q4_K_M)" \
+        "10" "[16GB] Phi-3.5 Medium 14B Instruct (Q4_K_M)" \
+        "A" "Scarica TUTTI i 10 modelli in un colpo solo" \
+        "C" "Inserisci URL GGUF personalizzato (Custom)" \
         "0" "Torna indietro (Annulla)" \
         3>&1 1>&2 2>&3) || return
 
     cd "${MODELS_DIR}"
     local url=""
+    local filename=""
+
     case "$m_choice" in
-        1) url="https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf" ;;
-        2) url="https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf" ;;
-        3) url="https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q8_0.gguf" ;;
-        4) url="https://huggingface.co/bartowski/Meta-Llama-3.1-70B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf" ;;
+        1) filename="llama-3.1-8b-instruct-q4_k_m.gguf"; url="https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf" ;;
+        2) filename="qwen-2.5-7b-instruct-q4_k_m.gguf"; url="https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf" ;;
+        3) filename="qwen-2.5-coder-7b-instruct-q4_k_m.gguf"; url="https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf" ;;
+        4) filename="gemma-2-9b-instruct-q4_k_m.gguf"; url="https://huggingface.co/bartowski/gemma-2-9b-instruct-GGUF/resolve/main/gemma-2-9b-instruct-Q4_K_M.gguf" ;;
+        5) filename="llama-3.2-3b-instruct-q8_0.gguf"; url="https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q8_0.gguf" ;;
+        6) filename="qwen-2.5-14b-instruct-q4_k_m.gguf"; url="https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q4_k_m.gguf" ;;
+        7) filename="deepseek-r1-distill-qwen-14b-q4_k_m.gguf"; url="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-14B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf" ;;
+        8) filename="mistral-nemo-12b-instruct-q4_k_m.gguf"; url="https://huggingface.co/bartowski/Mistral-Nemo-12B-Instruct-2407-GGUF/resolve/main/Mistral-Nemo-12B-Instruct-2407-Q4_K_M.gguf" ;;
+        9) filename="deepseek-coder-v2-lite-instruct-q4_k_m.gguf"; url="https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/main/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf" ;;
+        10) filename="phi-3.5-medium-instruct-q4_k_m.gguf"; url="https://huggingface.co/bartowski/Phi-3.5-medium-instruct-GGUF/resolve/main/Phi-3.5-medium-instruct-Q4_K_M.gguf" ;;
+        A)
+            echo -e "${C_CYAN}>>> Avvio download di tutti i 10 modelli top...${C_RESET}"
+            local urls=(
+                "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+                "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf"
+                "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
+                "https://huggingface.co/bartowski/gemma-2-9b-instruct-GGUF/resolve/main/gemma-2-9b-instruct-Q4_K_M.gguf"
+                "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q8_0.gguf"
+                "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q4_k_m.gguf"
+                "https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-14B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf"
+                "https://huggingface.co/bartowski/Mistral-Nemo-12B-Instruct-2407-GGUF/resolve/main/Mistral-Nemo-12B-Instruct-2407-Q4_K_M.gguf"
+                "https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/main/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf"
+                "https://huggingface.co/bartowski/Phi-3.5-medium-instruct-GGUF/resolve/main/Phi-3.5-medium-instruct-Q4_K_M.gguf"
+            )
+            local names=(
+                "llama-3.1-8b-instruct-q4_k_m.gguf"
+                "qwen-2.5-7b-instruct-q4_k_m.gguf"
+                "qwen-2.5-coder-7b-instruct-q4_k_m.gguf"
+                "gemma-2-9b-instruct-q4_k_m.gguf"
+                "llama-3.2-3b-instruct-q8_0.gguf"
+                "qwen-2.5-14b-instruct-q4_k_m.gguf"
+                "deepseek-r1-distill-qwen-14b-q4_k_m.gguf"
+                "mistral-nemo-12b-instruct-q4_k_m.gguf"
+                "deepseek-coder-v2-lite-instruct-q4_k_m.gguf"
+                "phi-3.5-medium-instruct-q4_k_m.gguf"
+            )
+            for i in "${!urls[@]}"; do
+                echo -e "${C_CYAN}Scaricamento in corso (${i}/10): ${names[$i]}...${C_RESET}"
+                curl -L --progress-bar -o "${names[$i]}" "${urls[$i]}"
+            done
+            ln -sf "${names[0]}" model.gguf
+            echo -e "${C_GREEN}Tutti i modelli sono stati scaricati! Impostato ${names[0]} come attivo.${C_RESET}"
+            setup_services
+            sleep 3
+            return
+            ;;
+        C)
+            local custom_url
+            custom_url=$(whiptail --title "URL Custom GGUF" --inputbox "\nInserisci l'URL diretto al file .gguf:" 10 70 3>&1 1>&2 2>&3) || return
+            if [[ -n "$custom_url" ]]; then
+                filename=$(basename "$custom_url" | cut -d? -f1)
+                [[ -z "$filename" || "$filename" == "." ]] && filename="custom-model.gguf"
+                echo -e "${C_CYAN}Download custom in corso: ${filename}...${C_RESET}"
+                curl -L --progress-bar -o "$filename" "$custom_url"
+                ln -sf "$filename" model.gguf
+                echo -e "${C_GREEN}Download custom completato e impostato come attivo.${C_RESET}"
+                setup_services
+                sleep 2
+            fi
+            return
+            ;;
         0) return ;;
     esac
 
-    echo -e "${C_CYAN}Download in corso...${C_RESET}"
-    curl -L --progress-bar -o "model.gguf" "$url"
-    echo -e "${C_GREEN}Download completato.${C_RESET}"
-    sleep 2
+    if [[ -n "$url" ]]; then
+        echo -e "${C_CYAN}Download di ${filename} in corso...${C_RESET}"
+        curl -L --progress-bar -o "$filename" "$url"
+        ln -sf "$filename" model.gguf
+        echo -e "${C_GREEN}Download completato e impostato come modello attivo.${C_RESET}"
+        setup_services
+        sleep 2
+    fi
 }
 
 show_hardware_profile() {
@@ -262,7 +333,7 @@ main_menu() {
             "2" "Installa Open WebUI (Python venv via uv)" \
             "3" "Configura & Avvia Servizi Systemd" \
             "4" "Mostra Profilo Hardware (CPU & GPU AMD)" \
-            "5" "Download & Tuning Modelli AMD (4, 8, 16, 32 GB)" \
+            "5" "Download & Tuning Modelli AMD (8/16 GB)" \
             "6" "Esegui Benchmark GPU (llama-bench)" \
             "D" "Mostra Dashboard Sistema" \
             "0" "Indietro (Cambia Modalità GPU)" \
@@ -274,8 +345,8 @@ main_menu() {
             2) install_frontend; DEFAULT_ITEM="3" ;;
             3) setup_services; DEFAULT_ITEM="D" ;;
             4) show_hardware_profile; DEFAULT_ITEM="5" ;;
-            5) download_models_menu; DEFAULT_ITEM="3" ;;
-            6) run_benchmark; DEFAULT_ITEM="D" ;;
+            5) download_models_menu; DEFAULT_Item="3" ;;
+            6) run_benchmark; DEFAULT_Item="D" ;;
             D) show_dashboard; DEFAULT_ITEM="A" ;;
             0) return 0 ;;
         esac
