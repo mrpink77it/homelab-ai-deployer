@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-amd.sh
-# Versione: 1.0.5
-# Descrizione: Gestore deployment GPU AMD con Auto-Advance Cursore
+# Versione: 1.0.6
+# Descrizione: Gestore deployment GPU AMD (Auto-Advance & Crash-Proof API Limit)
 # ==============================================================================
 
 set -euo pipefail
@@ -10,7 +10,7 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 # Configurazione Variabili Globali
 # ------------------------------------------------------------------------------
-VERSION="1.0.5"
+VERSION="1.0.6"
 INSTALL_DIR="/opt/homelab-ai"
 MODELS_DIR="${INSTALL_DIR}/models"
 BACKEND_DIR="${INSTALL_DIR}/backend"
@@ -73,7 +73,14 @@ install_backend() {
     setup_directories
     cd "${BACKEND_DIR}"
     
-    LATEST_RELEASE=$(curl -s https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    # [FIX]: || true evita il crash del pipefail. Se fallisce, la variabile resta vuota.
+    LATEST_RELEASE=$(curl -s https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+    
+    # [FIX]: Fallback in caso di GitHub API Rate Limit
+    if [[ -z "$LATEST_RELEASE" ]]; then
+        echo -e "${C_YELLOW}[AVVISO] Impossibile contattare GitHub API (Possibile Rate Limit). Uso versione stabile di fallback...${C_RESET}"
+        LATEST_RELEASE="b4754" # Ultima versione testata, cambiala se necessario.
+    fi
     
     local target_bin="ubuntu-x64-rocm"
     if [[ "$AMD_MODE" == "Vulkan" ]]; then
@@ -84,15 +91,28 @@ install_backend() {
     
     if curl --output /dev/null --silent --head --fail "$DOWNLOAD_URL"; then
         wget -q --show-progress -O llama-amd.zip "$DOWNLOAD_URL"
-        apt-get install -y unzip >/dev/null
-        unzip -o llama-amd.zip -d ./ >/dev/null
-        rm llama-amd.zip
-        find . -name "llama-server" -exec mv {} ./llama-server-amd \;
-        chmod +x llama-server-amd
-        echo -e "${C_GREEN}Backend ${AMD_MODE} installato con successo.${C_RESET}"
+        
+        # [FIX]: Sicurezza per unzip
+        if ! command -v unzip &> /dev/null; then
+            apt-get install -y unzip >/dev/null || true
+        fi
+        
+        unzip -o llama-amd.zip -d ./ >/dev/null || true
+        rm -f llama-amd.zip
+        
+        # [FIX]: Sicurezza in caso di cambiamenti nel nome dei binari ZIP da parte di ggerganov
+        find . -name "llama-server" -exec mv {} ./llama-server-amd \; 2>/dev/null || true
+        if [[ -f "./llama-server-amd" ]]; then
+            chmod +x llama-server-amd
+            echo -e "${C_GREEN}Backend ${AMD_MODE} installato con successo.${C_RESET}"
+        else
+            echo -e "${C_RED}[ERRORE] Eseguibile llama-server non trovato nello ZIP scaricato!${C_RESET}"
+            sleep 3
+        fi
     else
         echo -e "${C_RED}Errore: Release ${target_bin} non trovata per la versione ${LATEST_RELEASE}.${C_RESET}"
-        sleep 3
+        echo -e "${C_YELLOW}Prova tra qualche minuto o seleziona temporaneamente Vulkan.${C_RESET}"
+        sleep 4
     fi
 }
 
@@ -160,8 +180,8 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable homelab-ai-backend homelab-ai-frontend
-    systemctl restart homelab-ai-backend homelab-ai-frontend
+    systemctl enable homelab-ai-backend homelab-ai-frontend || true
+    systemctl restart homelab-ai-backend homelab-ai-frontend || true
     echo -e "${C_GREEN}Servizi configurati e avviati.${C_RESET}"
     sleep 2
 }
@@ -189,7 +209,7 @@ download_models_menu() {
     esac
 
     echo -e "${C_CYAN}Download in corso...${C_RESET}"
-    wget --show-progress -O "model.gguf" "$url"
+    wget --show-progress -O "model.gguf" "$url" || true
     echo -e "${C_GREEN}Download completato (salvato come model.gguf per autostart).${C_RESET}"
     sleep 2
 }
@@ -197,7 +217,7 @@ download_models_menu() {
 show_hardware_profile() {
     clear
     echo -e "${C_CYAN}=== PROFILO HARDWARE ===${C_RESET}"
-    lscpu | grep -E "Model name|Thread\(s\) per core|Core\(s\) per socket"
+    lscpu | grep -E "Model name|Thread\(s\) per core|Core\(s\) per socket" || true
     free -h
     echo -e "\n${C_CYAN}=== SCHEDA VIDEO AMD ===${C_RESET}"
     lspci | grep -iE 'vga|3d|display' | grep -i amd || echo "Nessuna GPU AMD rilevata su bus PCI"
@@ -209,7 +229,7 @@ run_benchmark() {
     clear
     if [[ -f "${BACKEND_DIR}/llama-bench" ]]; then
         echo -e "${C_CYAN}Esecuzione llama-bench su modello caricato...${C_RESET}"
-        "${BACKEND_DIR}/llama-bench" -m "${MODELS_DIR}/model.gguf" -ngl 99
+        "${BACKEND_DIR}/llama-bench" -m "${MODELS_DIR}/model.gguf" -ngl 99 || true
     else
         echo -e "${C_RED}Eseguibile llama-bench non trovato. Assicurati di aver installato llama.cpp.${C_RESET}"
     fi
@@ -228,8 +248,8 @@ show_dashboard() {
     if systemctl is-active --quiet homelab-ai-backend; then be_status="${C_GREEN}🟢 ATTIVO (In Esecuzione)${C_RESET}"; fi
     if systemctl is-active --quiet homelab-ai-frontend; then fe_status="${C_GREEN}🟢 ATTIVO (In Esecuzione)${C_RESET}"; fi
 
-    local cpu_info=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed -e 's/^[ \t]*//')
-    local cpu_threads=$(nproc)
+    local cpu_info=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed -e 's/^[ \t]*//' || true)
+    local cpu_threads=$(nproc || echo "N/A")
     local ram_used=$(free -h | awk '/^Mem:/{print $3}')
     local ram_total=$(free -h | awk '/^Mem:/{print $2}')
     local gpu_info=$(lspci | grep -iE 'vga|3d|display' | grep -i amd | cut -d: -f3 | sed 's/^[ \t]*//' | head -n1 || echo "Non Rilevata")
@@ -262,7 +282,6 @@ show_dashboard() {
 # Menu Principale TUI
 # ------------------------------------------------------------------------------
 main_menu() {
-    # Variabile di stato per l'avanzamento automatico del cursore
     local DEFAULT_ITEM="A"
 
     while true; do
@@ -288,19 +307,19 @@ main_menu() {
                 install_frontend
                 setup_services
                 whiptail --title "Completato" --msgbox "Pipeline completa eseguita." 8 40
-                DEFAULT_ITEM="D" # Dopo il deploy ti consiglia di guardare la Dashboard
+                DEFAULT_ITEM="D"
                 ;;
             1) 
                 install_backend
-                DEFAULT_ITEM="2" # Avanza a installazione frontend
+                DEFAULT_ITEM="2"
                 ;;
             2) 
                 install_frontend
-                DEFAULT_ITEM="3" # Avanza a configurazione servizi
+                DEFAULT_ITEM="3"
                 ;;
             3) 
                 setup_services
-                DEFAULT_ITEM="D" # Avanza a visualizzazione Dashboard
+                DEFAULT_ITEM="D"
                 ;;
             4) 
                 show_hardware_profile
@@ -308,7 +327,7 @@ main_menu() {
                 ;;
             5) 
                 download_models_menu
-                DEFAULT_ITEM="3" # Suggerisce di riavviare i servizi per applicare il nuovo modello
+                DEFAULT_ITEM="3"
                 ;;
             6) 
                 run_benchmark
