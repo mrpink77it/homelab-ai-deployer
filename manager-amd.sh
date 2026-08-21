@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-amd.sh
+# Versione: 1.0.0
 # Descrizione: Gestore deployment, frontend, servizi systemd e ciclo AI per GPU AMD
 # Ambienti: Bare-Metal & Proxmox LXC (Debian 13 / Ubuntu 24.04 LTS)
 # ==============================================================================
@@ -12,6 +13,7 @@ trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-amd.sh si è interr
 # ------------------------------------------------------------------------------
 # Configurazione Variabili Globali
 # ------------------------------------------------------------------------------
+VERSION="1.0.0"
 LOG_FILE="/var/log/homelab-ai-amd.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -217,12 +219,12 @@ auto_setup_systemd_service() {
 
     local env_directives=""
     if [[ "${type}" == "rocm" || "${type}" == "rocm_exp" ]]; then
-        env_directives="Environment=\"PATH=/opt/rocm/bin:/opt/rocm/llvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
+        env_directives="Environment="PATH=/opt/rocm/bin:/opt/rocm/llvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin""
         env_directives+=$'\n'
-        env_directives+="Environment=\"LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64\""
+        env_directives+="Environment="LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64""
         if [[ -n "${override}" ]]; then
             env_directives+=$'\n'
-            env_directives+="Environment=\"HSA_OVERRIDE_GFX_VERSION=${override}\""
+            env_directives+="Environment="HSA_OVERRIDE_GFX_VERSION=${override}""
         fi
     fi
 
@@ -259,13 +261,25 @@ install_open_webui() {
     log_info "Installazione/Aggiornamento Open WebUI (Frontend)..."
     mkdir -p "${WEBUI_DIR}"
     
+    # Integrazione UV per isolamento Python 3.11
+    if ! command -v uv &> /dev/null; then
+        log_info "Installazione del gestore pacchetti 'uv' per l'ambiente Python..."
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        export PATH="\$HOME/.cargo/bin:\$HOME/.local/bin:\$PATH"
+    fi
+    
+    # Assicura che uv sia nel PATH anche se già installato
+    export PATH="\$HOME/.cargo/bin:\$HOME/.local/bin:\$PATH"
+    
     if [[ ! -d "${WEBUI_DIR}/venv" ]]; then
-        python3 -m venv "${WEBUI_DIR}/venv"
+        log_info "Creazione ambiente virtuale isolato con Python 3.11 tramite uv..."
+        uv venv -p 3.11 "${WEBUI_DIR}/venv"
     fi
     
     source "${WEBUI_DIR}/venv/bin/activate"
-    pip install --upgrade pip
-    pip install open-webui
+    log_info "Aggiornamento pip e installazione di open-webui tramite uv pip..."
+    uv pip install --upgrade pip
+    uv pip install open-webui
     deactivate
 
     cat <<EOF > "${FRONTEND_SERVICE_FILE}"
@@ -368,7 +382,7 @@ select_backend() {
 main_menu() {
     while true; do
         local choice
-        choice=$(whiptail --title "Homelab AI - AMD Management Console" \
+        choice=$(whiptail --title "Homelab AI - AMD Management Console (v${VERSION})" \
             --menu "\nAmbiente: $(detect_environment)\nScegli un'operazione:" 18 78 7 \
             "1" "Seleziona/Compila Backend Llama.cpp (Auto GPU + Patch FP8)" \
             "2" "Installa / Configura Open WebUI (Frontend)" \
