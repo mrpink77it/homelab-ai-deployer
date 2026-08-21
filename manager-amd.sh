@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-amd.sh
-# Versione: 1.0.0
+# Versione: 1.0.1
 # Descrizione: Gestore deployment, frontend, servizi systemd e ciclo AI per GPU AMD
 # Ambienti: Bare-Metal & Proxmox LXC (Debian 13 / Ubuntu 24.04 LTS)
 # ==============================================================================
@@ -13,7 +13,7 @@ trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-amd.sh si è interr
 # ------------------------------------------------------------------------------
 # Configurazione Variabili Globali
 # ------------------------------------------------------------------------------
-VERSION="1.0.0"
+VERSION="1.0.1"
 LOG_FILE="/var/log/homelab-ai-amd.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -219,12 +219,12 @@ auto_setup_systemd_service() {
 
     local env_directives=""
     if [[ "${type}" == "rocm" || "${type}" == "rocm_exp" ]]; then
-        env_directives="Environment="PATH=/opt/rocm/bin:/opt/rocm/llvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin""
+        env_directives="Environment=\"PATH=/opt/rocm/bin:/opt/rocm/llvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
         env_directives+=$'\n'
-        env_directives+="Environment="LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64""
+        env_directives+="Environment=\"LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64\""
         if [[ -n "${override}" ]]; then
             env_directives+=$'\n'
-            env_directives+="Environment="HSA_OVERRIDE_GFX_VERSION=${override}""
+            env_directives+="Environment=\"HSA_OVERRIDE_GFX_VERSION=${override}\""
         fi
     fi
 
@@ -265,11 +265,11 @@ install_open_webui() {
     if ! command -v uv &> /dev/null; then
         log_info "Installazione del gestore pacchetti 'uv' per l'ambiente Python..."
         curl -LsSf https://astral.sh/uv/install.sh | sh
-        export PATH="\$HOME/.cargo/bin:\$HOME/.local/bin:\$PATH"
+        export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
     fi
     
     # Assicura che uv sia nel PATH anche se già installato
-    export PATH="\$HOME/.cargo/bin:\$HOME/.local/bin:\$PATH"
+    export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
     
     if [[ ! -d "${WEBUI_DIR}/venv" ]]; then
         log_info "Creazione ambiente virtuale isolato con Python 3.11 tramite uv..."
