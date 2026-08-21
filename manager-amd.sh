@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-amd.sh
-# Versione: 1.1.0
-# Descrizione: Gestore deployment GPU AMD (Con 10 Modelli Top, Custom URL e Auto-Update Servizi)
+# Versione: 1.1.1
+# Descrizione: Gestore deployment GPU AMD (Con Ricerca Dinamica Asset GitHub e Validazione ZIP)
 # ==============================================================================
 
 set -euo pipefail
@@ -10,7 +10,7 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 # Configurazione Variabili Globali
 # ------------------------------------------------------------------------------
-VERSION="1.1.0"
+VERSION="1.1.1"
 INSTALL_DIR="/opt/homelab-ai"
 MODELS_DIR="${INSTALL_DIR}/models"
 BACKEND_DIR="${INSTALL_DIR}/backend"
@@ -70,30 +70,49 @@ install_backend() {
     setup_directories
     cd "${BACKEND_DIR}"
     
-    LATEST_RELEASE=$(curl -sL https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
-    
-    if [[ -z "$LATEST_RELEASE" ]]; then
-        LATEST_RELEASE="b4754"
-    fi
-    
-    local target_bin="ubuntu-x64-rocm"
-    if [[ "$AMD_MODE" == "Vulkan" ]]; then
-        target_bin="ubuntu-x64-vulkan"
+    local keyword="vulkan"
+    if [[ "$AMD_MODE" != "Vulkan" ]]; then
+        keyword="rocm"
     fi
 
-    DOWNLOAD_URL="https://github.com/ggerganov/llama.cpp/releases/download/${LATEST_RELEASE}/llama-${LATEST_RELEASE}-bin-${target_bin}.zip"
+    echo -e "${C_CYAN}>>> Ricerca dinamica asset ${keyword} su GitHub (Release recente)...${C_RESET}"
     
-    echo -e "${C_CYAN}>>> Download in corso (GitHub)...${C_RESET}"
+    # Ricerca intelligente dell'asset ZIP tramite Python e API GitHub
+    DOWNLOAD_URL=$(python3 -c "
+import urllib.request, json
+try:
+    url = 'https://api.github.com/repos/ggerganov/llama.cpp/releases/latest'
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    data = json.loads(urllib.request.urlopen(req).read().decode())
+    for asset in data.get('assets', []):
+        name = asset.get('name', '').lower()
+        if '${keyword}' in name and name.endswith('.zip'):
+            print(asset['browser_download_url'])
+            break
+except Exception:
+    pass
+" 2>/dev/null || true)
+
+    # Fallback di sicurezza se l'API non risponde o l'asset non viene trovato
+    if [[ -z "$DOWNLOAD_URL" ]]; then
+        echo -e "${C_YELLOW}[AVVISO] Ricerca dinamica non riuscita. Uso URL di fallback stabile (b4754)...${C_RESET}"
+        local target_bin="ubuntu-x64-rocm"
+        if [[ "$AMD_MODE" == "Vulkan" ]]; then
+            target_bin="ubuntu-x64-vulkan"
+        fi
+        DOWNLOAD_URL="https://github.com/ggerganov/llama.cpp/releases/download/b4754/llama-b4754-bin-${target_bin}.zip"
+    fi
+    
+    echo -e "${C_CYAN}>>> Download in corso da: ${DOWNLOAD_URL}${C_RESET}"
     curl -L --progress-bar -o llama-amd.zip "$DOWNLOAD_URL" || true
     
     # CONTROLLO INTEGRITÀ ZIP: Verifica magic bytes 'PK' per evitare blocchi da pagine HTML di errore
     if [[ -f "llama-amd.zip" ]] && head -c 2 "llama-amd.zip" | grep -q "PK"; then
         echo -e "${C_GREEN}[OK] Archivio ZIP valido.${C_RESET}"
     else
-        echo -e "${C_YELLOW}[AVVISO] Release recente non disponibile o non valida. Uso versione stabile di fallback (b4754)...${C_RESET}"
-        LATEST_RELEASE="b4754"
-        DOWNLOAD_URL="https://github.com/ggerganov/llama.cpp/releases/download/${LATEST_RELEASE}/llama-${LATEST_RELEASE}-bin-${target_bin}.zip"
-        curl -L --progress-bar -o llama-amd.zip "$DOWNLOAD_URL"
+        echo -e "${C_RED}[ERRORE] Il file scaricato non è un archivio ZIP valido (impossibile procedere).${C_RESET}"
+        rm -f llama-amd.zip
+        return 1
     fi
 
     if ! command -v unzip &> /dev/null; then
@@ -345,8 +364,8 @@ main_menu() {
             2) install_frontend; DEFAULT_ITEM="3" ;;
             3) setup_services; DEFAULT_ITEM="D" ;;
             4) show_hardware_profile; DEFAULT_ITEM="5" ;;
-            5) download_models_menu; DEFAULT_Item="3" ;;
-            6) run_benchmark; DEFAULT_Item="D" ;;
+            5) download_models_menu; DEFAULT_ITEM="3" ;;
+            6) run_benchmark; DEFAULT_ITEM="D" ;;
             D) show_dashboard; DEFAULT_ITEM="A" ;;
             0) return 0 ;;
         esac
