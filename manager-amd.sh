@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-amd.sh
-# Versione: 1.0.3
-# Descrizione: Gestore deployment per GPU AMD (Stile TUI Unificato)
+# Versione: 1.0.4
+# Descrizione: Gestore deployment per GPU AMD (Stile TUI Unificato con Back Routing)
 # ==============================================================================
 
 set -euo pipefail
@@ -10,7 +10,7 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 # Configurazione Variabili Globali
 # ------------------------------------------------------------------------------
-VERSION="1.0.3"
+VERSION="1.0.4"
 INSTALL_DIR="/opt/homelab-ai"
 MODELS_DIR="${INSTALL_DIR}/models"
 BACKEND_DIR="${INSTALL_DIR}/backend"
@@ -49,17 +49,20 @@ choose_amd_mode() {
 
     local choice
     choice=$(whiptail --title "Homelab AI Deployer - Setup AMD" \
-        --menu "\nSeleziona il tipo di driver/backend GPU da configurare:" 16 70 4 \
+        --menu "\nSeleziona il tipo di driver/backend GPU da configurare:" 17 75 5 \
         "1" "Vulkan (Compatibilità universale su tutte le schede AMD)" \
         "2" "ROCm (Supportato ufficialmente - RX 6000/7000, Instinct)" \
         "3" "ROCm (Experimental - Forzato su GPU non supportate)" \
-        3>&1 1>&2 2>&3) || exit 0
+        "0" "Indietro al Menu Principale (main.sh)" \
+        3>&1 1>&2 2>&3) || return 1
 
     case "$choice" in
         1) AMD_MODE="Vulkan" ;;
         2) AMD_MODE="ROCm" ;;
         3) AMD_MODE="ROCm-Experimental" ;;
+        0) return 1 ;;
     esac
+    return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -72,7 +75,6 @@ install_backend() {
     
     LATEST_RELEASE=$(curl -s https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
     
-    # Adatta il download in base alla scelta iniziale
     local target_bin="ubuntu-x64-rocm"
     if [[ "$AMD_MODE" == "Vulkan" ]]; then
         target_bin="ubuntu-x64-vulkan"
@@ -218,7 +220,6 @@ run_benchmark() {
 show_dashboard() {
     clear
     
-    # Fetch dati per il layout
     local ip_addr=$(hostname -I | awk '{print $1}')
     [[ -z "$ip_addr" ]] && ip_addr="127.0.0.1"
     
@@ -264,7 +265,7 @@ main_menu() {
     while true; do
         local choice
         choice=$(whiptail --title "Homelab AI Deployer - Manager AMD (v${VERSION})" \
-            --menu "\nSeleziona un'operazione:" 18 75 9 \
+            --menu "\nSeleziona un'operazione [Modo Attuale: ${AMD_MODE}]:" 18 75 9 \
             "A" "Express Auto-Deploy (Pipeline Completa)" \
             "1" "Installa llama.cpp (Vulkan / ROCm)" \
             "2" "Installa Open WebUI (Python venv via uv)" \
@@ -273,8 +274,8 @@ main_menu() {
             "5" "Download & Tuning Modelli AMD (4, 8, 16, 32 GB)" \
             "6" "Esegui Benchmark GPU (llama-bench)" \
             "D" "Mostra Dashboard Sistema" \
-            "0" "Esci al Menu Principale" \
-            3>&1 1>&2 2>&3) || exit 0
+            "0" "Indietro (Cambia Modalità GPU)" \
+            3>&1 1>&2 2>&3) || return 0
 
         case "$choice" in
             A)
@@ -291,7 +292,7 @@ main_menu() {
             5) download_models_menu ;;
             6) run_benchmark ;;
             D) show_dashboard ;;
-            0) exit 0 ;;
+            0) return 0 ;; # Esce dalla funzione e torna al loop per la scelta GPU
         esac
     done
 }
@@ -300,5 +301,23 @@ main_menu() {
 # Entrypoint
 # ------------------------------------------------------------------------------
 check_root
-choose_amd_mode
-main_menu
+
+# Loop principale per permettere la navigazione fluida avanti e indietro
+while true; do
+    # Se l'utente preme Esc o seleziona 0 in choose_amd_mode, torna al main
+    if ! choose_amd_mode; then
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        if [[ -f "${SCRIPT_DIR}/main.sh" ]]; then
+            # Rilancia il menu principale sostituendo il processo corrente
+            exec "${SCRIPT_DIR}/main.sh"
+        else
+            echo -e "${C_RED}[ERRORE] File main.sh non trovato in ${SCRIPT_DIR}. Uscita.${C_RESET}"
+            exit 0
+        fi
+    fi
+    
+    # Se choose_amd_mode va a buon fine, lancia il menu operativo
+    # Se l'utente preme 0 nel main_menu, uscirà e ripartirà il while,
+    # chiedendo nuovamente quale GPU (Vulkan, ROCm, ecc.) usare.
+    main_menu
+done
