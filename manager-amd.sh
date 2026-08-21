@@ -282,7 +282,7 @@ install_open_webui() {
     uv pip install open-webui
     deactivate
 
-    cat <<EOF > "${FRONTEND_SERVICE_FILE}"
+cat <<EOF > "${FRONTEND_SERVICE_FILE}"
 [Unit]
 Description=Homelab AI Frontend Service (Open WebUI)
 After=network.target ${SERVICE_NAME}.service
@@ -291,7 +291,9 @@ After=network.target ${SERVICE_NAME}.service
 Type=simple
 User=root
 WorkingDirectory=${WEBUI_DIR}
+Environment="HOST=0.0.0.0"
 Environment="PORT=3000"
+Environment="WEBUI_PORT=3000"
 Environment="OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1"
 ExecStart=${WEBUI_DIR}/venv/bin/open-webui serve
 Restart=always
