@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: main.sh (Homelab AI Deployer - Core Router & System Fixer)
+# Versione: 1.0.1
 # Descrizione: System Pre-flight, Fix Repository OS, Auto-routing & Menu TUI
 # Ambienti: Bare-Metal & Proxmox LXC (Debian 12+ / Ubuntu 22.04+)
 # Repository: homelab-ai-deployer
@@ -40,7 +41,7 @@ fix_os_repositories() {
 
     # 1. Dipendenze base per la gestione repo e TUI
     apt-get update -qq || true
-    apt-get install -y -qq pciutils python3 python3-pip python3-venv gnupg ca-certificates openssh-server openssh-client net-tools pciutils nodejs whiptail curl wget git build-essential g++ freeglut3-dev libx11-dev libxmu-dev libxi-dev libglu1-mesa-dev libfreeimage-dev libglfw3-dev wget htop btop nvtop nano glances git pciutils cmake curl libcurl4-openssl-dev mc >/dev/null 2>&1
+    apt-get install -y -qq pciutils python3 python3-pip python3-venv gnupg ca-certificates openssh-server openssh-client net-tools pciutils nodejs whiptail curl wget git build-essential g++ freeglut3-dev libx11-dev libxmu-dev libxi-dev libglu1-mesa-dev libfreeimage-dev libglfw3-dev htop btop nvtop nano glances cmake libcurl4-openssl-dev mc >/dev/null 2>&1
 
     # 2. Fix specifici per Distribuzione
     if [[ "${os_id}" == "debian" ]]; then
@@ -104,10 +105,10 @@ render_header() {
     echo -e "${C_CYAN}${C_BOLD}"
     echo "┌──────────────────────────────────────────────────────────────────────────────┐"
     echo "│                 H O M E L A B   A I   D E P L O Y E R                        │"
-    echo "│         Hardware Discovery & Environment Router (v0.3 Multi-Node)            │"
+    echo "│        Hardware Discovery & Environment Router (v1.0.1 Multi-Node)           │"
     echo "└──────────────────────────────────────────────────────────────────────────────┘${C_RESET}"
     echo -e "${C_DIM} Virtualization:${C_RESET} ${C_BOLD}$(detect_environment)${C_RESET}"
-    echo -e "${C_DIM} Kernel        :${C_RESET} ${C_BOLD}$(uname -s -r -m)${C_RESET}\n"
+    echo -e "${C_DIM} Kernel         :${C_RESET} ${C_BOLD}$(uname -s -r -m)${C_RESET}\n"
 }
 
 render_hardware_summary() {
@@ -157,12 +158,14 @@ main_menu() {
         local choice
         choice=$(whiptail --title "Homelab AI Deployer - Seleziona Modulo Operativo" \
             --default-item "${default_item}" \
-            --menu "\nScegli il profilo di deployment per questo nodo di calcolo:" 20 88 5 \
+            --menu "\nScegli il profilo di deployment per questo nodo di calcolo:" 22 88 7 \
             "1" "[INFERENZA CPU] llama.cpp + Open WebUI (Ottimizzato RAM/OpenMP)" \
             "2" "[INFERENZA NVIDIA] llama.cpp + CUDA + Driver Check + Open WebUI" \
             "3" "[INFERENZA AMD] llama.cpp + ROCm / Vulkan + Open WebUI" \
             "4" "[FINE-TUNING NVIDIA] Unsloth Studio + PyTorch CUDA + llama.cpp" \
             "5" "[FIX REPO / SYSTEM] Ri-Esegui Aggiornamento Repository e Pacchetti" \
+            "6" "[DISINSTALLAZIONE] Rimozione selettiva (Solo Servizi/App specifiche)" \
+            "7" "[PURGE ESTREMO] Piallatura totale (Servizi, File, Repo, Cache)" \
             3>&1 1>&2 2>&3) || exit 0
 
         case "$choice" in
@@ -174,6 +177,8 @@ main_menu() {
                 fix_os_repositories
                 whiptail --title "Fix Completato" --msgbox "I repository e i pacchetti di base sono stati configurati e aggiornati." 8 65
                 ;;
+            6) launch_manager "uninstall.sh" ;;
+            7) launch_manager "purge-homelab-ai.sh" ;;
             *) exit 0 ;;
         esac
     done
