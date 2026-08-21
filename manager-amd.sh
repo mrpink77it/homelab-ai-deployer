@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-amd.sh
-# Versione: 1.0.7
-# Descrizione: Gestore deployment GPU AMD (Download via Curl, Crash-Proof)
+# Versione: 1.0.8
+# Descrizione: Gestore deployment GPU AMD (Con validazione ZIP e Fallback)
 # ==============================================================================
 
 set -euo pipefail
@@ -10,7 +10,7 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 # Configurazione Variabili Globali
 # ------------------------------------------------------------------------------
-VERSION="1.0.7"
+VERSION="1.0.8"
 INSTALL_DIR="/opt/homelab-ai"
 MODELS_DIR="${INSTALL_DIR}/models"
 BACKEND_DIR="${INSTALL_DIR}/backend"
@@ -50,7 +50,7 @@ choose_amd_mode() {
         "1" "Vulkan (Compatibilità universale su tutte le schede AMD)" \
         "2" "ROCm (Supportato ufficialmente - RX 6000/7000, Instinct)" \
         "3" "ROCm (Experimental - Forzato su GPU non supportate)" \
-        "0" "Indietro al Menu Principale (main.sh)" \
+        "0" "Indietro" \
         3>&1 1>&2 2>&3) || return 1
 
     case "$choice" in
@@ -70,11 +70,9 @@ install_backend() {
     setup_directories
     cd "${BACKEND_DIR}"
     
-    # FIX: Aggiunto -L per seguire i redirect GitHub
     LATEST_RELEASE=$(curl -sL https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
     
     if [[ -z "$LATEST_RELEASE" ]]; then
-        echo -e "${C_YELLOW}[AVVISO] Impossibile contattare GitHub API. Uso fallback...${C_RESET}"
         LATEST_RELEASE="b4754"
     fi
     
@@ -86,27 +84,32 @@ install_backend() {
     DOWNLOAD_URL="https://github.com/ggerganov/llama.cpp/releases/download/${LATEST_RELEASE}/llama-${LATEST_RELEASE}-bin-${target_bin}.zip"
     
     echo -e "${C_CYAN}>>> Download in corso (GitHub)...${C_RESET}"
-    # FIX: Uso di curl -L con barra di progresso al posto di wget
-    if curl -L --progress-bar -o llama-amd.zip "$DOWNLOAD_URL"; then
-        
-        if ! command -v unzip &> /dev/null; then
-            apt-get install -y unzip >/dev/null || true
-        fi
-        
-        unzip -o llama-amd.zip -d ./ >/dev/null || true
-        rm -f llama-amd.zip
-        
-        find . -name "llama-server" -exec mv {} ./llama-server-amd \; 2>/dev/null || true
-        
-        if [[ -f "./llama-server-amd" ]]; then
-            chmod +x llama-server-amd
-            echo -e "${C_GREEN}Backend ${AMD_MODE} installato con successo.${C_RESET}"
-        else
-            echo -e "${C_RED}[ERRORE] Eseguibile non trovato nello ZIP.${C_RESET}"
-        fi
+    curl -L --progress-bar -o llama-amd.zip "$DOWNLOAD_URL" || true
+    
+    # CONTROLLO INTEGRITÀ ZIP: I file zip validi iniziano con la firma binaria 'PK' (50 4B)
+    if [[ -f "llama-amd.zip" ]] && head -c 2 "llama-amd.zip" | grep -q "PK"; then
+        echo -e "${C_GREEN}[OK] Archivio ZIP valido.${C_RESET}"
     else
-        echo -e "${C_RED}[ERRORE] Download fallito. Verifica connessione.${C_RESET}"
-        sleep 3
+        echo -e "${C_YELLOW}[AVVISO] Release recente non disponibile o non valida. Uso versione stabile di fallback (b4754)...${C_RESET}"
+        LATEST_RELEASE="b4754"
+        DOWNLOAD_URL="https://github.com/ggerganov/llama.cpp/releases/download/${LATEST_RELEASE}/llama-${LATEST_RELEASE}-bin-${target_bin}.zip"
+        curl -L --progress-bar -o llama-amd.zip "$DOWNLOAD_URL"
+    fi
+
+    if ! command -v unzip &> /dev/null; then
+        apt-get install -y unzip >/dev/null || true
+    fi
+    
+    unzip -o llama-amd.zip -d ./ >/dev/null || true
+    rm -f llama-amd.zip
+    
+    find . -name "llama-server" -exec mv {} ./llama-server-amd \; 2>/dev/null || true
+    
+    if [[ -f "./llama-server-amd" ]]; then
+        chmod +x llama-server-amd
+        echo -e "${C_GREEN}Backend ${AMD_MODE} installato con successo.${C_RESET}"
+    else
+        echo -e "${C_RED}[ERRORE] Eseguibile non trovato nello ZIP.${C_RESET}"
     fi
 }
 
@@ -189,7 +192,7 @@ download_models_menu() {
         "2" "[8 GB VRAM] Llama 3.1 8B Instruct (Q8_0)" \
         "3" "[16 GB VRAM] Qwen 2.5 14B Instruct (Q8_0)" \
         "4" "[32 GB VRAM] Llama 3.1 70B Instruct (Q4_K_M)" \
-        "0" "Torna indietro (Annulla)" \
+        "0" "Torna indietro" \
         3>&1 1>&2 2>&3) || return
 
     cd "${MODELS_DIR}"
@@ -248,32 +251,30 @@ show_dashboard() {
 }
 
 main_menu() {
-    local DEFAULT_ITEM="A"
+    local DEFAULT_ITEM="1"
     while true; do
         local choice
         choice=$(whiptail --title "Homelab AI Deployer - Manager AMD (v${VERSION})" \
             --default-item "${DEFAULT_ITEM}" \
             --menu "\nSeleziona un'operazione [Modo: ${AMD_MODE}]:" 18 75 9 \
-            "A" "Express Auto-Deploy" \
-            "1" "Installa llama.cpp" \
-            "2" "Installa Open WebUI" \
-            "3" "Configura Servizi" \
-            "4" "Profilo Hardware" \
-            "5" "Download Modelli" \
-            "6" "Benchmark" \
-            "D" "Dashboard" \
-            "0" "Indietro" \
+            "1" "Installa/Aggiorna Backend (llama.cpp)" \
+            "2" "Installa/Aggiorna Frontend (Open WebUI)" \
+            "3" "Configura e Avvia Servizi" \
+            "4" "Verifica Hardware / Driver" \
+            "5" "Scarica Modelli GGUF" \
+            "6" "Esegui Benchmark" \
+            "D" "Dashboard di Sistema" \
+            "0" "Torna al Menu Principale" \
             3>&1 1>&2 2>&3) || return 0
 
         case "$choice" in
-            A) install_backend; download_models_menu; install_frontend; setup_services; DEFAULT_ITEM="D" ;;
             1) install_backend; DEFAULT_ITEM="2" ;;
             2) install_frontend; DEFAULT_ITEM="3" ;;
             3) setup_services; DEFAULT_ITEM="D" ;;
             4) show_hardware_profile; DEFAULT_ITEM="5" ;;
             5) download_models_menu; DEFAULT_ITEM="3" ;;
             6) run_benchmark; DEFAULT_ITEM="D" ;;
-            D) show_dashboard; DEFAULT_ITEM="A" ;;
+            D) show_dashboard; DEFAULT_ITEM="1" ;;
             0) return 0 ;;
         esac
     done
