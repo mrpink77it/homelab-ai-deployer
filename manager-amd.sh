@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-amd.sh
-# Versione: 1.0.8
-# Descrizione: Gestore deployment GPU AMD (Con validazione ZIP e Fallback)
+# Versione: 1.0.9
+# Descrizione: Gestore deployment GPU AMD (Con Express Auto-Deploy e Validazione ZIP)
 # ==============================================================================
 
 set -euo pipefail
@@ -10,7 +10,7 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 # Configurazione Variabili Globali
 # ------------------------------------------------------------------------------
-VERSION="1.0.8"
+VERSION="1.0.9"
 INSTALL_DIR="/opt/homelab-ai"
 MODELS_DIR="${INSTALL_DIR}/models"
 BACKEND_DIR="${INSTALL_DIR}/backend"
@@ -50,7 +50,7 @@ choose_amd_mode() {
         "1" "Vulkan (Compatibilità universale su tutte le schede AMD)" \
         "2" "ROCm (Supportato ufficialmente - RX 6000/7000, Instinct)" \
         "3" "ROCm (Experimental - Forzato su GPU non supportate)" \
-        "0" "Indietro" \
+        "0" "Indietro al Menu Principale (main.sh)" \
         3>&1 1>&2 2>&3) || return 1
 
     case "$choice" in
@@ -86,7 +86,7 @@ install_backend() {
     echo -e "${C_CYAN}>>> Download in corso (GitHub)...${C_RESET}"
     curl -L --progress-bar -o llama-amd.zip "$DOWNLOAD_URL" || true
     
-    # CONTROLLO INTEGRITÀ ZIP: I file zip validi iniziano con la firma binaria 'PK' (50 4B)
+    # CONTROLLO INTEGRITÀ ZIP: Verifica magic bytes 'PK' per evitare blocchi da pagine HTML di errore
     if [[ -f "llama-amd.zip" ]] && head -c 2 "llama-amd.zip" | grep -q "PK"; then
         echo -e "${C_GREEN}[OK] Archivio ZIP valido.${C_RESET}"
     else
@@ -192,7 +192,7 @@ download_models_menu() {
         "2" "[8 GB VRAM] Llama 3.1 8B Instruct (Q8_0)" \
         "3" "[16 GB VRAM] Qwen 2.5 14B Instruct (Q8_0)" \
         "4" "[32 GB VRAM] Llama 3.1 70B Instruct (Q4_K_M)" \
-        "0" "Torna indietro" \
+        "0" "Torna indietro (Annulla)" \
         3>&1 1>&2 2>&3) || return
 
     cd "${MODELS_DIR}"
@@ -251,30 +251,32 @@ show_dashboard() {
 }
 
 main_menu() {
-    local DEFAULT_ITEM="1"
+    local DEFAULT_ITEM="A"
     while true; do
         local choice
         choice=$(whiptail --title "Homelab AI Deployer - Manager AMD (v${VERSION})" \
             --default-item "${DEFAULT_ITEM}" \
             --menu "\nSeleziona un'operazione [Modo: ${AMD_MODE}]:" 18 75 9 \
-            "1" "Installa/Aggiorna Backend (llama.cpp)" \
-            "2" "Installa/Aggiorna Frontend (Open WebUI)" \
-            "3" "Configura e Avvia Servizi" \
-            "4" "Verifica Hardware / Driver" \
-            "5" "Scarica Modelli GGUF" \
-            "6" "Esegui Benchmark" \
-            "D" "Dashboard di Sistema" \
-            "0" "Torna al Menu Principale" \
+            "A" "Express Auto-Deploy (Pipeline Completa)" \
+            "1" "Installa llama.cpp (Vulkan / ROCm)" \
+            "2" "Installa Open WebUI (Python venv via uv)" \
+            "3" "Configura & Avvia Servizi Systemd" \
+            "4" "Mostra Profilo Hardware (CPU & GPU AMD)" \
+            "5" "Download & Tuning Modelli AMD (4, 8, 16, 32 GB)" \
+            "6" "Esegui Benchmark GPU (llama-bench)" \
+            "D" "Mostra Dashboard Sistema" \
+            "0" "Indietro (Cambia Modalità GPU)" \
             3>&1 1>&2 2>&3) || return 0
 
         case "$choice" in
+            A) install_backend; download_models_menu; install_frontend; setup_services; DEFAULT_ITEM="D" ;;
             1) install_backend; DEFAULT_ITEM="2" ;;
             2) install_frontend; DEFAULT_ITEM="3" ;;
             3) setup_services; DEFAULT_ITEM="D" ;;
             4) show_hardware_profile; DEFAULT_ITEM="5" ;;
             5) download_models_menu; DEFAULT_ITEM="3" ;;
             6) run_benchmark; DEFAULT_ITEM="D" ;;
-            D) show_dashboard; DEFAULT_ITEM="1" ;;
+            D) show_dashboard; DEFAULT_ITEM="A" ;;
             0) return 0 ;;
         esac
     done
