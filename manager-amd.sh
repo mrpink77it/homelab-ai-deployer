@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-amd.sh
-# Versione: 1.0.4
-# Descrizione: Gestore deployment per GPU AMD (Stile TUI Unificato con Back Routing)
+# Versione: 1.0.5
+# Descrizione: Gestore deployment GPU AMD con Auto-Advance Cursore
 # ==============================================================================
 
 set -euo pipefail
@@ -10,7 +10,7 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 # Configurazione Variabili Globali
 # ------------------------------------------------------------------------------
-VERSION="1.0.4"
+VERSION="1.0.5"
 INSTALL_DIR="/opt/homelab-ai"
 MODELS_DIR="${INSTALL_DIR}/models"
 BACKEND_DIR="${INSTALL_DIR}/backend"
@@ -23,7 +23,7 @@ C_GREEN='\033[1;32m'
 C_YELLOW='\033[1;33m'
 C_RED='\033[1;31m'
 
-AMD_MODE="ROCm" # Default che verrà sovrascritto dal menu iniziale
+AMD_MODE="ROCm"
 
 # ------------------------------------------------------------------------------
 # Funzioni di Utilità
@@ -175,7 +175,7 @@ download_models_menu() {
         "2" "[8 GB VRAM] Llama 3.1 8B Instruct (Q8_0)" \
         "3" "[16 GB VRAM] Qwen 2.5 14B Instruct (Q8_0)" \
         "4" "[32 GB VRAM] Llama 3.1 70B Instruct (Q4_K_M)" \
-        "0" "Torna indietro" \
+        "0" "Torna indietro (Annulla)" \
         3>&1 1>&2 2>&3) || return
 
     cd "${MODELS_DIR}"
@@ -262,9 +262,13 @@ show_dashboard() {
 # Menu Principale TUI
 # ------------------------------------------------------------------------------
 main_menu() {
+    # Variabile di stato per l'avanzamento automatico del cursore
+    local DEFAULT_ITEM="A"
+
     while true; do
         local choice
         choice=$(whiptail --title "Homelab AI Deployer - Manager AMD (v${VERSION})" \
+            --default-item "${DEFAULT_ITEM}" \
             --menu "\nSeleziona un'operazione [Modo Attuale: ${AMD_MODE}]:" 18 75 9 \
             "A" "Express Auto-Deploy (Pipeline Completa)" \
             "1" "Installa llama.cpp (Vulkan / ROCm)" \
@@ -284,15 +288,39 @@ main_menu() {
                 install_frontend
                 setup_services
                 whiptail --title "Completato" --msgbox "Pipeline completa eseguita." 8 40
+                DEFAULT_ITEM="D" # Dopo il deploy ti consiglia di guardare la Dashboard
                 ;;
-            1) install_backend ;;
-            2) install_frontend ;;
-            3) setup_services ;;
-            4) show_hardware_profile ;;
-            5) download_models_menu ;;
-            6) run_benchmark ;;
-            D) show_dashboard ;;
-            0) return 0 ;; # Esce dalla funzione e torna al loop per la scelta GPU
+            1) 
+                install_backend
+                DEFAULT_ITEM="2" # Avanza a installazione frontend
+                ;;
+            2) 
+                install_frontend
+                DEFAULT_ITEM="3" # Avanza a configurazione servizi
+                ;;
+            3) 
+                setup_services
+                DEFAULT_ITEM="D" # Avanza a visualizzazione Dashboard
+                ;;
+            4) 
+                show_hardware_profile
+                DEFAULT_ITEM="5"
+                ;;
+            5) 
+                download_models_menu
+                DEFAULT_ITEM="3" # Suggerisce di riavviare i servizi per applicare il nuovo modello
+                ;;
+            6) 
+                run_benchmark
+                DEFAULT_ITEM="D"
+                ;;
+            D) 
+                show_dashboard
+                DEFAULT_ITEM="A"
+                ;;
+            0) 
+                return 0 
+                ;;
         esac
     done
 }
@@ -302,22 +330,15 @@ main_menu() {
 # ------------------------------------------------------------------------------
 check_root
 
-# Loop principale per permettere la navigazione fluida avanti e indietro
 while true; do
-    # Se l'utente preme Esc o seleziona 0 in choose_amd_mode, torna al main
     if ! choose_amd_mode; then
         SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
         if [[ -f "${SCRIPT_DIR}/main.sh" ]]; then
-            # Rilancia il menu principale sostituendo il processo corrente
             exec "${SCRIPT_DIR}/main.sh"
         else
             echo -e "${C_RED}[ERRORE] File main.sh non trovato in ${SCRIPT_DIR}. Uscita.${C_RESET}"
             exit 0
         fi
     fi
-    
-    # Se choose_amd_mode va a buon fine, lancia il menu operativo
-    # Se l'utente preme 0 nel main_menu, uscirà e ripartirà il while,
-    # chiedendo nuovamente quale GPU (Vulkan, ROCm, ecc.) usare.
     main_menu
 done
