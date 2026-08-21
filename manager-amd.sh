@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-amd.sh
-# Versione: 1.0.6
-# Descrizione: Gestore deployment GPU AMD (Auto-Advance & Crash-Proof API Limit)
+# Versione: 1.0.7
+# Descrizione: Gestore deployment GPU AMD (Download via Curl, Crash-Proof)
 # ==============================================================================
 
 set -euo pipefail
@@ -10,7 +10,7 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 # Configurazione Variabili Globali
 # ------------------------------------------------------------------------------
-VERSION="1.0.6"
+VERSION="1.0.7"
 INSTALL_DIR="/opt/homelab-ai"
 MODELS_DIR="${INSTALL_DIR}/models"
 BACKEND_DIR="${INSTALL_DIR}/backend"
@@ -39,9 +39,6 @@ setup_directories() {
     mkdir -p "${MODELS_DIR}" "${BACKEND_DIR}" "${FRONTEND_DIR}"
 }
 
-# ------------------------------------------------------------------------------
-# Scelta Iniziale Driver AMD
-# ------------------------------------------------------------------------------
 choose_amd_mode() {
     if ! command -v whiptail &> /dev/null; then
         apt-get update -qq && apt-get install -y whiptail
@@ -73,13 +70,12 @@ install_backend() {
     setup_directories
     cd "${BACKEND_DIR}"
     
-    # [FIX]: || true evita il crash del pipefail. Se fallisce, la variabile resta vuota.
-    LATEST_RELEASE=$(curl -s https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+    # FIX: Aggiunto -L per seguire i redirect GitHub
+    LATEST_RELEASE=$(curl -sL https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
     
-    # [FIX]: Fallback in caso di GitHub API Rate Limit
     if [[ -z "$LATEST_RELEASE" ]]; then
-        echo -e "${C_YELLOW}[AVVISO] Impossibile contattare GitHub API (Possibile Rate Limit). Uso versione stabile di fallback...${C_RESET}"
-        LATEST_RELEASE="b4754" # Ultima versione testata, cambiala se necessario.
+        echo -e "${C_YELLOW}[AVVISO] Impossibile contattare GitHub API. Uso fallback...${C_RESET}"
+        LATEST_RELEASE="b4754"
     fi
     
     local target_bin="ubuntu-x64-rocm"
@@ -89,10 +85,10 @@ install_backend() {
 
     DOWNLOAD_URL="https://github.com/ggerganov/llama.cpp/releases/download/${LATEST_RELEASE}/llama-${LATEST_RELEASE}-bin-${target_bin}.zip"
     
-    if curl --output /dev/null --silent --head --fail "$DOWNLOAD_URL"; then
-        wget -q --show-progress -O llama-amd.zip "$DOWNLOAD_URL"
+    echo -e "${C_CYAN}>>> Download in corso (GitHub)...${C_RESET}"
+    # FIX: Uso di curl -L con barra di progresso al posto di wget
+    if curl -L --progress-bar -o llama-amd.zip "$DOWNLOAD_URL"; then
         
-        # [FIX]: Sicurezza per unzip
         if ! command -v unzip &> /dev/null; then
             apt-get install -y unzip >/dev/null || true
         fi
@@ -100,19 +96,17 @@ install_backend() {
         unzip -o llama-amd.zip -d ./ >/dev/null || true
         rm -f llama-amd.zip
         
-        # [FIX]: Sicurezza in caso di cambiamenti nel nome dei binari ZIP da parte di ggerganov
         find . -name "llama-server" -exec mv {} ./llama-server-amd \; 2>/dev/null || true
+        
         if [[ -f "./llama-server-amd" ]]; then
             chmod +x llama-server-amd
             echo -e "${C_GREEN}Backend ${AMD_MODE} installato con successo.${C_RESET}"
         else
-            echo -e "${C_RED}[ERRORE] Eseguibile llama-server non trovato nello ZIP scaricato!${C_RESET}"
-            sleep 3
+            echo -e "${C_RED}[ERRORE] Eseguibile non trovato nello ZIP.${C_RESET}"
         fi
     else
-        echo -e "${C_RED}Errore: Release ${target_bin} non trovata per la versione ${LATEST_RELEASE}.${C_RESET}"
-        echo -e "${C_YELLOW}Prova tra qualche minuto o seleziona temporaneamente Vulkan.${C_RESET}"
-        sleep 4
+        echo -e "${C_RED}[ERRORE] Download fallito. Verifica connessione.${C_RESET}"
+        sleep 3
     fi
 }
 
@@ -209,8 +203,8 @@ download_models_menu() {
     esac
 
     echo -e "${C_CYAN}Download in corso...${C_RESET}"
-    wget --show-progress -O "model.gguf" "$url" || true
-    echo -e "${C_GREEN}Download completato (salvato come model.gguf per autostart).${C_RESET}"
+    curl -L --progress-bar -o "model.gguf" "$url"
+    echo -e "${C_GREEN}Download completato.${C_RESET}"
     sleep 2
 }
 
@@ -231,7 +225,7 @@ run_benchmark() {
         echo -e "${C_CYAN}Esecuzione llama-bench su modello caricato...${C_RESET}"
         "${BACKEND_DIR}/llama-bench" -m "${MODELS_DIR}/model.gguf" -ngl 99 || true
     else
-        echo -e "${C_RED}Eseguibile llama-bench non trovato. Assicurati di aver installato llama.cpp.${C_RESET}"
+        echo -e "${C_RED}Eseguibile llama-bench non trovato.${C_RESET}"
     fi
     echo ""
     read -n 1 -s -r -p "Premi un tasto per continuare..."
@@ -239,107 +233,48 @@ run_benchmark() {
 
 show_dashboard() {
     clear
-    
     local ip_addr=$(hostname -I | awk '{print $1}')
     [[ -z "$ip_addr" ]] && ip_addr="127.0.0.1"
-    
-    local be_status="${C_RED}🔴 INATTIVO (Spento o in Errore)${C_RESET}"
-    local fe_status="${C_RED}🔴 INATTIVO (Spento o in Errore)${C_RESET}"
-    if systemctl is-active --quiet homelab-ai-backend; then be_status="${C_GREEN}🟢 ATTIVO (In Esecuzione)${C_RESET}"; fi
-    if systemctl is-active --quiet homelab-ai-frontend; then fe_status="${C_GREEN}🟢 ATTIVO (In Esecuzione)${C_RESET}"; fi
-
-    local cpu_info=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed -e 's/^[ \t]*//' || true)
-    local cpu_threads=$(nproc || echo "N/A")
-    local ram_used=$(free -h | awk '/^Mem:/{print $3}')
-    local ram_total=$(free -h | awk '/^Mem:/{print $2}')
-    local gpu_info=$(lspci | grep -iE 'vga|3d|display' | grep -i amd | cut -d: -f3 | sed 's/^[ \t]*//' | head -n1 || echo "Non Rilevata")
-    local kernel_ver=$(uname -r)
-
+    local be_status="${C_RED}🔴 INATTIVO${C_RESET}"
+    local fe_status="${C_RED}🔴 INATTIVO${C_RESET}"
+    if systemctl is-active --quiet homelab-ai-backend; then be_status="${C_GREEN}🟢 ATTIVO${C_RESET}"; fi
+    if systemctl is-active --quiet homelab-ai-frontend; then fe_status="${C_GREEN}🟢 ATTIVO${C_RESET}"; fi
     echo -e "${C_CYAN}========================================================================${C_RESET}"
-    echo -e " ${C_BOLD}📊 HOMELAB AI - DASHBOARD DI SISTEMA (PROFILO AMD)${C_RESET}"
+    echo -e " ${C_BOLD}📊 DASHBOARD AMD v${VERSION}${C_RESET}"
     echo -e "${C_CYAN}========================================================================${C_RESET}\n"
-
-    echo -e "${C_YELLOW}▶ STATO SERVIZI, PORTE E API${C_RESET}"
-    echo -e "  ├─ Backend AI (llama.cpp) : ${be_status}"
-    echo -e "  │  ├─ Porta in Ascolto  : 8080 (TCP Locale)"
-    echo -e "  │  └─ API Endpoint      : http://127.0.0.1:8080/v1 (Compatibile OpenAI)"
-    echo -e "  │"
-    echo -e "  └─ Frontend (Open WebUI): ${fe_status}"
-    echo -e "     ├─ Porta Esposta     : 3000 (TCP Pubblica)"
-    echo -e "     └─ Interfaccia Web   : http://${ip_addr}:3000\n"
-
-    echo -e "${C_YELLOW}▶ RISORSE HARDWARE E DRIVER${C_RESET}"
-    echo -e "  ├─ Processore (CPU)     : ${cpu_info} (${cpu_threads} Thread)"
-    echo -e "  ├─ Memoria Sistema (RAM): ${ram_used} usati / ${ram_total} totali"
-    echo -e "  ├─ Acceleratore GPU     : ${gpu_info}"
-    echo -e "  └─ Driver & Toolchain   : amdgpu (Kernel: ${kernel_ver})\n"
-
-    echo -e "${C_CYAN}========================================================================${C_RESET}"
-    read -n 1 -s -r -p "Premi un tasto qualsiasi per tornare al menu operativo..."
+    echo -e "  Backend AI: ${be_status} | Frontend: ${fe_status}"
+    echo -e "\n  Interfaccia Web: http://${ip_addr}:3000\n"
+    read -n 1 -s -r -p "Premi un tasto per tornare al menu..."
 }
 
-# ------------------------------------------------------------------------------
-# Menu Principale TUI
-# ------------------------------------------------------------------------------
 main_menu() {
     local DEFAULT_ITEM="A"
-
     while true; do
         local choice
         choice=$(whiptail --title "Homelab AI Deployer - Manager AMD (v${VERSION})" \
             --default-item "${DEFAULT_ITEM}" \
-            --menu "\nSeleziona un'operazione [Modo Attuale: ${AMD_MODE}]:" 18 75 9 \
-            "A" "Express Auto-Deploy (Pipeline Completa)" \
-            "1" "Installa llama.cpp (Vulkan / ROCm)" \
-            "2" "Installa Open WebUI (Python venv via uv)" \
-            "3" "Configura & Avvia Servizi Systemd" \
-            "4" "Mostra Profilo Hardware (CPU & GPU AMD)" \
-            "5" "Download & Tuning Modelli AMD (4, 8, 16, 32 GB)" \
-            "6" "Esegui Benchmark GPU (llama-bench)" \
-            "D" "Mostra Dashboard Sistema" \
-            "0" "Indietro (Cambia Modalità GPU)" \
+            --menu "\nSeleziona un'operazione [Modo: ${AMD_MODE}]:" 18 75 9 \
+            "A" "Express Auto-Deploy" \
+            "1" "Installa llama.cpp" \
+            "2" "Installa Open WebUI" \
+            "3" "Configura Servizi" \
+            "4" "Profilo Hardware" \
+            "5" "Download Modelli" \
+            "6" "Benchmark" \
+            "D" "Dashboard" \
+            "0" "Indietro" \
             3>&1 1>&2 2>&3) || return 0
 
         case "$choice" in
-            A)
-                install_backend
-                download_models_menu
-                install_frontend
-                setup_services
-                whiptail --title "Completato" --msgbox "Pipeline completa eseguita." 8 40
-                DEFAULT_ITEM="D"
-                ;;
-            1) 
-                install_backend
-                DEFAULT_ITEM="2"
-                ;;
-            2) 
-                install_frontend
-                DEFAULT_ITEM="3"
-                ;;
-            3) 
-                setup_services
-                DEFAULT_ITEM="D"
-                ;;
-            4) 
-                show_hardware_profile
-                DEFAULT_ITEM="5"
-                ;;
-            5) 
-                download_models_menu
-                DEFAULT_ITEM="3"
-                ;;
-            6) 
-                run_benchmark
-                DEFAULT_ITEM="D"
-                ;;
-            D) 
-                show_dashboard
-                DEFAULT_ITEM="A"
-                ;;
-            0) 
-                return 0 
-                ;;
+            A) install_backend; download_models_menu; install_frontend; setup_services; DEFAULT_ITEM="D" ;;
+            1) install_backend; DEFAULT_ITEM="2" ;;
+            2) install_frontend; DEFAULT_ITEM="3" ;;
+            3) setup_services; DEFAULT_ITEM="D" ;;
+            4) show_hardware_profile; DEFAULT_ITEM="5" ;;
+            5) download_models_menu; DEFAULT_ITEM="3" ;;
+            6) run_benchmark; DEFAULT_ITEM="D" ;;
+            D) show_dashboard; DEFAULT_ITEM="A" ;;
+            0) return 0 ;;
         esac
     done
 }
@@ -348,16 +283,10 @@ main_menu() {
 # Entrypoint
 # ------------------------------------------------------------------------------
 check_root
-
 while true; do
     if ! choose_amd_mode; then
         SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        if [[ -f "${SCRIPT_DIR}/main.sh" ]]; then
-            exec "${SCRIPT_DIR}/main.sh"
-        else
-            echo -e "${C_RED}[ERRORE] File main.sh non trovato in ${SCRIPT_DIR}. Uscita.${C_RESET}"
-            exit 0
-        fi
+        if [[ -f "${SCRIPT_DIR}/main.sh" ]]; then exec "${SCRIPT_DIR}/main.sh"; else exit 0; fi
     fi
     main_menu
 done
