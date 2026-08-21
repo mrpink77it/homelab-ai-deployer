@@ -1,415 +1,274 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-amd.sh
-# Versione: 1.0.1
+# Versione: 1.0.2
 # Descrizione: Gestore deployment, frontend, servizi systemd e ciclo AI per GPU AMD
-# Ambienti: Bare-Metal & Proxmox LXC (Debian 13 / Ubuntu 24.04 LTS)
+# Novità: Implementata Dashboard di stato avanzata (Rete, API, HW, Driver)
 # ==============================================================================
 
 set -euo pipefail
 
-trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-amd.sh si è interrotto alla riga $LINENO. Verifica di averlo avviato con privilegi elevati (sudo).\033[0m\n"' ERR
-
 # ------------------------------------------------------------------------------
 # Configurazione Variabili Globali
 # ------------------------------------------------------------------------------
-VERSION="1.0.1"
-LOG_FILE="/var/log/homelab-ai-amd.log"
+VERSION="1.0.2"
 INSTALL_DIR="/opt/homelab-ai"
-LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
 MODELS_DIR="${INSTALL_DIR}/models"
-WEBUI_DIR="${INSTALL_DIR}/open-webui"
+BACKEND_DIR="${INSTALL_DIR}/backend"
+FRONTEND_DIR="${INSTALL_DIR}/frontend"
 
-SERVICE_NAME="homelab-ai-backend"
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-FRONTEND_SERVICE_FILE="/etc/systemd/system/homelab-ai-frontend.service"
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+# Colori per UI Terminale
+C_RESET='\033[0m'
+C_BOLD='\033[1m'
+C_CYAN='\033[1;36m'
+C_GREEN='\033[1;32m'
+C_YELLOW='\033[1;33m'
+C_RED='\033[1;31m'
 
 # ------------------------------------------------------------------------------
-# Utility e Logging
+# Funzioni di Utilità
 # ------------------------------------------------------------------------------
-log() {
-    local level="$1"
-    local msg="$2"
-    if touch "${LOG_FILE}" 2>/dev/null; then
-        echo -e "$(date "+%Y-%m-%d %H:%M:%S") [${level}] ${msg}" | tee -a "${LOG_FILE}"
-    else
-        echo -e "$(date "+%Y-%m-%d %H:%M:%S") [${level}] ${msg}"
-    fi
-}
-
-log_info() { log "INFO" "${GREEN}$1${NC}"; }
-log_warn() { log "WARN" "${YELLOW}$1${NC}"; }
-log_err()  { log "ERROR" "${RED}$1${NC}"; }
-
 check_root() {
     if [[ $EUID -ne 0 ]]; then
-        log_err "Lo script richiede i privilegi di root. Avvialo con sudo."
+        echo -e "${C_RED}[ERRORE] Questo script richiede i privilegi di root. Usa sudo.${C_RESET}"
         exit 1
     fi
 }
 
-detect_environment() {
-    if [[ -f /proc/1/environ ]] && grep -q "container=lxc" /proc/1/environ 2>/dev/null; then
-        echo "LXC (Proxmox)"
+setup_directories() {
+    echo -e "${C_CYAN}>>> Creazione struttura directory in ${INSTALL_DIR}...${C_RESET}"
+    mkdir -p "${MODELS_DIR}" "${BACKEND_DIR}" "${FRONTEND_DIR}"
+}
+
+# ------------------------------------------------------------------------------
+# Installazione Componenti (Backend e Frontend)
+# ------------------------------------------------------------------------------
+install_backend() {
+    echo -e "${C_CYAN}>>> Installazione Backend (llama.cpp - Ottimizzazione AMD/ROCm)...${C_RESET}"
+    
+    cd "${BACKEND_DIR}"
+    echo -e "${C_YELLOW}Recupero ultima versione di llama.cpp...${C_RESET}"
+    LATEST_RELEASE=$(curl -s https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    
+    DOWNLOAD_URL="https://github.com/ggerganov/llama.cpp/releases/download/${LATEST_RELEASE}/llama-${LATEST_RELEASE}-bin-ubuntu-x64-rocm.zip"
+    
+    if curl --output /dev/null --silent --head --fail "$DOWNLOAD_URL"; then
+        echo -e "${C_GREEN}Trovata release ROCm. Download in corso...${C_RESET}"
+        wget -q --show-progress -O llama-rocm.zip "$DOWNLOAD_URL"
+        apt-get install -y unzip >/dev/null
+        unzip -o llama-rocm.zip -d ./ >/dev/null
+        rm llama-rocm.zip
+        find . -name "llama-server" -exec mv {} ./llama-server-amd \;
+        chmod +x llama-server-amd
     else
-        echo "Bare-Metal / Standard VM"
+        echo -e "${C_YELLOW}Release ROCm precompilata non trovata. Verrà scaricata la versione base.${C_RESET}"
+        DOWNLOAD_URL_BASE="https://github.com/ggerganov/llama.cpp/releases/download/${LATEST_RELEASE}/llama-${LATEST_RELEASE}-bin-ubuntu-x64.zip"
+        wget -q --show-progress -O llama-base.zip "$DOWNLOAD_URL_BASE"
+        unzip -o llama-base.zip -d ./ >/dev/null
+        rm llama-base.zip
+        find . -name "llama-server" -exec mv {} ./llama-server-amd \;
+        chmod +x llama-server-amd
     fi
 }
 
-init_env() {
-    mkdir -p "$(dirname "$LOG_FILE")" "${MODELS_DIR}" "${WEBUI_DIR}"
-    touch "${LOG_FILE}" || true
-}
+download_model() {
+    echo -e "${C_CYAN}>>> Download Modello GGUF (Qwen2.5-Coder-7B-Instruct)...${C_RESET}"
+    cd "${MODELS_DIR}"
+    MODEL_URL="https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
+    MODEL_FILE="qwen2.5-coder-7b-instruct-q4_k_m.gguf"
 
-# ------------------------------------------------------------------------------
-# Installazione Stack Sistema
-# ------------------------------------------------------------------------------
-install_dependencies() {
-    export DEBIAN_FRONTEND=noninteractive
-    export APT_LISTCHANGES_FRONTEND=none
-
-    log_info "Verifica pacchetti base di sistema..."
-    apt-get update || true
-    apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" \
-        build-essential cmake git curl wget pkg-config pciutils gnupg \
-        libvulkan-dev vulkan-tools python3 python3-pip python3-venv python3-dev whiptail \
-        libffi-dev libssl-dev libomp-dev || true
-    
-    log_info "Verifica e pulizia conflitti con pacchetti ROCm nativi..."
-    apt-get remove --purge -y hipcc rocminfo "rocm-*" "libhip*" "libamdhip*" >/dev/null 2>&1 || true
-    apt-get autoremove -y >/dev/null 2>&1 || true
-}
-
-get_amd_gpu_profile() {
-    local gpu_info
-    gpu_info=$(lspci | grep -iE 'vga|3d|display' | grep -i amd || true)
-    
-    local target="gfx1030" 
-    local override=""
-
-    if echo "$gpu_info" | grep -qiE 'navi 10|5700|5600'; then
-        target="gfx1030"
-        override="10.3.0"
-    elif echo "$gpu_info" | grep -qiE 'navi 2|6700|6800|6900|6500'; then
-        target="gfx1030"
-    elif echo "$gpu_info" | grep -qiE 'navi 3|7900|7800|7600'; then
-        target="gfx1100"
-    elif echo "$gpu_info" | grep -qiE 'vega|radeon vii'; then
-        target="gfx900,gfx906"
-    elif echo "$gpu_info" | grep -qiE 'polaris|rx 580|rx 570|rx 480'; then
-        target="gfx803"
-        override="8.0.3"
-    fi
-
-    echo "${target}|${override}"
-}
-
-# ------------------------------------------------------------------------------
-# Auto-Riparazione Toolchain ROCm
-# ------------------------------------------------------------------------------
-ensure_hipcc_toolchain() {
-    local HIPCC_BIN="/opt/rocm/bin/hipcc"
-    if [[ ! -x "$HIPCC_BIN" ]]; then
-        log_warn "Compilatore hipcc non trovato. Iniezione forzata repository AMD ROCm 6.2..."
-        
-        mkdir -p /etc/apt/keyrings
-        wget -q -O - https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/rocm.gpg
-        
-        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.2 noble main" > /etc/apt/sources.list.d/rocm.list
-        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/amdgpu/6.2/ubuntu noble main" > /etc/apt/sources.list.d/amdgpu.list
-        
-        cat <<EOF > /etc/apt/preferences.d/99-rocm-amd
-Package: *
-Pin: origin repo.radeon.com
-Pin-Priority: 1001
-EOF
-        
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update || true
-        
-        log_info "Installazione toolchain HIP/ROCm ufficiale AMD..."
-        apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" rocm-dev rocm-hip-sdk || true
-        
-        if [[ ! -x "$HIPCC_BIN" ]]; then
-            log_err "Auto-riparazione fallita. Repository non raggiungibili o pacchetti inesistenti."
-            return 1
-        fi
-        log_info "Auto-riparazione completata: hipcc installato con successo."
-    fi
-    return 0
-}
-
-# ------------------------------------------------------------------------------
-# Compilazione llama.cpp & Patch FP8
-# ------------------------------------------------------------------------------
-compile_llama() {
-    local type="$1"
-    
-    systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
-    
-    if [[ ! -d "${LLAMA_DIR}" ]]; then
-        git clone https://github.com/ggerganov/llama.cpp.git "${LLAMA_DIR}"
+    if [[ -f "$MODEL_FILE" ]]; then
+        echo -e "${C_GREEN}Modello già presente: $MODEL_FILE${C_RESET}"
     else
-        git -C "${LLAMA_DIR}" pull
+        wget --show-progress -O "$MODEL_FILE" "$MODEL_URL"
     fi
-
-    # Iniezione patch di compatibilità ROCm 6.2 / fallback tipi FP8 per architetture come gfx1030
-    if [[ -f "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" ]]; then
-        log_info "Applicazione patch di compatibilità ROCm FP8 e fallback tipi..."
-        sed -i 's/typedef __hip_fp8_e4m3 __nv_fp8_e4m3;/typedef uint8_t __nv_fp8_e4m3;/g' "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" || true
-        sed -i 's/typedef __hip_fp8_e5m2 __nv_fp8_e5m2;/typedef uint8_t __nv_fp8_e5m2;/g' "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" || true
-    fi
-
-    log_info "Pulizia cache di compilazione..."
-    rm -rf "${LLAMA_DIR}/build"
-    rm -rf ~/.cache/ccache 2>/dev/null || true
-    hash -r
-
-    local gpu_profile target override
-    gpu_profile=$(get_amd_gpu_profile)
-    target=$(echo "$gpu_profile" | cut -d'|' -f1)
-    override=$(echo "$gpu_profile" | cut -d'|' -f2)
-
-    log_info "Avvio compilazione llama.cpp (Backend: ${type})..."
-
-    case "${type}" in
-        "vulkan")
-            cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_VULKAN=ON
-            cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
-            ;;
-        "rocm"|"rocm_exp")
-            if ! ensure_hipcc_toolchain; then
-                return 1
-            fi
-            
-            local ROCM_PREFIX="/opt/rocm"
-            local ROCM_CLANG="${ROCM_PREFIX}/llvm/bin/clang"
-            local ROCM_CLANGXX="${ROCM_PREFIX}/llvm/bin/clang++"
-            local CMAKE_ROCM_FLAGS="-DGGML_HIP=ON -DAMDGPU_TARGETS=${target} -DROCM_PATH=${ROCM_PREFIX} -DCMAKE_PREFIX_PATH=${ROCM_PREFIX}/lib/cmake:${ROCM_PREFIX}/lib/x86_64-linux-gnu/cmake -DCMAKE_C_FLAGS=-Wno-pedantic -DCMAKE_CXX_FLAGS=-Wno-pedantic"
-            
-            export PATH="${ROCM_PREFIX}/bin:${ROCM_PREFIX}/llvm/bin:${PATH}"
-            export CC="${ROCM_CLANG}"
-            export CXX="${ROCM_CLANGXX}"
-
-            if [[ "${type}" == "rocm_exp" && -n "${override}" ]]; then
-                log_warn "Iniezione Hack di compatibilità: HSA_OVERRIDE_GFX_VERSION=${override}"
-                export HSA_OVERRIDE_GFX_VERSION="${override}"
-            fi
-            
-            cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" ${CMAKE_ROCM_FLAGS}
-            cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
-            ;;
-    esac
-
-    log_info "Compilazione completata con successo."
-    auto_setup_systemd_service "${type}" "${override}"
 }
 
-auto_setup_systemd_service() {
-    local type="$1"
-    local override="$2"
-    local host="0.0.0.0"
-    local port="8080"
-    local model_path="${MODELS_DIR}/model.gguf"
-
-    local env_directives=""
-    if [[ "${type}" == "rocm" || "${type}" == "rocm_exp" ]]; then
-        env_directives="Environment=\"PATH=/opt/rocm/bin:/opt/rocm/llvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
-        env_directives+=$'\n'
-        env_directives+="Environment=\"LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64\""
-        if [[ -n "${override}" ]]; then
-            env_directives+=$'\n'
-            env_directives+="Environment=\"HSA_OVERRIDE_GFX_VERSION=${override}\""
-        fi
+install_frontend() {
+    echo -e "${C_CYAN}>>> Installazione Open WebUI (Frontend)...${C_RESET}"
+    export PATH="/root/.cargo/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    
+    if ! command -v uv &> /dev/null; then
+        echo -e "${C_YELLOW}Installazione gestore rapido 'uv'...${C_RESET}"
+        curl -LsSf https://astral.sh/uv/install.sh | sh
     fi
 
-    cat <<EOF > "${SERVICE_FILE}"
+    cd "${FRONTEND_DIR}"
+    uv venv .venv
+    VIRTUAL_ENV="${FRONTEND_DIR}/.venv" uv pip install open-webui
+}
+
+# ------------------------------------------------------------------------------
+# Configurazione Servizi Systemd
+# ------------------------------------------------------------------------------
+setup_services() {
+    echo -e "${C_CYAN}>>> Configurazione Servizi Systemd...${C_RESET}"
+    
+    cat <<EOF > /etc/systemd/system/homelab-ai-backend.service
 [Unit]
-Description=Homelab AI Backend Service (llama.cpp)
+Description=Homelab AI Backend (llama.cpp - AMD)
 After=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=${INSTALL_DIR}
-${env_directives}
-ExecStart=${LLAMA_DIR}/build/bin/llama-server --host ${host} --port ${port} -m "${model_path}" -ngl 99
+WorkingDirectory=${BACKEND_DIR}
+Environment="HSA_OVERRIDE_GFX_VERSION=10.3.0"
+ExecStart=${BACKEND_DIR}/llama-server-amd -m ${MODELS_DIR}/qwen2.5-coder-7b-instruct-q4_k_m.gguf --host 127.0.0.1 --port 8080 -c 4096 -ngl 99
 Restart=always
-RestartSec=5
-StandardOutput=append:${LOG_FILE}
-StandardError=append:${LOG_FILE}
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable "${SERVICE_NAME}"
-    systemctl restart "${SERVICE_NAME}" || true
-    log_info "Servizio ${SERVICE_NAME} configurato con variabili d'ambiente ROCm e avviato."
-}
-
-# ------------------------------------------------------------------------------
-# Gestione Frontend (Open WebUI)
-# ------------------------------------------------------------------------------
-install_open_webui() {
-    log_info "Installazione/Aggiornamento Open WebUI (Frontend)..."
-    mkdir -p "${WEBUI_DIR}"
-    
-    # Integrazione UV per isolamento Python 3.11
-    if ! command -v uv &> /dev/null; then
-        log_info "Installazione del gestore pacchetti 'uv' per l'ambiente Python..."
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-    fi
-    
-    # Assicura che uv sia nel PATH anche se già installato
-    export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-    
-    if [[ ! -d "${WEBUI_DIR}/venv" ]]; then
-        log_info "Creazione ambiente virtuale isolato con Python 3.11 tramite uv..."
-        uv venv -p 3.11 "${WEBUI_DIR}/venv"
-    fi
-    
-    source "${WEBUI_DIR}/venv/bin/activate"
-    log_info "Aggiornamento pip e installazione di open-webui tramite uv pip..."
-    uv pip install --upgrade pip
-    uv pip install open-webui
-    deactivate
-
-    cat <<EOF > "${FRONTEND_SERVICE_FILE}"
+    cat <<EOF > /etc/systemd/system/homelab-ai-frontend.service
 [Unit]
-Description=Homelab AI Frontend Service (Open WebUI)
-After=network.target ${SERVICE_NAME}.service
+Description=Homelab AI Frontend (Open WebUI)
+After=network.target homelab-ai-backend.service
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=${WEBUI_DIR}
+WorkingDirectory=${FRONTEND_DIR}
+Environment="PATH=/root/.cargo/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="OLLAMA_BASE_URL=http://127.0.0.1:8080"
+Environment="WEBUI_AUTH=False"
+Environment="HOST=0.0.0.0"
 Environment="PORT=3000"
-Environment="OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1"
-ExecStart=${WEBUI_DIR}/venv/bin/open-webui serve
+ExecStart=${FRONTEND_DIR}/.venv/bin/open-webui serve
 Restart=always
 RestartSec=5
-StandardOutput=append:${LOG_FILE}
-StandardError=append:${LOG_FILE}
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable homelab-ai-frontend
-    systemctl restart homelab-ai-frontend
-    log_info "Open WebUI configurato con successo (Porta 3000)."
-    read -rp "Premi Invio per continuare..."
+    systemctl enable homelab-ai-backend homelab-ai-frontend
+    systemctl start homelab-ai-backend homelab-ai-frontend
 }
 
 # ------------------------------------------------------------------------------
-# Gestione Modelli GGUF
+# Dashboard Elegante Terminale
 # ------------------------------------------------------------------------------
-download_model() {
-    local model_url
-    model_url=$(whiptail --title "Gestione Modelli GGUF" --inputbox "Inserisci l'URL diretto del file GGUF da scaricare:" 10 78 "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf" 3>&1 1>&2 2>&3)
+show_dashboard() {
+    clear
     
-    if [[ -n "${model_url}" ]]; then
-        local filename
-        filename=$(basename "${model_url}" | cut -d? -f1)
-        log_info "Download del modello ${filename} in corso..."
-        wget -O "${MODELS_DIR}/${filename}" "${model_url}"
-        ln -sf "${MODELS_DIR}/${filename}" "${MODELS_DIR}/model.gguf"
-        log_info "Modello scaricato e impostato come default (model.gguf)."
-        systemctl restart "${SERVICE_NAME}" 2>/dev/null || true
+    # Rilevamento IP Rete Locale
+    local ip_addr
+    ip_addr=$(hostname -I | awk '{print $1}')
+    [[ -z "$ip_addr" ]] && ip_addr="127.0.0.1"
+
+    # Controllo stato Servizi Systemd
+    local be_status="${C_RED}🔴 INATTIVO (Spento o in Errore)${C_RESET}"
+    local fe_status="${C_RED}🔴 INATTIVO (Spento o in Errore)${C_RESET}"
+    if systemctl is-active --quiet homelab-ai-backend; then be_status="${C_GREEN}🟢 ATTIVO (In Esecuzione)${C_RESET}"; fi
+    if systemctl is-active --quiet homelab-ai-frontend; then fe_status="${C_GREEN}🟢 ATTIVO (In Esecuzione)${C_RESET}"; fi
+
+    # Diagnostica Hardware Base
+    local cpu_model=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed -e 's/^[ \t]*//')
+    local cpu_cores=$(nproc)
+    local ram_total=$(free -h | awk '/^Mem:/{print $2}')
+    local ram_used=$(free -h | awk '/^Mem:/{print $3}')
+
+    # Diagnostica AMD GPU e Driver
+    local gpu_desc="GPU AMD Non Trovata / Non Rilevata su bus PCI"
+    if lspci | grep -iE 'vga|3d|display' | grep -i amd >/dev/null 2>&1; then
+        gpu_desc=$(lspci | grep -iE 'vga|3d|display' | grep -i amd | cut -d: -f3 | sed 's/^[ \t]*//' | head -n1)
     fi
-    read -rp "Premi Invio per continuare..."
+
+    local driver_ver="amdgpu (Kernel: $(uname -r))"
+    if command -v rocm-smi >/dev/null 2>&1; then
+        local rocm_ver
+        rocm_ver=$(apt-cache policy rocm-core 2>/dev/null | grep Installed | awk '{print $2}' || echo "N/D")
+        driver_ver="ROCm (Versione: ${rocm_ver}) - Stack Grafico Avanzato"
+    fi
+
+    # Renderizzazione Interfaccia
+    echo -e "${C_CYAN}========================================================================${C_RESET}"
+    echo -e " ${C_BOLD}📊 HOMELAB AI - DASHBOARD DI SISTEMA (PROFILO AMD)${C_RESET}"
+    echo -e "${C_CYAN}========================================================================${C_RESET}\n"
+
+    echo -e "${C_YELLOW}▶ STATO SERVIZI, PORTE E API${C_RESET}"
+    echo -e "  ├─ ${C_BOLD}Backend AI (llama.cpp)${C_RESET} : ${be_status}"
+    echo -e "  │  ├─ Porta in Ascolto  : 8080 (TCP Locale)"
+    echo -e "  │  └─ API Endpoint      : http://127.0.0.1:8080/v1 (Compatibile OpenAI)"
+    echo -e "  │"
+    echo -e "  └─ ${C_BOLD}Frontend (Open WebUI)${C_RESET}: ${fe_status}"
+    echo -e "     ├─ Porta Esposta     : 3000 (TCP Pubblica)"
+    echo -e "     └─ Interfaccia Web   : http://${ip_addr}:3000\n"
+
+    echo -e "${C_YELLOW}▶ RISORSE HARDWARE E DRIVER${C_RESET}"
+    echo -e "  ├─ ${C_BOLD}Processore (CPU)${C_RESET}     : ${cpu_model} (${cpu_cores} Thread)"
+    echo -e "  ├─ ${C_BOLD}Memoria Sistema (RAM)${C_RESET}: ${ram_used} usati / ${ram_total} totali"
+    echo -e "  ├─ ${C_BOLD}Acceleratore GPU${C_RESET}     : ${gpu_desc}"
+    echo -e "  └─ ${C_BOLD}Driver & Toolchain${C_RESET}   : ${driver_ver}\n"
+
+    # Selettore Live VRAM (Se rocm-smi è installato e funzionante)
+    if command -v rocm-smi >/dev/null 2>&1; then
+        echo -e "${C_YELLOW}▶ UTILIZZO GPU TEMPO REALE (rocm-smi)${C_RESET}"
+        rocm-smi --showuse --showmeminfo vram | grep -v '=====================' | grep -v 'ROCm System' | sed 's/^/  /' || true
+        echo ""
+    fi
+
+    echo -e "${C_CYAN}========================================================================${C_RESET}"
+    # Mette in pausa l'esecuzione finché l'utente non preme un tasto
+    read -n 1 -s -r -p "Premi un tasto qualsiasi per tornare al menu operativo..."
 }
 
 # ------------------------------------------------------------------------------
-# Gestione Servizi
+# Menu Principale TUI
 # ------------------------------------------------------------------------------
-manage_service_menu() {
-    local action
-    action=$(whiptail --title "Gestione Servizi Homelab AI" \
-        --menu "\nSeleziona l'azione da compiere:" 15 78 4 \
-        "1" "Avvia Servizi (Backend & Frontend)" \
-        "2" "Ferma Servizi (Backend & Frontend)" \
-        "3" "Riavvia Servizi (Backend & Frontend)" \
-        "4" "Torna al Menu Principale" \
-        3>&1 1>&2 2>&3)
-    
-    case "$action" in
-        1) 
-            systemctl start "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
-            log_info "Servizi avviati." 
-            ;;
-        2) 
-            systemctl stop "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
-            log_info "Servizi fermati." 
-            ;;
-        3) 
-            systemctl restart "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
-            log_info "Servizi riavviati." 
-            ;;
-        *) ;;
-    esac
-}
+main_menu() {
+    if ! command -v whiptail &> /dev/null; then
+        apt-get update -qq && apt-get install -y whiptail
+    fi
 
-# ------------------------------------------------------------------------------
-# Menu TUI
-# ------------------------------------------------------------------------------
-select_backend() {
     local choice
-    choice=$(whiptail --title "Selezione Backend Inferenza AMD" \
-        --menu "\nSeleziona il backend grafico per la tua GPU AMD:" 18 78 3 \
-        "1" "Vulkan (RACCOMANDATO per Navi / RDNA su OS Moderni)" \
-        "2" "ROCm Sperimentale (Auto-fix HIPCC + Patch FP8 + Hack HSA)" \
-        "3" "ROCm Ufficiale (Architetture native supportate)" \
-        3>&1 1>&2 2>&3)
+    choice=$(whiptail --title "Homelab AI - Controller AMD (v${VERSION})" \
+        --menu "\nSeleziona un'operazione per l'ambiente AMD:" 18 78 6 \
+        "1" "▶ Esegui Installazione Completa (Backend + Frontend)" \
+        "2" "📊 Dashboard Stato & Risorse (Reti, API, Hardware)" \
+        "3" "🔄 Riavvia Servizi Systemd (Applica modifiche)" \
+        "4" "📄 Mostra Log Live Backend (llama.cpp)" \
+        "5" "📄 Mostra Log Live Frontend (Open WebUI)" \
+        "6" "🔙 Esci al Menu Principale (main.sh)" \
+        3>&1 1>&2 2>&3) || exit 0
 
     case "$choice" in
-        1) compile_llama "vulkan" ;;
-        2) compile_llama "rocm_exp" ;;
-        3) compile_llama "rocm" ;;
-        *) log_warn "Operazione annullata." ;;
+        1)
+            setup_directories
+            install_backend
+            download_model
+            install_frontend
+            setup_services
+            whiptail --title "Completato" --msgbox "Installazione AMD completata con successo!\nAccedi a Open WebUI sulla porta 3000." 8 60
+            main_menu
+            ;;
+        2)
+            show_dashboard
+            main_menu
+            ;;
+        3)
+            systemctl restart homelab-ai-backend homelab-ai-frontend
+            whiptail --title "Riavvio" --msgbox "Servizi riavviati." 8 40
+            main_menu
+            ;;
+        4)
+            journalctl -u homelab-ai-backend -f
+            ;;
+        5)
+            journalctl -u homelab-ai-frontend -f
+            ;;
+        6)
+            exit 0
+            ;;
     esac
 }
 
-main_menu() {
-    while true; do
-        local choice
-        choice=$(whiptail --title "Homelab AI - AMD Management Console (v${VERSION})" \
-            --menu "\nAmbiente: $(detect_environment)\nScegli un'operazione:" 18 78 7 \
-            "1" "Seleziona/Compila Backend Llama.cpp (Auto GPU + Patch FP8)" \
-            "2" "Installa / Configura Open WebUI (Frontend)" \
-            "3" "Scarica / Gestisci Modelli GGUF" \
-            "4" "Gestione Servizi (Avvia/Ferma/Riavvia)" \
-            "5" "Stato Servizi (Backend & Frontend)" \
-            "6" "Visualizza Log di Sistema" \
-            "7" "Esci" \
-            3>&1 1>&2 2>&3)
-
-        case "$choice" in
-            1) select_backend; read -rp "Premi Invio per continuare..." ;;
-            2) install_open_webui ;;
-            3) download_model ;;
-            4) manage_service_menu ;;
-            5) systemctl status "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true; read -rp "Premi Invio per continuare..." ;;
-            6) tail -n 50 "${LOG_FILE}" || true; read -rp "Premi Invio per continuare..." ;;
-            7) break ;;
-            *) break ;;
-        esac
-    done
-}
-
 # ------------------------------------------------------------------------------
-# Avvio (Entrypoint)
+# Entrypoint
 # ------------------------------------------------------------------------------
 check_root
-init_env
-install_dependencies
 main_menu
