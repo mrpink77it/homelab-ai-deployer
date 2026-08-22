@@ -194,24 +194,23 @@ Questo progetto è distribuito sotto licenza **MIT**. Sei libero di utilizzare, 
 
 ```text
 homelab-ai-deployer/
-├── docs/                               # Documentazione e guide
+├── docs/                               # Documentation and guides
 │   ├── prepare_sandbox_baremetal.md
 │   ├── prepare_sandbox_lxc.md
 │   └── sandbox.md
-├── script/                             # Script secondari e di utilità
+├── script/                             # Secondary and utility scripts
 │   ├── monitor.sh
 │   ├── proxmox_lxc_sandbox_setup.sh
 │   ├── purge-homelab-ai.sh
 │   ├── sandbox_setup.sh
 │   ├── setup_jupyter.sh
-│   └── uninstall.sh
-├── README.md                           # Documentazione generale (Italiano)
-├── README_ENG.md                       # Documentazione generale (Inglese)
-├── install.sh                          # Script di avvio rapido
-├── main.sh                             # Router per rilevamento hardware
-├── manager-amd.sh                      # TUI per gestione Controller AMD
-├── manager-cpu.sh                      # TUI per gestione fallback CPU
-├── manager-fine-tuning-nvidia.sh       # TUI per Fine-Tuning su NVIDIA
-├── manager-nvidia.sh                   # TUI per gestione Controller NVIDIA
-├── purge-homelab-ai.sh                 # Tool root-level di pulizia ambiente
-└── uninstall.sh                        # Tool root-level di rimozione servizi
+│   ├── purge-homelab-ai.sh             # Root-level environment purge tool
+│   └── uninstall.sh                    # Root-level service removal tool
+├── README.md                           # General documentation (Italian)
+├── README_ENG.md                       # General documentation (English)
+├── install.sh                          # Quick start script
+├── main.sh                             # Hardware detection router
+├── manager-amd.sh                      # TUI for AMD Controller management
+├── manager-cpu.sh                      # TUI for CPU fallback management
+├── manager-fine-tuning-nvidia.sh       # TUI for Fine-Tuning on NVIDIA
+└── manager-nvidia.sh                   # TUI for NVIDIA Controller management
