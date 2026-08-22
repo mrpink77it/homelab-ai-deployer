@@ -50,6 +50,44 @@ elif lspci | grep -i "vga\|3d\|display" | grep -iq "AMD\|Radeon" || [ -d "/sys/m
 fi
 
 # ------------------------------------------------------------------------------
+# BANNER INTRODUTTIVO
+# ------------------------------------------------------------------------------
+show_intro_banner() {
+    clear
+    echo -e "\033[0;36m"
+    cat << "EOF"
+ _   _                      _       _        ___  ___ 
+| | | | ___  _ __ ___   ___| | __ _| |__    / _ \|_ _|
+| |_| |/ _ \| '_ ` _ \ / _ \ |/ _` | '_ \  | |_| || | 
+|  _  | (_) | | | | | |  __/ | (_| | |_) | |  _  || | 
+|_| |_|\___/|_| |_| |_|\___|_|\__,_|_.__/  |_| |_|___|
+                                                      
+                  DEPLOYER V.1.1.5
+EOF
+    echo -e "\033[0m"
+    echo -e "\033[1;37m=================================================================\033[0m"
+    echo -e "\033[1;32m Benvenuto nell'ecosistema Homelab AI Deployer!\033[0m"
+    echo -e "\033[1;37m=================================================================\033[0m"
+    echo -e "Questo strumento analizza automaticamente il tuo hardware"
+    echo -e "e ti guida nell'installazione e orchestrazione del tuo stack AI:"
+    echo -e ""
+    echo -e "  \033[0;33m•\033[0m \033[1;36mBackend:\033[0m  llama.cpp ottimizzato per (NVIDIA / AMD / CPU)"
+    echo -e "  \033[0;33m•\033[0m \033[1;36mFrontend:\033[0m Unsloth Studio, Open WebUI, OpenCode AI"
+    echo -e "  \033[0;33m•\033[0m \033[1;36mServizi:\033[0m  Configurazione automatica systemd e API remote"
+    echo -e ""
+    echo -e "\033[1;37m=================================================================\033[0m"
+    echo -e " \033[1;35mAmbiente rilevato:\033[0m $VIRT_ENV"
+    echo -e " \033[1;35mHardware rilevato:\033[0m $HW_DETECTED"
+    echo -e "\033[1;37m=================================================================\033[0m"
+    echo -e ""
+    echo -e "\033[1;33mPremi un tasto qualsiasi per avviare la console di gestione..."
+    echo -e "(L'avvio automatico avverrà tra 120 secondi)\033[0m"
+    
+    # Aspetta la pressione di un tasto (-n 1) per 120 secondi (-t 120) in modalità silenziosa (-s)
+    read -t 120 -n 1 -s -r || true
+}
+
+# ------------------------------------------------------------------------------
 # FUNZIONE DI ESECUZIONE (Fix Percorsi)
 # ------------------------------------------------------------------------------
 run_script() {
@@ -97,8 +135,12 @@ show_menu() {
 }
 
 # ------------------------------------------------------------------------------
-# LOOP DI GESTIONE
+# AVVIO E LOOP DI GESTIONE
 # ------------------------------------------------------------------------------
+
+# Mostra il banner introduttivo una sola volta all'avvio
+show_intro_banner
+
 while true; do
     show_menu
     case $CHOICE in
