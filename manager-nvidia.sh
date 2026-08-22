@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.0.7
+# Version: V.1.0.8
 # ==============================================================================
 
 set -e
@@ -21,6 +21,7 @@ UNSLOTH_ENV="/root/unsloth_env"
 CODE_RUNNER_DIR="/opt/code_runner"
 CODE_RUNNER_ENV="/opt/code_runner/venv"
 OPENCODE_DIR="/opt/opencode"
+BACKEND_DIR="/opt/homelab-ai/backend"
 
 # Controllo Permessi Root
 if [ "$EUID" -ne 0 ]; then
@@ -141,20 +142,50 @@ install_services() {
     setup_xdg_fix
     fix_apt_repos
 
-    echo -e "${YELLOW}[1/4] Installazione Dipendenze di Sistema e Node.js...${NC}"
+    echo -e "${YELLOW}[1/5] Installazione Dipendenze di Sistema e Node.js...${NC}"
     apt update || true
     apt install -y curl wget git gnupg ca-certificates build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils nodejs npm kmod
 
     setup_nvidia_stack
 
-    echo -e "${YELLOW}[3/4] Setup Unsloth Studio & PyTorch CUDA nel VENV dedicato...${NC}"
+    echo -e "${YELLOW}[3/5] Setup llama.cpp (Backend Inferenza CUDA)...${NC}"
+    mkdir -p "$BACKEND_DIR/models"
+    if [ ! -d "$BACKEND_DIR/llama.cpp" ]; then
+        git clone https://github.com/ggerganov/llama.cpp.git "$BACKEND_DIR/llama.cpp"
+    fi
+    cd "$BACKEND_DIR/llama.cpp"
+    make clean
+    make LLAMA_CUDA=1 -j$(nproc)
+
+    cat <<EOF > /etc/systemd/system/homelab-ai-backend.service
+[Unit]
+Description=Homelab AI Backend (llama.cpp)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$BACKEND_DIR/llama.cpp
+# Di default cerca un modello placeholder, modificalo dalla dashboard o GUI se necessario
+ExecStart=$BACKEND_DIR/llama.cpp/llama-server --host 0.0.0.0 --port 8080 -m $BACKEND_DIR/models/default.gguf
+Restart=always
+RestartSec=5
+Environment="PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    echo -e "${YELLOW}[4/5] Setup Unsloth Studio & PyTorch CUDA nel VENV dedicato...${NC}"
     if [ ! -d "$UNSLOTH_ENV" ]; then
         python3 -m venv "$UNSLOTH_ENV"
     fi
     
     "$UNSLOTH_ENV/bin/pip" install --upgrade pip wheel "setuptools<82"
-    "$UNSLOTH_ENV/bin/pip" install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu121
-    "$UNSLOTH_ENV/bin/pip" install jupyterlab unsloth trl xformers
+    
+    # FIX APPLICATO QUI: Pinning versione Torch inferiore a 2.12.0 per Unsloth
+    "$UNSLOTH_ENV/bin/pip" install -U "torch<2.12.0" "torchvision<0.27.0" torchaudio --extra-index-url https://download.pytorch.org/whl/cu121
+    "$UNSLOTH_ENV/bin/pip" install -U jupyterlab unsloth unsloth-zoo trl xformers
 
     cat <<EOF > /etc/systemd/system/unsloth-studio.service
 [Unit]
@@ -174,7 +205,7 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    echo -e "${YELLOW}[4/4] Setup OpenCode AI e Code Runner API...${NC}"
+    echo -e "${YELLOW}[5/5] Setup OpenCode AI e Code Runner API...${NC}"
     
     mkdir -p "$OPENCODE_DIR"
     npm install -g opencode-ai 2>/dev/null || true
@@ -259,7 +290,7 @@ EOF
 
     echo -e "${YELLOW}---> Ricarico systemd, abilito ed avvio tutti i servizi...${NC}"
     systemctl daemon-reload
-    for srv in unsloth-studio opencode code-runner; do
+    for srv in homelab-ai-backend unsloth-studio opencode code-runner; do
         systemctl enable "$srv.service"
         systemctl restart "$srv.service"
     done
@@ -363,6 +394,7 @@ check_status() {
         echo ""
     }
 
+    print_service_status "homelab-ai-backend.service" "AI Backend (llama.cpp)" "8080"
     print_service_status "unsloth-studio.service" "Unsloth Studio (Jupyter Lab)" "8888"
     print_service_status "opencode.service" "OpenCode AI (Web Server)" "8000"
     print_service_status "code-runner.service" "Code Runner API (FastAPI)" "9000"
@@ -403,6 +435,17 @@ update_components() {
         exec ./manager.sh
     fi
 
+    echo -e "${YELLOW}---> Aggiornamento di llama.cpp...${NC}"
+    if [ -d "$BACKEND_DIR/llama.cpp" ]; then
+        cd "$BACKEND_DIR/llama.cpp"
+        systemctl stop homelab-ai-backend.service 2>/dev/null || true
+        git pull origin master
+        make clean
+        make LLAMA_CUDA=1 -j$(nproc)
+    else
+        echo -e "${RED}Directory di llama.cpp non trovata. Saltato.${NC}"
+    fi
+
     echo -e "${YELLOW}---> Aggiornamento dipendenze Code Runner API nel relativo VENV...${NC}"
     if [ ! -d "$CODE_RUNNER_ENV" ]; then
         python3 -m venv "$CODE_RUNNER_ENV"
@@ -411,10 +454,11 @@ update_components() {
 
     if [ -d "$UNSLOTH_ENV" ]; then
         echo -e "${YELLOW}---> Aggiornamento PyTorch + CUDA Wheels nel VENV Unsloth...${NC}"
-        "$UNSLOTH_ENV/bin/pip" install --upgrade torch torchvision --extra-index-url https://download.pytorch.org/whl/cu121
+        # FIX APPLICATO QUI: Pinning versione Torch durante l'aggiornamento
+        "$UNSLOTH_ENV/bin/pip" install -U "torch<2.12.0" "torchvision<0.27.0" torchaudio --extra-index-url https://download.pytorch.org/whl/cu121
         
         echo -e "${YELLOW}---> Aggiornamento Jupyter Lab, Unsloth, Trl, Xformers...${NC}"
-        "$UNSLOTH_ENV/bin/pip" install --upgrade jupyterlab unsloth trl xformers
+        "$UNSLOTH_ENV/bin/pip" install -U jupyterlab unsloth unsloth-zoo trl xformers
     fi
 
     if command -v npm &> /dev/null; then
@@ -424,7 +468,9 @@ update_components() {
 
     echo -e "${YELLOW}---> Riavvio dei servizi systemd...${NC}"
     systemctl daemon-reload
-    systemctl restart unsloth-studio opencode code-runner
+    for srv in homelab-ai-backend unsloth-studio opencode code-runner; do
+        systemctl restart "$srv.service" 2>/dev/null || true
+    done
     echo -e "${GREEN}[OK] Aggiornamento completato con successo senza toccare il Python di sistema!${NC}"
 }
 
@@ -486,7 +532,7 @@ uninstall_services() {
 
     if [[ "$CONFIRM" =~ ^[Ss]$ ]]; then
         echo -e "${YELLOW}---> Arresto e disattivazione servizi systemd...${NC}"
-        for srv in unsloth-studio opencode code-runner; do
+        for srv in homelab-ai-backend unsloth-studio opencode code-runner; do
             systemctl stop "$srv.service" 2>/dev/null || true
             systemctl disable "$srv.service" 2>/dev/null || true
             rm -f "/etc/systemd/system/$srv.service"
@@ -494,7 +540,7 @@ uninstall_services() {
         systemctl daemon-reload
 
         echo -e "${YELLOW}---> Pulizia directory di lavoro e virtualenv...${NC}"
-        rm -rf "$CODE_RUNNER_DIR" "$OPENCODE_DIR" "$UNSLOTH_ENV" "$TARGET_REPO_DIR"
+        rm -rf "$CODE_RUNNER_DIR" "$OPENCODE_DIR" "$UNSLOTH_ENV" "$TARGET_REPO_DIR" "/opt/homelab-ai"
 
         echo -e "${GREEN}[OK] Disinstallazione completata con successo.${NC}"
     else
@@ -510,9 +556,9 @@ show_menu() {
     echo -e "${BLUE}====================================================${NC}"
     echo -e "${BLUE}      🦥 HOMELAB AI DEPLOYER - MANAGER MENU        ${NC}"
     echo -e "${BLUE}====================================================${NC}"
-    echo -e " 1) ${GREEN}INSTALLA Servizi${NC}   (GPU Driver, CUDA, Unsloth, OpenCode, API)"
+    echo -e " 1) ${GREEN}INSTALLA Servizi${NC}   (GPU Driver, CUDA, Llama.cpp, Unsloth, API)"
     echo -e " 2) ${YELLOW}VERIFICA Stato${NC}     (Check Servizi Systemd, Porte e GPU CUDA)"
-    echo -e " 3) ${BLUE}AGGIORNA Componenti${NC} (Git pull, VENV Unsloth, VENV CodeRunner)"
+    echo -e " 3) ${BLUE}AGGIORNA Componenti${NC} (Git pull, llama.cpp, VENV Unsloth, API)"
     echo -e " 4) ${YELLOW}CONFIGURA Sandbox${NC}   (Setup Chiavi SSH & Test Endpoint API)"
     echo -e " 5) ${RED}DISINSTALLA${NC}        (Rimozione Unità Systemd e Directory)"
     echo -e " 6) Uscita"
