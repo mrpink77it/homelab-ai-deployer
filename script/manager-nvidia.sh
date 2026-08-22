@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.5.1 (Fixed Syntax & Flexible Multi-Stack)
+# Version: V.1.5.2 (Syntax Fixed)
 # ==============================================================================
 
 set -e
@@ -285,7 +285,7 @@ run_benchmark() {
     if [ ! -f "$BACKEND_DIR/llama.cpp/llama-bench" ]; then
         whiptail --title "Errore" --msgbox "llama-bench non trovato. Compila prima llama.cpp." 10 60
         return
-    }
+    fi
     local MODEL_PATH
     MODEL_PATH=$(find "$BACKEND_DIR/models" -name "*.gguf" | head -n 1)
     clear
@@ -336,7 +336,7 @@ manage_models() {
 if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.1)" \
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.2)" \
         --menu "\nSeleziona un'operazione:" 22 80 11 \
         "A" "Express Auto-Deploy (Tutto in un click)" \
         "1" "Compila llama.cpp (CUDA)" \
@@ -353,7 +353,7 @@ while true; do
         
     if [ $? -ne 0 ]; then return_to_main; fi
 
-    case $CHOICE in
+    case "$CHOICE" in
         "A")
             setup_xdg_fix; fix_apt_repos; setup_nvidia_stack
             compile_llamacpp; install_unsloth_stack; install_ollama_webui
