@@ -1,5 +1,9 @@
 # Homelab AI Deployer
 
+![Status](https://img.shields.io/badge/Status-Work_in_Progress-orange)
+![Language](https://img.shields.io/badge/Language-Bash-4EAA25)
+![License](https://img.shields.io/badge/License-MIT-blue)
+
 > **`mrpink77it/homelab-ai-deployer`** è uno script Bash automatizzato ("zero-config") progettato per configurare, gestire e distribuire un ambiente completo di AI Generativa, LLM Fine-Tuning e sviluppo su macchine Linux, server Bare-Metal e container **Proxmox LXC**.
 
 ---
