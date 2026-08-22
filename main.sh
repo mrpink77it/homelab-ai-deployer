@@ -2,10 +2,20 @@
 # ==============================================================================
 # Homelab AI Deployer - Main Dispatcher
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.1.6
+# Version: V.1.1.8
 # ==============================================================================
 
 set -e
+
+# ------------------------------------------------------------------------------
+# RIMOZIONE SCRIPT DI INSTALLAZIONE
+# ------------------------------------------------------------------------------
+# Cerca ed elimina install.sh nei percorsi più comuni (Downloads, Home, Root, Cartella corrente)
+for search_dir in "." "$HOME" "$HOME/Downloads" "/root" "/root/Downloads"; do
+    if [ -f "$search_dir/install.sh" ]; then
+        rm -f "$search_dir/install.sh"
+    fi
+done
 
 # ------------------------------------------------------------------------------
 # CONTROLLI PRELIMINARI
@@ -58,21 +68,21 @@ fi
 show_intro_banner() {
     # Usiamo cat con 'EOF' per preservare la formattazione e gli spazi
     local ASCII_LOGO=$(cat << 'EOF'
-         _   _                      _       _        ___  ___ 
-        | | | | ___  _ __ ___   ___| | __ _| |__    / _ \|_ _|
-        | |_| |/ _ \| '_ ` _ \ / _ \ |/ _` | '_ \  | |_| || | 
-        |  _  | (_) | | | | | |  __/ | (_| | |_) | |  _  || | 
-        |_| |_|\___/|_| |_| |_|\___|_|\__,_|_.__/  |_| |_|___|
+          _   _                             _     _      ___  ___ 
+         | | | | ___  _ __ ___   ___| | __ _| |__    / _ \|_ _|
+         | |_| |/ _ \| '_ ` _ \ / _ \ |/ _` | '_ \  | |_| || | 
+         |  _  | (_) | | | | | |  __/ | (_| | |_) | |  _  || | 
+         |_| |_|\___/|_| |_| |_|\___|_|\__,_|_.__/  |_| |_|___|
 EOF
 )
 
     local INFO_TEXT="
-                            DEPLOYER V.1.1.6
+                    DEPLOYER V.1.1.8
 
-             Benvenuto nell'ecosistema Homelab AI Deployer!
+            Benvenuto nell'ecosistema Homelab AI Deployer!
 
         Questo strumento analizza automaticamente il tuo hardware
-             e ti guida nell'orchestrazione del tuo stack AI:
+            e ti guida nell'orchestrazione del tuo stack AI:
 
             • Backend:  llama.cpp ottimizzato (NVIDIA / AMD / CPU)
             • Frontend: Unsloth Studio, Open WebUI, JupyterLab
@@ -83,7 +93,7 @@ EOF
                     Hardware: $HW_DETECTED
         -------------------------------------------------------
 
-           Premi <Ok> per iniziare (avvio automatico tra 120s)."
+            Premi <Ok> per iniziare (avvio automatico tra 120s)."
 
     # Uniamo il logo e il testo
     local FULL_BANNER="$ASCII_LOGO$INFO_TEXT"
