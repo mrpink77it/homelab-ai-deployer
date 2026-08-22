@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.6.6 (Full Custom Stack + CMake GCC-12 Host Fix + Zstd)
+# Version: V.1.6.8 (Full Custom Stack + Debian 13 Direct Repo & Keyring Fix)
 # ==============================================================================
 
 set -e
@@ -70,21 +70,25 @@ setup_nvidia_stack() {
         echo -e "${CYAN}Installazione dipendenze di base per la compilazione (inclusi gcc-12 per CUDA)...${NC}"
         apt update -qq && apt install -y pciutils kmod build-essential cmake curl wget git lsb-release zstd gcc-12 g++-12
 
-        if [ ! -f /etc/apt/sources.list.d/cuda.list ]; then
-            if [ "$OS_ID" = "ubuntu" ]; then
-                UBUNTU_VER=$(echo "$OS_VER" | tr -d '.')
-                KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/cuda-keyring_1.1-1_all.deb"
-            else
-                KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb"
-            fi
+        # Pulisci eventuali configurazioni errate precedenti
+        rm -f /etc/apt/sources.list.d/cuda*.list
+        rm -f /etc/apt/sources.list.d/nvidia*.list
 
-            echo -e "${CYAN}Download del keyring NVIDIA...${NC}"
+        if [ "$OS_ID" = "ubuntu" ]; then
+            UBUNTU_VER=$(echo "$OS_VER" | tr -d '.')
+            KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/cuda-keyring_1.1-1_all.deb"
+            
+            echo -e "${CYAN}Download del keyring NVIDIA (Ubuntu)...${NC}"
             wget "$KEYRING_URL" -O /tmp/cuda-keyring.deb
             dpkg -i /tmp/cuda-keyring.deb
             rm -f /tmp/cuda-keyring.deb
+        else
+            # Su Debian saltiamo il keyring ufficiale (che rompe su Trixie con sqv) e puntiamo direttamente al repo con trusted=yes
+            echo -e "${CYAN}Configurazione repository NVIDIA diretto per Debian...${NC}"
+            echo "deb [trusted=yes] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /" > /etc/apt/sources.list.d/cuda.list
         fi
 
-        # Passaggio CRITICO: ricarica i repository NVIDIA aggiunti dal keyring
+        # Passaggio CRITICO: ricarica i repository NVIDIA
         echo -e "${CYAN}Aggiornamento indici APT dai repository ufficiali NVIDIA...${NC}"
         apt update -y
 
@@ -115,7 +119,6 @@ setup_nvidia_stack() {
 # MODULI DI INSTALLAZIONE (Aggiornato con GCC-12 Host Compiler per CMake)
 # ------------------------------------------------------------------------------
 compile_llamacpp() {
-    # Assicura la presenza di gcc-12/g++-12 anche se CUDA era già installato
     if ! command -v gcc-12 &> /dev/null; then
         apt update -qq && apt install -y gcc-12 g++-12 -qq
     fi
@@ -144,7 +147,6 @@ compile_llamacpp() {
     echo -e "${CYAN}Compilazione in corso con $(nproc) thread...${NC}"
     cmake --build . --config Release -j$(nproc)
 
-    # Gestione symlink per retrocompatibilità dei binari nella struttura systemd
     if [ -f "$BACKEND_DIR/llama.cpp/build/bin/llama-server" ]; then
         ln -sf "$BACKEND_DIR/llama.cpp/build/bin/llama-server" "$BACKEND_DIR/llama.cpp/llama-server"
     fi
@@ -163,7 +165,6 @@ install_unsloth_stack() {
 }
 
 install_ollama_webui() {
-    # Risoluzione dipendenza zstd richiesta dall'installer ufficiale di Ollama su Debian/Ubuntu
     if ! command -v zstd &> /dev/null; then
         echo -e "${CYAN}Installazione di zstd (richiesto da Ollama)...${NC}"
         apt-get update -qq && apt-get install -y zstd -qq
@@ -481,7 +482,7 @@ manage_models() {
 if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.6.6)" \
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.6.8)" \
         --menu "\nSeleziona un'operazione:" 22 80 11 \
         "A" "Express Auto-Deploy (Tutto in un click)" \
         "1" "Compila llama.cpp (CMake CUDA)" \
