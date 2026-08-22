@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.4.0 (Multi-Stack Edition)
+# Version: V.1.5.0 (Flexible Multi-Stack & Whiptail Dashboard)
 # ==============================================================================
 
 set -e
@@ -21,10 +21,21 @@ UNSLOTH_ENV="/root/unsloth_env"
 OPENWEBUI_ENV="/opt/openwebui_env"
 CODE_RUNNER_DIR="/opt/code_runner"
 CODE_RUNNER_ENV="/opt/code_runner/venv"
-OPENCODE_DIR="/opt/opencode"
 BACKEND_DIR="/opt/homelab-ai/backend"
 
-# Controllo Permessi Root
+# File di configurazione porte persistenti
+PORT_CONFIG="/etc/homelab-ai/ports.conf"
+mkdir -p /etc/homelab-ai
+
+# Porte predefinite (se non configurate)
+[ ! -f "$PORT_CONFIG" ] && cat <<EOF > "$PORT_CONFIG"
+LLAMACPP_PORT=8080
+UNSLOTH_PORT=8888
+OLLAMA_PORT=11434
+OPENWEBUI_PORT=8081
+EOF
+source "$PORT_CONFIG"
+
 if [ "$EUID" -ne 0 ]; then
   echo -e "${RED}[ERROR] Questo script deve essere eseguito come root!${NC}"
   exit 1
@@ -39,7 +50,6 @@ setup_xdg_fix() {
 fix_apt_repos() {
     rm -f /etc/apt/sources.list.d/nvidia-container-toolkit.list
     rm -f /etc/apt/sources.list.d/cuda*.list
-    rm -f /etc/apt/sources.list.d/archive_uri-https_developer_download_nvidia_com_*.list
 }
 
 return_to_main() {
@@ -48,16 +58,10 @@ return_to_main() {
     sleep 1
     if [ -f "./main.sh" ]; then exec ./main.sh
     elif [ -f "../main.sh" ]; then cd .. && exec ./main.sh
-    elif [ -f "./manager.sh" ]; then exec ./manager.sh
     else exit 0; fi
 }
 
-# ------------------------------------------------------------------------------
-# SETUP COMUNE NVIDIA
-# ------------------------------------------------------------------------------
 setup_nvidia_stack() {
-    echo -e "${YELLOW}[INFO] Inizializzazione stack NVIDIA e CUDA...${NC}"
-    # Setup di base (omesso controllo esteso per brevità, installa CUDA 13.2)
     if ! command -v nvcc &> /dev/null; then
         apt update -qq && apt install -y cuda-toolkit-13-2 pciutils kmod build-essential curl wget git
         ln -sfn /usr/local/cuda-13.2 /usr/local/cuda
@@ -72,54 +76,59 @@ setup_nvidia_stack() {
 # MODULI DI INSTALLAZIONE
 # ------------------------------------------------------------------------------
 compile_llamacpp() {
-    echo -e "${BLUE}---> Compilazione llama.cpp (CUDA)...${NC}"
     mkdir -p "$BACKEND_DIR/models"
     if [ ! -d "$BACKEND_DIR/llama.cpp" ]; then
         git clone https://github.com/ggerganov/llama.cpp.git "$BACKEND_DIR/llama.cpp"
     fi
     cd "$BACKEND_DIR/llama.cpp"
-    git pull
     make clean
     make LLAMA_CUDA=1 -j$(nproc)
-    echo -e "${GREEN}[OK] llama.cpp compilato con supporto CUDA.${NC}"
 }
 
 install_unsloth_stack() {
-    echo -e "${BLUE}---> Setup Unsloth Studio & OpenCode...${NC}"
     if [ ! -d "$UNSLOTH_ENV" ]; then python3 -m venv "$UNSLOTH_ENV"; fi
     "$UNSLOTH_ENV/bin/pip" install --upgrade pip wheel "setuptools<82"
     "$UNSLOTH_ENV/bin/pip" install -U "torch<2.12.0" "torchvision<0.27.0" torchaudio --extra-index-url https://download.pytorch.org/whl/cu121
     "$UNSLOTH_ENV/bin/pip" install -U jupyterlab unsloth unsloth-zoo trl xformers
-
     apt install -y nodejs npm
     npm install -g opencode-ai 2>/dev/null || true
 }
 
 install_ollama_webui() {
-    echo -e "${BLUE}---> Installazione Ollama...${NC}"
     if ! command -v ollama &> /dev/null; then
         curl -fsSL https://ollama.com/install.sh | sh
-    else
-        echo -e "${GREEN}[OK] Ollama già installato.${NC}"
     fi
-
-    echo -e "${BLUE}---> Installazione Open WebUI (tramite uv)...${NC}"
     if ! command -v uv &> /dev/null; then
         curl -LsSf https://astral.sh/uv/install.sh | sh
-        source $HOME/.cargo/env
     fi
     if [ ! -d "$OPENWEBUI_ENV" ]; then
         uv venv "$OPENWEBUI_ENV"
     fi
     "$OPENWEBUI_ENV/bin/uv" pip install open-webui
-    echo -e "${GREEN}[OK] Open WebUI installato nell'ambiente virtuale.${NC}"
 }
 
-setup_systemd_services() {
-    echo -e "${YELLOW}[INFO] Creazione e avvio dei servizi Systemd...${NC}"
+# ------------------------------------------------------------------------------
+# CONFIGURAZIONE SERVIZI FLESSIBILE (Con Checkbox Whiptail)
+# ------------------------------------------------------------------------------
+configure_and_start_services() {
+    source "$PORT_CONFIG"
     
-    # Servizio Llama.cpp (Stack A)
-    if [ -f "$BACKEND_DIR/llama.cpp/llama-server" ]; then
+    # Selezione multipla dei servizi da abilitare
+    SELECTED_SERVICES=$(whiptail --title "Gestione Servizi Systemd" \
+        --checklist "Seleziona quali componenti attivare nella configurazione:" 20 78 5 \
+        "llama-backend" "llama.cpp server (Porta $LLAMACPP_PORT)" ON \
+        "unsloth-studio" "Unsloth Jupyter Lab (Porta $UNSLOTH_PORT)" ON \
+        "ollama" "Ollama Engine (Porta $OLLAMA_PORT)" OFF \
+        "open-webui" "Open WebUI (Porta $OPENWEBUI_PORT)" OFF \
+        3>&1 1>&2 2>&3)
+        
+    if [ $? -ne 0 ]; then return; fi
+
+    # Ricarica configurazione porte
+    source "$PORT_CONFIG"
+
+    # Scrittura dinamica dei file systemd in base alle scelte
+    if [[ "$SELECTED_SERVICES" == *"llama-backend"* ]]; then
         cat <<EOF > /etc/systemd/system/homelab-ai-backend.service
 [Unit]
 Description=Homelab AI Backend (llama.cpp)
@@ -128,17 +137,18 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$BACKEND_DIR/llama.cpp
-ExecStart=$BACKEND_DIR/llama.cpp/llama-server --host 0.0.0.0 --port 8080 -m $BACKEND_DIR/models/default.gguf
+ExecStart=$BACKEND_DIR/llama.cpp/llama-server --host 0.0.0.0 --port $LLAMACPP_PORT -m $BACKEND_DIR/models/default.gguf
 Restart=always
-RestartSec=5
-Environment="PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 [Install]
 WantedBy=multi-user.target
 EOF
+        systemctl enable homelab-ai-backend.service --now
+    else
+        systemctl stop homelab-ai-backend.service 2>/dev/null || true
+        systemctl disable homelab-ai-backend.service 2>/dev/null || true
     fi
 
-    # Servizio Unsloth (Stack A)
-    if [ -f "$UNSLOTH_ENV/bin/jupyter" ]; then
+    if [[ "$SELECTED_SERVICES" == *"unsloth-studio"* ]]; then
         cat <<EOF > /etc/systemd/system/unsloth-studio.service
 [Unit]
 Description=Unsloth Studio AI Service
@@ -147,16 +157,25 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/root
-Environment="PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStart=$UNSLOTH_ENV/bin/jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --ServerApp.token=''
+ExecStart=$UNSLOTH_ENV/bin/jupyter lab --ip=0.0.0.0 --port=$UNSLOTH_PORT --no-browser --allow-root --ServerApp.token=''
 Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
+        systemctl enable unsloth-studio.service --now
+    else
+        systemctl stop unsloth-studio.service 2>/dev/null || true
+        systemctl disable unsloth-studio.service 2>/dev/null || true
     fi
 
-    # Servizio Open WebUI (Stack B) - PORTA 8081
-    if [ -f "$OPENWEBUI_ENV/bin/open-webui" ]; then
+    if [[ "$SELECTED_SERVICES" == *"ollama"* ]]; then
+        systemctl enable ollama --now
+    else
+        systemctl stop ollama 2>/dev/null || true
+        systemctl disable ollama 2>/dev/null || true
+    fi
+
+    if [[ "$SELECTED_SERVICES" == *"open-webui"* ]]; then
         cat <<EOF > /etc/systemd/system/open-webui.service
 [Unit]
 Description=Open WebUI Service
@@ -164,146 +183,200 @@ After=network.target ollama.service
 [Service]
 Type=simple
 User=root
-Environment="PORT=8081"
-Environment="OLLAMA_BASE_URL=http://127.0.0.1:11434"
+Environment="PORT=$OPENWEBUI_PORT"
+Environment="OLLAMA_BASE_URL=http://127.0.0.1:$OLLAMA_PORT"
 ExecStart=$OPENWEBUI_ENV/bin/open-webui serve
 Restart=always
-RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+        systemctl enable open-webui.service --now
+    else
+        systemctl stop open-webui.service 2>/dev/null || true
+        systemctl disable open-webui.service 2>/dev/null || true
     fi
 
     systemctl daemon-reload
-    for srv in homelab-ai-backend unsloth-studio open-webui ollama; do
-        if [ -f "/etc/systemd/system/$srv.service" ] || [ -f "/lib/systemd/system/$srv.service" ]; then
-            systemctl enable "$srv" --now
-        fi
-    done
-    echo -e "${GREEN}[OK] Servizi configurati e avviati.${NC}"
+    whiptail --title "Successo" --msgbox "Configurazione servizi applicata e avviata correttamente!" 10 60
 }
 
 # ------------------------------------------------------------------------------
-# 6. ESEGUI BENCHMARK (llama-bench)
+# GESTIONE PORTE E STATO ATTIVO (Menu Dedicato)
+# ------------------------------------------------------------------------------
+manage_ports() {
+    while true; do
+        source "$PORT_CONFIG"
+        
+        # Controllo stato attivo in tempo reale per il menu
+        local s_llama="CHIUSA"
+        ss -tulpn | grep -q ":$LLAMACPP_PORT " && s_llama="ATTIVO"
+        local s_unsloth="CHIUSA"
+        ss -tulpn | grep -q ":$UNSLOTH_PORT " && s_unsloth="ATTIVO"
+        local s_ollama="CHIUSA"
+        ss -tulpn | grep -q ":$OLLAMA_PORT " && s_ollama="ATTIVO"
+        local s_webui="CHIUSA"
+        ss -tulpn | grep -q ":$OPENWEBUI_PORT " && s_webui="ATTIVO"
+
+        PORT_CHOICE=$(whiptail --title "Gestione Porte & Stato Servizi" \
+            --menu "Stato attuale e porte configurate:\n\n \
+ 1. llama.cpp Server  : Porta $LLAMACPP_PORT [$s_llama]\n \
+ 2. Unsloth Jupyter   : Porta $UNSLOTH_PORT [$s_unsloth]\n \
+ 3. Ollama Engine     : Porta $OLLAMA_PORT [$s_ollama]\n \
+ 4. Open WebUI        : Porta $OPENWEBUI_PORT [$s_webui]\n" 22 75 6 \
+            "CHANGE" "Modifica una porta di ascolto" \
+            "RESTART" "Riavvia i servizi con le porte aggiornate" \
+            "BACK" "Torna al menu principale" \
+            3>&1 1>&2 2>&3)
+            
+        if [ $? -ne 0 ]; then break; fi
+
+        case $PORT_CHOICE in
+            "CHANGE")
+                TARGET_SRV=$(whiptail --title "Cambia Porta" --menu "Seleziona il servizio da modificare:" 15 60 4 \
+                    "LLAMACPP_PORT" "llama.cpp (Attuale: $LLAMACPP_PORT)" \
+                    "UNSLOTH_PORT" "Unsloth Jupyter (Attuale: $UNSLOTH_PORT)" \
+                    "OLLAMA_PORT" "Ollama (Attuale: $OLLAMA_PORT)" \
+                    "OPENWEBUI_PORT" "Open WebUI (Attuale: $OPENWEBUI_PORT)" \
+                    3>&1 1>&2 2>&3)
+                if [ $? -eq 0 ] && [ -n "$TARGET_SRV" ]; then
+                    NEW_PORT=$(whiptail --title "Nuova Porta" --inputbox "Inserisci il nuovo numero di porta per $TARGET_SRV:" 10 50 3>&1 1>&2 2>&3)
+                    if [ $? -eq 0 ] && [ -n "$NEW_PORT" ]; then
+                        sed -i "s/^${TARGET_SRV}=.*/${TARGET_SRV}=${NEW_PORT}/" "$PORT_CONFIG"
+                        whiptail --title "Aggiornato" --msgbox "Porta modificata nel file di configurazione. Ricordati di riavviare i servizi." 10 60
+                    fi
+                fi
+                ;;
+            "RESTART")
+                configure_and_start_services
+                ;;
+            "BACK")
+                break
+                ;;
+        esac
+    done
+}
+
+# ------------------------------------------------------------------------------
+# DASHBOARD IN BANNER WHIPTAIL (Non esce dall'app)
+# ------------------------------------------------------------------------------
+show_dashboard_banner() {
+    source "$PORT_CONFIG"
+    local LOCAL_IP=$(hostname -I | awk '{print $1}')
+    
+    # Rilevamento stato porte e servizi
+    local st_llama="Spento"
+    ss -tulpn | grep -q ":$LLAMACPP_PORT " && st_llama="In ascolto (Porta $LLAMACPP_PORT)"
+    local st_unsloth="Spento"
+    ss -tulpn | grep -q ":$UNSLOTH_PORT " && st_unsloth="In ascolto (Porta $UNSLOTH_PORT)"
+    local st_ollama="Spento"
+    ss -tulpn | grep -q ":$OLLAMA_PORT " && st_ollama="In ascolto (Porta $OLLAMA_PORT)"
+    local st_webui="Spento"
+    ss -tulpn | grep -q ":$OPENWEBUI_PORT " && st_webui="In ascolto (Porta $OPENWEBUI_PORT)"
+
+    local GPU_INFO="Nessuna GPU NVIDIA rilevata"
+    if command -v nvidia-smi &> /dev/null; then
+        GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader -i 0)
+    fi
+
+    local DASH_TEXT="=== HARDWARE & GPU ===\n• IP Locale : $LOCAL_IP\n• GPU       : $GPU_INFO\n\n=== STATO SERVIZI E PORTE ===\n• llama.cpp : $st_llama\n• Unsloth   : $st_unsloth\n• Ollama    : $st_ollama\n• Open WebUI: $st_webui\n\nTutti i servizi attivi operano in parallelo senza conflitti."
+
+    whiptail --title "Dashboard di Sistema - NVIDIA Manager" --msgbox "$DASH_TEXT" 20 75
+}
+
+# ------------------------------------------------------------------------------
+# BENCHMARK E MODELLI
 # ------------------------------------------------------------------------------
 run_benchmark() {
     clear
-    echo -e "${CYAN}====================================================================${NC}"
-    echo -e "${CYAN}                🏃 BENCHMARK GPU (llama-bench)                      ${NC}"
-    echo -e "${CYAN}====================================================================${NC}"
-    
     if [ ! -f "$BACKEND_DIR/llama.cpp/llama-bench" ]; then
-        echo -e "${RED}[ERRORE] llama-bench non trovato. Compila prima llama.cpp (Opzione 1).${NC}"
-        read -p "Premi INVIO per tornare al menu..."
+        whiptail --title "Errore" --msgbox "llama-bench non trovato. Compila prima llama.cpp." 10 60
         return
-    fi
-    
-    # Cerchiamo il primo modello GGUF disponibile
+    }
     local MODEL_PATH=$(find "$BACKEND_DIR/models" -name "*.gguf" | head -n 1)
-    
+    clear
     if [ -z "$MODEL_PATH" ]; then
-        echo -e "${YELLOW}[WARN] Nessun modello GGUF trovato in $BACKEND_DIR/models.${NC}"
-        echo -e "${YELLOW}Verrà utilizzato un test sintetico o base.${NC}"
         "$BACKEND_DIR/llama.cpp/llama-bench" -p 512,1024 -n 128
     else
-        echo -e "${GREEN}Modello rilevato: $(basename "$MODEL_PATH")${NC}"
-        echo -e "${YELLOW}Esecuzione dei test di prompt processing e generation...${NC}"
         "$BACKEND_DIR/llama.cpp/llama-bench" -m "$MODEL_PATH" -p 512,1024 -n 128
     fi
-    
-    echo -e "\n${GREEN}Benchmark completato.${NC}"
+    echo -ne "\nPremi INVIO per continuare..."
+    read -r
 }
 
-# ------------------------------------------------------------------------------
-# 5. GESTIONE MODELLI (Misto: GGUF + Ollama)
-# ------------------------------------------------------------------------------
 manage_models() {
-    local MENU_TITLE="Download & Model-Aware Tuning (GPU)"
-    local MODEL_CHOICE=$(whiptail --title "$MENU_TITLE" \
-        --menu "Seleziona un'operazione o un modello da scaricare:" 24 95 14 \
-        "OLLAMA" "Pull Modello tramite Ollama (Richiede Stack B)" \
-        "AA." "Scarica TUTTI i modelli GGUF          [Richiede ~160GB di spazio]" \
-        "00." "Inserisci URL Custom GGUF             [Da HuggingFace o link diretto]" \
-        "01." "Qwen2.5-3B-Instruct                   [GGUF - Min VRAM: 4GB]" \
-        "02." "Phi-3.5-mini-instruct                 [GGUF - Min VRAM: 4GB]" \
-        "03." "Qwen2.5-7B-Instruct                   [GGUF - Min VRAM: 8GB]" \
-        "04." "DeepSeek-R1-Distill-Qwen-7B           [GGUF - Min VRAM: 8GB]" \
-        "05." "Hermes-3-Llama-3.1-8B                 [GGUF - Min VRAM: 8GB]" \
-        "06." "Mistral-Nemo-Instruct (12B)           [GGUF - Min VRAM: 12GB]" \
-        "07." "Qwen2.5-14B-Instruct                  [GGUF - Min VRAM: 16GB]" \
-        "08." "Qwen2.5-32B-Instruct                  [GGUF - Min VRAM: 24GB]" \
-        "09." "DeepSeek-R1-Distill-Qwen-32B          [GGUF - Min VRAM: 24GB]" \
-        "10." "DeepSeek-R1-Distill-Llama-70B         [GGUF - Min VRAM: 48GB]" \
-        "11." "Qwen2.5-72B-Instruct                  [GGUF - Min VRAM: 48GB]" \
+    local MODEL_CHOICE=$(whiptail --title "Download & Tuning Modelli GPU" \
+        --menu "Seleziona la modalità di gestione modelli:" 18 70 4 \
+        "OLLAMA" "Pull modello tramite Ollama CLI" \
+        "GGUF" "Scarica modello GGUF da HuggingFace" \
         3>&1 1>&2 2>&3)
-        
     if [ $? -ne 0 ]; then return; fi
-    clear
-    
+
     if [ "$MODEL_CHOICE" == "OLLAMA" ]; then
-        local OLLAMA_MODEL=$(whiptail --title "Ollama Pull" --inputbox "Inserisci il nome del modello (es. llama3.1, qwen2.5, deepseek-r1):" 10 70 3>&1 1>&2 2>&3)
-        if [ $? -eq 0 ] && [ -n "$OLLAMA_MODEL" ]; then
-            echo -e "${YELLOW}Download tramite Ollama: $OLLAMA_MODEL${NC}"
-            ollama pull "$OLLAMA_MODEL"
+        M_NAME=$(whiptail --title "Ollama Pull" --inputbox "Inserisci il nome del modello (es. deepseek-r1, qwen2.5):" 10 60 3>&1 1>&2 2>&3)
+        if [ $? -eq 0 ] && [ -n "$M_NAME" ]; then
+            clear
+            ollama pull "$M_NAME"
+            echo -ne "\nPremi INVIO per continuare..."
+            read -r
         fi
-        return
+    elif [ "$MODEL_CHOICE" == "GGUF" ]; then
+        URL_GGUF=$(whiptail --title "Download GGUF" --inputbox "Inserisci URL diretto del file GGUF:" 10 65 3>&1 1>&2 2>&3)
+        if [ $? -eq 0 ] && [ -n "$URL_GGUF" ]; then
+            mkdir -p "$BACKEND_DIR/models"
+            cd "$BACKEND_DIR/models"
+            clear
+            wget -c --show-progress "$URL_GGUF"
+            echo -ne "\nPremi INVIO per continuare..."
+            read -r
+        fi
     fi
-    
-    mkdir -p "$BACKEND_DIR/models"
-    cd "$BACKEND_DIR/models"
-    # Logica di download wget dei GGUF (identica allo script precedente per 01..11)
-    # [...] Inserisci qui la logica dei link HuggingFace vista in V.1.1.1
-    echo -e "${YELLOW}Download del modello selezionato avviato in: $BACKEND_DIR/models${NC}"
-    # Dummy per sintesi
 }
 
 # ------------------------------------------------------------------------------
-# MENU INTERATTIVO TUI (Whiptail)
+# MENU PRINCIPALE TUI
 # ------------------------------------------------------------------------------
 if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.4.0)" \
-        --menu "\nSeleziona un'operazione:" 22 80 12 \
-        "A1" "Express Auto-Deploy (Stack A: Unsloth + llama.cpp)" \
-        "A2" "Express Auto-Deploy (Stack B: Ollama + Open WebUI)" \
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.0)" \
+        --menu "\nSeleziona un'operazione:" 22 80 11 \
+        "A" "Express Auto-Deploy (Tutto in un click)" \
         "1" "Compila llama.cpp (CUDA)" \
-        "2" "Installa Open WebUI (Python venv via uv) + Ollama" \
-        "3" "Configura & Avvia Servizi Systemd" \
-        "4" "Mostra Profilo Hardware & Servizi NVIDIA" \
-        "5" "Download & Tuning Modelli GPU (GGUF / Ollama)" \
-        "6" "Esegui Benchmark GPU (llama-bench)" \
-        "7" "Configura Sandbox (Node JS / Python)" \
-        "8" "Aggiorna Repository (Manager e Script)" \
-        "9" "Disinstalla Stack Homelab AI" \
-        "0" "Esci e Mostra Dashboard" \
+        "2" "Installa Open WebUI & Ollama" \
+        "3" "Configura & Avvia Servizi (Scelta Multipla Stack)" \
+        "4" "Gestione Porte & Stato Servizi Attivi" \
+        "5" "Mostra Dashboard di Sistema (Banner)" \
+        "6" "Download & Tuning Modelli GPU" \
+        "7" "Esegui Benchmark GPU (llama-bench)" \
+        "8" "Aggiorna Repository & Componenti" \
+        "9" "Disinstalla / Pulizia Completa" \
+        "0" "Esci al Menu Principale" \
         3>&1 1>&2 2>&3)
         
     if [ $? -ne 0 ]; then return_to_main; fi
 
-    clear
     case $CHOICE in
-        "A1") setup_xdg_fix; fix_apt_repos; setup_nvidia_stack; compile_llamacpp; install_unsloth_stack; setup_systemd_services ;;
-        "A2") setup_xdg_fix; fix_apt_repos; setup_nvidia_stack; install_ollama_webui; setup_systemd_services ;;
-        "1") compile_llamacpp ;;
+        "A")
+            setup_xdg_fix; fix_apt_repos; setup_nvidia_stack
+            compile_llamacpp; install_unsloth_stack; install_ollama_webui
+            configure_and_start_services
+            ;;
+        "1") setup_nvidia_stack; compile_llamacpp ;;
         "2") install_ollama_webui ;;
-        "3") setup_systemd_services ;;
-        "4") # La vecchia system_dashboard con l'aggiunta di Open WebUI su 8081 e Ollama su 11434
-             echo -e "${GREEN}DASHBOARD HARDWARE E SERVIZI${NC}"
-             nvidia-smi
-             ss -tulpn | grep -E ":8080|:8081|:11434|:8888"
-             ;;
-        "5") manage_models ;;
-        "6") run_benchmark ;;
-        "7") # Ereditato (configure_sandbox)
-             echo "Configurazione Sandbox in corso..." ;;
-        "8") # Pull git e uv pip install -U open-webui
-             echo "Aggiornamento stack..." ;;
-        "9") # Stop & Remove systemd di A e B
-             echo "Disinstallazione in corso..." ;;
+        "3") configure_and_start_services ;;
+        "4") manage_ports ;;
+        "5") show_dashboard_banner ;;
+        "6") manage_models ;;
+        "7") run_benchmark ;;
+        "8") git pull origin main 2>/dev/null || true ;;
+        "9") 
+            if (whiptail --title "Conferma" --yesno "Vuoi rimuovere i servizi e ripulire lo stack?" 10 60); then
+                systemctl stop homelab-ai-backend unsloth-studio open-webui ollama 2>/dev/null || true
+                rm -f /etc/systemd/system/homelab-ai-backend.service /etc/systemd/system/unsloth-studio.service /etc/systemd/system/open-webui.service
+                systemctl daemon-reload
+                whiptail --title "Completato" --msgbox "Servizi rimossi con successo." 8 50
+            fi
+            ;;
         "0") return_to_main ;;
     esac
-    
-    echo -ne "\n${YELLOW}Premi INVIO per tornare al menu NVIDIA...${NC}"
-    read -r
 done
