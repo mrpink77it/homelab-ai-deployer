@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Homelab AI Deployer - Manager Script (NVIDIA)
+# Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu & Debian Support)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.5.8 (Fixed Post-Keyring APT Update)
+# Version: V.1.6.0 (Universal Ubuntu/Debian CUDA Stack)
 # ==============================================================================
 
 set -e
@@ -61,21 +61,39 @@ return_to_main() {
 
 setup_nvidia_stack() {
     if ! command -v nvcc &> /dev/null; then
-        UBUNTU_VER=$(lsb_release -rs | tr -d '.')
-        
+        # Rilevamento automatico OS (Ubuntu o Debian)
+        if [ -f /etc/os-release ]; then
+            . /etc/os-release
+            OS_ID=$ID
+            OS_VER=$VERSION_ID
+        fi
+
         apt update -qq && apt install -y pciutils kmod build-essential curl wget git lsb-release
-        
+
         if [ ! -f /etc/apt/sources.list.d/cuda.list ]; then
-            wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb
+            if [ "$OS_ID" = "ubuntu" ]; then
+                UBUNTU_VER=$(echo "$OS_VER" | tr -d '.')
+                KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/cuda-keyring_1.1-1_all.deb"
+            elif [ "$OS_ID" = "debian" ]; then
+                KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/debian${OS_VER}/x86_64/cuda-keyring_1.1-1_all.deb"
+            else
+                # Fallback predefinito su Ubuntu 24.04 se l'OS non è riconosciuto esplicitamente
+                KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb"
+            fi
+
+            wget "$KEYRING_URL" -O /tmp/cuda-keyring.deb
             dpkg -i /tmp/cuda-keyring.deb
             rm -f /tmp/cuda-keyring.deb
         fi
 
-        # AGGIORNAMENTO FORZATO: Ricarica i repository inclusi nel keyring di NVIDIA
-        echo -e "${CYAN}Aggiornamento indici APT dai repository NVIDIA...${NC}"
+        echo -e "${CYAN}Aggiornamento indici APT dai repository NVIDIA ($OS_ID $OS_VER)...${NC}"
         apt update -y
 
-        apt install -y cuda-toolkit pciutils kmod build-essential
+        # Installazione robusta del toolkit/driver
+        if ! apt install -y cuda pciutils kmod build-essential; then
+            echo -e "${YELLOW}[WARNING] Installazione del metapacchetto 'cuda' fallita, tentativo con 'cuda-toolkit'...${NC}"
+            apt install -y cuda-toolkit pciutils kmod build-essential
+        fi
 
         # Rileva dinamicamente la cartella CUDA installata in /usr/local/
         CUDA_DIR=$(ls -d /usr/local/cuda-* 2>/dev/null | head -n 1)
@@ -217,7 +235,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# GESTIONE PORTE E STATO ATTIVO (Con Cancel uniforme)
+# GESTIONE PORTE E STATO ATTIVO
 # ------------------------------------------------------------------------------
 manage_ports() {
     while true; do
@@ -323,7 +341,7 @@ run_benchmark() {
 }
 
 # ------------------------------------------------------------------------------
-# GESTIONE, DOWNLOAD E ATTIVAZIONE MODELLI (MENU 6 - Con Cancel uniforme)
+# GESTIONE MODELLI
 # ------------------------------------------------------------------------------
 manage_models() {
     while true; do
@@ -374,7 +392,7 @@ manage_models() {
                     
                     whiptail --title "Successo" --msgbox "$STATUS_MSG" 10 60
                 else
-                    whiptail --title "Errore" --msgbox "Il servizio systemd 'homelab-ai-backend.service' não esiste.\nConfigura prima i servizi tramite il menu principale." 10 60
+                    whiptail --title "Errore" --msgbox "Il servizio systemd 'homelab-ai-backend.service' non esiste." 10 60
                 fi
                 ;;
             "OLLAMA_LIST")
@@ -418,7 +436,7 @@ manage_models() {
 if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.8)" \
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.6.0)" \
         --menu "\nSeleziona un'operazione:" 22 80 11 \
         "A" "Express Auto-Deploy (Tutto in un click)" \
         "1" "Compila llama.cpp (CUDA)" \
