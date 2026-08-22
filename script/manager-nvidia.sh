@@ -301,13 +301,13 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 2: VERIFICA STATO (Aggiornata e Strutturata)
+# OPZIONE 2: VERIFICA STATO
 # ------------------------------------------------------------------------------
 check_status() {
     export PATH=/usr/local/cuda-13.2/bin${PATH:+:${PATH}}
     clear
     echo -e "${BLUE}====================================================================${NC}"
-    echo -e "${BLUE}                 DIAGNOSTICA E STATO DEL SISTEMA                    ${NC}"
+    echo -e "${BLUE}                 DIAGNOSTICA E STATO DEL SISTEMA                   ${NC}"
     echo -e "${BLUE}====================================================================${NC}"
 
     # 1. INFO DI SISTEMA E RISORSE HW
@@ -407,7 +407,7 @@ check_status() {
 # ------------------------------------------------------------------------------
 update_components() {
     echo -e "${BLUE}====================================================${NC}"
-    echo -e "${BLUE}               AGGIORNAMENTO COMPONENTI             ${NC}"
+    echo -e "${BLUE}                AGGIORNAMENTO COMPONENTI              ${NC}"
     echo -e "${BLUE}====================================================${NC}"
 
     if ! command -v git &> /dev/null; then
@@ -479,7 +479,7 @@ update_components() {
 # ------------------------------------------------------------------------------
 configure_sandbox() {
     echo -e "${BLUE}====================================================${NC}"
-    echo -e "${BLUE}               CONFIGURAZIONE SANDBOX               ${NC}"
+    echo -e "${BLUE}                CONFIGURAZIONE SANDBOX                ${NC}"
     echo -e "${BLUE}====================================================${NC}"
 
     if [ ! -f /root/.ssh/id_ed25519 ]; then
@@ -521,31 +521,78 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 5: DISINSTALLA
+# OPZIONE 5: DISINSTALLA / PURGE COMPLETO
 # ------------------------------------------------------------------------------
-uninstall_services() {
-    echo -e "${RED}====================================================${NC}"
-    echo -e "${RED}                DISINSTALLAZIONE STACK             ${NC}"
-    echo -e "${RED}====================================================${NC}"
-    echo -ne "${YELLOW}Sei sicuro di voler rimuovere tutti i servizi systemd e le directory? (s/N): ${NC}"
-    read -r CONFIRM
+remove_core_services() {
+    echo -e "${YELLOW}---> Arresto e disattivazione servizi systemd...${NC}"
+    for srv in homelab-ai-backend unsloth-studio opencode code-runner; do
+        systemctl stop "$srv.service" 2>/dev/null || true
+        systemctl disable "$srv.service" 2>/dev/null || true
+        rm -f "/etc/systemd/system/$srv.service"
+    done
+    systemctl daemon-reload
 
-    if [[ "$CONFIRM" =~ ^[Ss]$ ]]; then
-        echo -e "${YELLOW}---> Arresto e disattivazione servizi systemd...${NC}"
-        for srv in homelab-ai-backend unsloth-studio opencode code-runner; do
-            systemctl stop "$srv.service" 2>/dev/null || true
-            systemctl disable "$srv.service" 2>/dev/null || true
-            rm -f "/etc/systemd/system/$srv.service"
-        done
-        systemctl daemon-reload
+    echo -e "${YELLOW}---> Pulizia directory di lavoro e virtualenv...${NC}"
+    rm -rf "$CODE_RUNNER_DIR" "$OPENCODE_DIR" "$UNSLOTH_ENV" "$TARGET_REPO_DIR" "/opt/homelab-ai"
+    echo -e "${GREEN}[OK] Pulizia servizi e directory completata.${NC}"
+}
 
-        echo -e "${YELLOW}---> Pulizia directory di lavoro e virtualenv...${NC}"
-        rm -rf "$CODE_RUNNER_DIR" "$OPENCODE_DIR" "$UNSLOTH_ENV" "$TARGET_REPO_DIR" "/opt/homelab-ai"
+purge_system_dependencies() {
+    echo -e "${YELLOW}---> Rimozione Driver NVIDIA, CUDA Toolkit e pacchetti correlati...${NC}"
+    apt-get purge -y "cuda*" "*nvidia*" libnvidia* || true
+    apt-get autoremove -y --purge
 
-        echo -e "${GREEN}[OK] Disinstallazione completata con successo.${NC}"
-    else
-        echo -e "${BLUE}Operazione annullata.${NC}"
+    echo -e "${YELLOW}---> Rimozione file residui e chiavi repository...${NC}"
+    rm -rf /usr/local/cuda*
+    rm -f /etc/apt/sources.list.d/cuda*.list
+    rm -f /etc/apt/sources.list.d/nvidia*.list
+    rm -f /etc/ld.so.conf.d/cuda.conf
+    ldconfig 2>/dev/null || true
+
+    if grep -q "/usr/local/cuda" /root/.bashrc; then
+        echo -e "${YELLOW}---> Ripristino .bashrc (rimozione path CUDA)...${NC}"
+        sed -i '/\/usr\/local\/cuda/d' /root/.bashrc
     fi
+    
+    echo -e "${GREEN}[OK] Purge di sistema NVIDIA/CUDA completato.${NC}"
+}
+
+uninstall_services() {
+    clear
+    echo -e "${RED}====================================================${NC}"
+    echo -e "${RED}         DISINSTALLAZIONE E PULIZIA STACK           ${NC}"
+    echo -e "${RED}====================================================${NC}"
+    echo -e " 1) ${YELLOW}Disinstalla Solo Servizi${NC} (Mantiene Driver NVIDIA e CUDA)"
+    echo -e " 2) ${RED}Purge Completo${NC} (Rimuove TUTTO: Servizi, Driver NVIDIA, CUDA)"
+    echo -e " 3) ${BLUE}Annulla${NC}"
+    echo -e "${RED}====================================================${NC}"
+    echo -ne "Seleziona un'opzione [1-3]: "
+    read -r UN_CHOICE
+
+    case $UN_CHOICE in
+        1)
+            echo -ne "${YELLOW}Sei sicuro di voler rimuovere solo i servizi AI e le directory? (s/N): ${NC}"
+            read -r CONFIRM
+            if [[ "$CONFIRM" =~ ^[Ss]$ ]]; then
+                remove_core_services
+            else
+                echo -e "${BLUE}Operazione annullata.${NC}"
+            fi
+            ;;
+        2)
+            echo -ne "${RED}ATTENZIONE: Verranno disinstallati anche i driver NVIDIA e CUDA Toolkit! Continuare? (s/N): ${NC}"
+            read -r CONFIRM
+            if [[ "$CONFIRM" =~ ^[Ss]$ ]]; then
+                remove_core_services
+                purge_system_dependencies
+            else
+                echo -e "${BLUE}Operazione annullata.${NC}"
+            fi
+            ;;
+        3|*)
+            echo -e "${BLUE}Operazione annullata.${NC}"
+            ;;
+    esac
 }
 
 # ------------------------------------------------------------------------------
@@ -560,7 +607,7 @@ show_menu() {
     echo -e " 2) ${YELLOW}VERIFICA Stato${NC}     (Check Servizi Systemd, Porte e GPU CUDA)"
     echo -e " 3) ${BLUE}AGGIORNA Componenti${NC} (Git pull, llama.cpp, VENV Unsloth, API)"
     echo -e " 4) ${YELLOW}CONFIGURA Sandbox${NC}   (Setup Chiavi SSH & Test Endpoint API)"
-    echo -e " 5) ${RED}DISINSTALLA${NC}        (Rimozione Unità Systemd e Directory)"
+    echo -e " 5) ${RED}DISINSTALLA / PURGE${NC} (Rimozione Servizi o Pulizia Completa)"
     echo -e " 6) Uscita"
     echo -e "${BLUE}====================================================${NC}"
     echo -ne "Seleziona un'opzione [1-6]: "
