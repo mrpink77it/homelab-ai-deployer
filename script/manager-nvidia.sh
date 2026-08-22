@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.5.7 (Fixed NVIDIA Keyring & CUDA Repository Setup)
+# Version: V.1.5.8 (Fixed Post-Keyring APT Update)
 # ==============================================================================
 
 set -e
@@ -69,8 +69,11 @@ setup_nvidia_stack() {
             wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb
             dpkg -i /tmp/cuda-keyring.deb
             rm -f /tmp/cuda-keyring.deb
-            apt update -qq
         fi
+
+        # AGGIORNAMENTO FORZATO: Ricarica i repository inclusi nel keyring di NVIDIA
+        echo -e "${CYAN}Aggiornamento indici APT dai repository NVIDIA...${NC}"
+        apt update -y
 
         apt install -y cuda-toolkit pciutils kmod build-essential
 
@@ -371,7 +374,7 @@ manage_models() {
                     
                     whiptail --title "Successo" --msgbox "$STATUS_MSG" 10 60
                 else
-                    whiptail --title "Errore" --msgbox "Il servizio systemd 'homelab-ai-backend.service' non esiste.\nConfigura prima i servizi tramite il menu principale." 10 60
+                    whiptail --title "Errore" --msgbox "Il servizio systemd 'homelab-ai-backend.service' não esiste.\nConfigura prima i servizi tramite il menu principale." 10 60
                 fi
                 ;;
             "OLLAMA_LIST")
@@ -415,7 +418,7 @@ manage_models() {
 if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.7)" \
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.8)" \
         --menu "\nSeleziona un'operazione:" 22 80 11 \
         "A" "Express Auto-Deploy (Tutto in un click)" \
         "1" "Compila llama.cpp (CUDA)" \
