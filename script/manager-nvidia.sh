@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.1.0
+# Version: V.1.1.1
 # ==============================================================================
 
 set -e
@@ -412,27 +412,88 @@ system_dashboard() {
 # 3. GESTIONE MODELLI
 # ------------------------------------------------------------------------------
 manage_models() {
-    clear
-    echo -e "${YELLOW}====================================================${NC}"
-    echo -e "${YELLOW}         🧠 GESTIONE MODELLI (Hugging Face)         ${NC}"
-    echo -e "${YELLOW}====================================================${NC}"
-    
     mkdir -p "$BACKEND_DIR/models"
-    cd "$BACKEND_DIR/models"
     
-    echo -e "I modelli verranno salvati in: ${CYAN}$BACKEND_DIR/models${NC}\n"
-    echo -ne "Inserisci l'URL di download diretto del modello GGUF: "
-    read -r MODEL_URL
+    local MENU_TITLE="Download & Model-Aware Tuning"
     
-    if [ -n "$MODEL_URL" ]; then
-        echo -e "\n${GREEN}Inizio il download del modello...${NC}"
-        wget -c --show-progress "$MODEL_URL"
+    local MODEL_CHOICE=$(whiptail --title "$MENU_TITLE" \
+        --menu "Seleziona un modello da scaricare nel backend:" 24 95 14 \
+        "AA." "Scarica TUTTI i modelli             [Richiede ~160GB di spazio]" \
+        "00." "Inserisci URL Custom                [Da HuggingFace o link diretto]" \
+        "01." "Qwen2.5-3B-Instruct                 [Scaricabile - Min RAM: 4GB]" \
+        "02." "Phi-3.5-mini-instruct               [Scaricabile - Min RAM: 6GB]" \
+        "03." "Qwen2.5-7B-Instruct                 [Scaricabile - Min RAM: 8GB]" \
+        "04." "DeepSeek-R1-Distill-Qwen-7B         [Scaricabile - Min RAM: 8GB]" \
+        "05." "Hermes-3-Llama-3.1-8B               [Scaricabile - Min RAM: 8GB]" \
+        "06." "Mistral-Nemo-Instruct (12B)         [Scaricabile - Min RAM: 16GB]" \
+        "07." "Qwen2.5-14B-Instruct                [Scaricabile - Min RAM: 16GB]" \
+        "08." "Qwen2.5-32B-Instruct                [Scaricabile - Min RAM: 32GB]" \
+        "09." "DeepSeek-R1-Distill-Qwen-32B        [Scaricabile - Min RAM: 32GB]" \
+        "10." "DeepSeek-R1-Distill-Llama-70B       [Scaricabile - Min RAM: 64GB]" \
+        "11." "Qwen2.5-72B-Instruct                [Scaricabile - Min RAM: 64GB]" \
+        3>&1 1>&2 2>&3)
         
-        echo -e "\n${GREEN}[OK] Download completato.${NC}"
-        echo -e "${YELLOW}Ricordati di aggiornare il file homelab-ai-backend.service con il nuovo nome del modello.${NC}"
-    else
-        echo -e "${RED}URL non inserito. Annullato.${NC}"
+    if [ $? -ne 0 ]; then
+        return
     fi
+    
+    clear
+    echo -e "${CYAN}Directory di destinazione: $BACKEND_DIR/models${NC}"
+    cd "$BACKEND_DIR/models"
+
+    download_gguf() {
+        local url=$1
+        local file_name=$(basename "$url")
+        if [ -n "$url" ]; then
+            echo -e "\n${GREEN}Inizio il download di: $file_name...${NC}"
+            wget -c --show-progress "$url"
+            echo -e "${GREEN}[OK] Download di $file_name completato.${NC}"
+        fi
+    }
+
+    # URL Ufficiali e Community per GGUF (Modelli Q4_K_M per stabilità e RAM)
+    local URL_01="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
+    local URL_02="https://huggingface.co/microsoft/Phi-3.5-mini-instruct-gguf/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf"
+    local URL_03="https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf"
+    local URL_04="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf"
+    local URL_05="https://huggingface.co/NousResearch/Hermes-3-Llama-3.1-8B-GGUF/resolve/main/Hermes-3-Llama-3.1-8B.Q4_K_M.gguf"
+    local URL_06="https://huggingface.co/bartowski/Mistral-Nemo-Instruct-2407-GGUF/resolve/main/Mistral-Nemo-Instruct-2407-Q4_K_M.gguf"
+    local URL_07="https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q4_k_m.gguf"
+    local URL_08="https://huggingface.co/Qwen/Qwen2.5-32B-Instruct-GGUF/resolve/main/qwen2.5-32b-instruct-q4_k_m.gguf"
+    local URL_09="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf"
+    local URL_10="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Llama-70B-GGUF/resolve/main/DeepSeek-R1-Distill-Llama-70B-Q4_K_M.gguf"
+    local URL_11="https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-GGUF/resolve/main/qwen2.5-72b-instruct-q4_k_m.gguf"
+
+    case $MODEL_CHOICE in
+        "AA.")
+            echo -e "${YELLOW}ATTENZIONE: Verranno scaricati TUTTI i modelli (~160GB).${NC}"
+            download_gguf "$URL_01"; download_gguf "$URL_02"; download_gguf "$URL_03"
+            download_gguf "$URL_04"; download_gguf "$URL_05"; download_gguf "$URL_06"
+            download_gguf "$URL_07"; download_gguf "$URL_08"; download_gguf "$URL_09"
+            download_gguf "$URL_10"; download_gguf "$URL_11"
+            ;;
+        "00.")
+            CUST_URL=$(whiptail --title "URL Custom" --inputbox "Inserisci l'URL di download diretto del modello GGUF:" 10 70 3>&1 1>&2 2>&3)
+            if [ $? -eq 0 ] && [ -n "$CUST_URL" ]; then
+                download_gguf "$CUST_URL"
+            else
+                echo -e "${RED}Nessun URL inserito. Annullato.${NC}"
+            fi
+            ;;
+        "01.") download_gguf "$URL_01" ;;
+        "02.") download_gguf "$URL_02" ;;
+        "03.") download_gguf "$URL_03" ;;
+        "04.") download_gguf "$URL_04" ;;
+        "05.") download_gguf "$URL_05" ;;
+        "06.") download_gguf "$URL_06" ;;
+        "07.") download_gguf "$URL_07" ;;
+        "08.") download_gguf "$URL_08" ;;
+        "09.") download_gguf "$URL_09" ;;
+        "10.") download_gguf "$URL_10" ;;
+        "11.") download_gguf "$URL_11" ;;
+    esac
+
+    echo -e "\n${YELLOW}Ricordati di aggiornare il file homelab-ai-backend.service con il nuovo nome del modello e ricaricare il demone (systemctl restart homelab-ai-backend).${NC}"
 }
 
 # ------------------------------------------------------------------------------
