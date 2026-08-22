@@ -204,7 +204,8 @@ homelab-ai-deployer/
 │   ├── purge-homelab-ai.sh
 │   ├── sandbox_setup.sh
 │   ├── setup_jupyter.sh
-│   └── uninstall.sh
+│   ├── purge-homelab-ai.sh                 # Root-level environment purge tool
+│   └── uninstall.sh                        # Root-level service removal tool
 ├── README.md                           # General documentation (Italian)
 ├── README_ENG.md                       # General documentation (English)
 ├── install.sh                          # Quick start script
@@ -212,7 +213,6 @@ homelab-ai-deployer/
 ├── manager-amd.sh                      # TUI for AMD Controller management
 ├── manager-cpu.sh                      # TUI for CPU fallback management
 ├── manager-fine-tuning-nvidia.sh       # TUI for Fine-Tuning on NVIDIA
-├── manager-nvidia.sh                   # TUI for NVIDIA Controller management
-├── purge-homelab-ai.sh                 # Root-level environment purge tool
-└── uninstall.sh                        # Root-level service removal tool
+└── manager-nvidia.sh                   # TUI for NVIDIA Controller management
+
 ```
