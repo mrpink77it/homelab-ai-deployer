@@ -4,13 +4,13 @@
 ![Language](https://img.shields.io/badge/Language-Bash-4EAA25)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
-> **`mrpink77it/homelab-ai-deployer`** è uno script Bash automatizzato ("zero-config") progettato per configurare, gestire e distribuire un ambiente completo di AI Generativa, LLM Fine-Tuning e sviluppo su macchine Linux, server Bare-Metal e container **Proxmox LXC**.
+> **`mrpink77it/homelab-ai-deployer`** è una suite di script Bash automatizzati ("zero-config") progettata per configurare, gestire e distribuire un ambiente completo di AI Generativa (Inferenza), LLM Fine-Tuning e sviluppo nativo su macchine Linux, server Bare-Metal e container **Proxmox LXC**. 
 
 ---
 
-## Architecture & Hardware Compatibility
+## 🏗️ Architecture & Hardware Compatibility
 
-Il progetto supporta un'architettura **Multi-Backend** in grado di rilevare automaticamente l'hardware grafico installato e selezionare lo stack software ottimale:
+Il progetto supporta un'architettura **Multi-Backend** in grado di rilevare automaticamente l'hardware installato e selezionare lo stack software ottimale, includendo un fallback nativo per sistemi privi di GPU:
 
 ```text
                                +-----------------------+
@@ -18,21 +18,20 @@ Il progetto supporta un'architettura **Multi-Backend** in grado di rilevare auto
                                | (Hardware Discovery)  |
                                +-----------+-----------+
                                            |
-                    +----------------------+----------------------+
-                    |                                             |
-                    v                                             v
-         [ GPU NVIDIA Rilevata ]                        [ GPU AMD Rilevata ]
-                    |                                             |
-            Esegue manager.sh                             Esegue manager-amd.sh
-                    |                                             |
-             +--------------+                +--------------------+--------------------+
-             | CUDA / vLLM  |                |                    |                    |
-             +--------------+                v                    v                    v
-                                     [ ROCm Ufficiale ]   [ Vulkan / llama.cpp ]   [ ROCm Experimental ]
-                                     (RX 6000/7000 Series)   (RX 5000 / RDNA1)      (RX 5700 XT Override)
+     +-------------------------------------+-------------------------------------+
+     |                                     |                                     |
+     v                                     v                                     v
+[ GPU NVIDIA ]                        [ GPU AMD ]                      [ Nessuna GPU / CPU ]
+     |                                     |                                     |
+Esegue manager.sh                   Esegue manager-amd.sh                  Esegue manager-cpu.sh
+     |                                     |                                     |
+ +---+---+            +--------------------+--------------------+            +---+---+
+ | CUDA  |            |                    |                    |            | CPU   |
+ | vLLM  |            v                    v                    v            | AVX2  |
+ +-------+    [ ROCm Ufficiale ]   [ Vulkan / llama.cpp ]   [ ROCm Exp ]     +-------+
 ```
 
-### Matrice di Supporto GPU
+### Matrice di Supporto
 
 | Produttore | Architettura / Schede | Backend Selezionato | Note & Performance |
 | :--- | :--- | :--- | :--- |
@@ -40,228 +39,167 @@ Il progetto supporta un'architettura **Multi-Backend** in grado di rilevare auto
 | **AMD** | RDNA 2 / RDNA 3 (RX 6000 / 7000) | **ROCm Ufficiale** | Supporto nativo bare-metal via PyTorch ROCm (`rocm-hip-sdk`). |
 | **AMD** | RDNA 1 (RX 5000 / 5700 XT) | **Vulkan (llama.cpp)** | **Raccomandato:** Massima stabilità via API Vulkan senza rischio crash/OOM. |
 | **AMD** | RDNA 1 (RX 5700 / 5700 XT) | **ROCm Experimental** | Utilizza l'override `HSA_OVERRIDE_GFX_VERSION=10.3.0` per PyTorch. |
+| **CPU** | x86_64 / ARM64 (Intel/AMD) | **CPU (llama.cpp)** | Fallback universale. Inferenza pura su RAM di sistema (dipendente dalle istruzioni AVX2/AVX512). |
 
 ---
 
-## Avvio Rapido
+## 🚀 Avvio Rapido
 
 ### Setup del Controller AI (Host Principale)
 
-Copiare ed incollare questo comando per eseguire l'installazione. Eseguire come root (su) o super user (sudo)
+Copia ed incolla questo comando per eseguire l'installazione. Eseguire come root (`su`) o super user (`sudo`):
 
 ```bash
-wget -q https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/install.sh && chmod +x install.sh &&  ./install.sh
-
-'''
-
+wget -q [https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/install.sh](https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/install.sh) && chmod +x install.sh && ./install.sh
 ```
 
 ---
 
-## Architettura Sandbox & Provisioning (`sandbox_setup.sh`)
+## 🎛️ Funzionamento degli Installer (Manager Scripts)
 
-L'architettura separa nettamente il **Controller AI** (dove girano i modelli, le interfacce e la GPU) dal **Nodo Sandbox** (LXC/VM separata) dove viene eseguito il codice generato dall'AI in un contesto confinato.
+In base all'hardware rilevato da `main.sh`, verrà avviata l'interfaccia di gestione (TUI basata su `whiptail`) specifica per il tuo sistema. Tutti i manager offrono un'interfaccia uniforme ma applicano configurazioni specifiche sotto il cofano.
+
+### 🟢 Menu NVIDIA (`manager.sh`)
+* **`1) INSTALLA Servizi`**: Installazione completa dei driver proprietari, CUDA Toolkit, e deploy nativo di Unsloth, OpenCode AI, e frontend AI.
+* **`2) VERIFICA Stato & Dashboard`**: Monitoraggio dei servizi `systemd` in tempo reale e convalida dell'accelerazione hardware CUDA via PyTorch.
+* **`3) GESTIONE Modelli`**: Interfaccia per il download automatizzato dei modelli GGUF/Safetensors dai repository HuggingFace.
+* **`4) AGGIORNA Componenti`**: Git pull e rebuild degli ambienti virtuali (`uv`) per tutti i tool AI installati.
+* **`5) CONFIGURA Sandbox`**: Helper per il test dell'endpoint API remota e associazione chiavi SSH.
+* **`6) DISINSTALLA`**: Purge totale di directory, cache e rimozione dei servizi `systemd`.
+
+### 🔴 Menu AMD (`manager-amd.sh`)
+Integra in fase d'installazione la selezione guidata dello stack software AMD:
+* **`1) INSTALLA Servizi`**: Richiede la scelta dell'accelerazione:
+  1. *ROCm Ufficiale*: Installa `rocm-hip-sdk` (consigliato per RX 6000/7000).
+  2. *Vulkan (llama.cpp)*: Compila i binari con accelerazione `GGML_VULKAN=1` (stabilità massima per RDNA 1).
+  3. *ROCm Sperimentale*: Applica hack ambientali per forzare il supporto PyTorch su schede legacy.
+* *(Le restanti opzioni 2-6 replicano le medesime logiche di gestione, verifica e disinstallazione del manager NVIDIA, adattate ai tool ROCm/Vulkan).*
+
+### 🔵 Menu CPU (`manager-cpu.sh`)
+Versione ottimizzata per ambienti privi di acceleratori dedicati (es. Mini-PC, NUC, server basici):
+* **`1) INSTALLA Servizi`**: Compila il backend di inferenza sfruttando esclusivamente OpenBLAS e le istruzioni CPU vettoriali native (AVX/AVX2). Non installa driver GPU pesanti, mantenendo il sistema leggero.
+* Offre le medesime funzioni di gestione modelli, controllo stato servizi e associazione Sandbox degli altri manager, limitando l'esecuzione ai limiti della RAM di sistema.
+
+---
+
+## 🔌 Porte di Rete e Servizi Systemd
+
+L'intero ecosistema è orchestrato nativamente (senza Docker) per evitare overhead. I processi sono isolati tramite file Unit di `systemd` e le porte sono rigorosamente separate per impedire conflitti (es. errore `[Errno 98]`).
+
+| Servizio / Tool | Porta | Demone Systemd | Descrizione |
+| :--- | :--- | :--- | :--- |
+| **AI Backend** | `8080` | `homelab-ai-backend.service` | Motore di inferenza (`llama-server`) in binding su `0.0.0.0` |
+| **AI Frontend** | `3000` | `homelab-ai-frontend.service` | Open WebUI (variabili d'ambiente `WEBUI_PORT` forzate) |
+| **Unsloth Studio** | `8888` | `unsloth-studio.service` | Interfaccia dedicata alle operazioni di Fine-Tuning LLM |
+| **JupyterLab** | `8889` | `jupyter.service` | Ambiente Data Science (scala dinamicamente se porta occupata) |
+| **OpenCode AI** | `8000` | `opencode.service` | Piattaforma di sviluppo assistita da AI |
+| **Code Runner** | `9000` | `code-runner.service` | API Endpoint locale per il proxy dell'esecuzione remota |
+
+---
+
+## 🛡️ Architettura Sandbox & Provisioning
+
+L'architettura separa il **Controller AI** (dove girano i modelli e le GUI) dal **Nodo Sandbox** (LXC/VM separata) dove viene eseguito il codice generato in un contesto confinato per ragioni di sicurezza.
 
 ```text
-+---------------------------------+              SSH              +---------------------------------+
-|          CONTROLLER AI          |------------------------------>|          SANDBOX LXC/VM         |
-|  - Unsloth Studio (Porta 8888)  |   Exec: python3 -c "..."      |  - Configurato da               |
-|  - OpenCode AI    (Porta 8000)  |                               |    sandbox_setup.sh             |
-|  - Code Runner    (Porta 9000)  |<------------------------------|  - Python 3 / OpenSSH             |
-+---------------------------------+        stdout / stderr        +---------------------------------+
++---------------------------------+             SSH             +---------------------------------+
+|          CONTROLLER AI          |---------------------------->|          SANDBOX LXC/VM         |
+|  - OpenCode AI    (Porta 8000)  |  Exec: python3 -c "..."     |  - Configurato da               |
+|  - Code Runner    (Porta 9000)  |<----------------------------|    sandbox_setup.sh             |
++---------------------------------+       stdout / stderr       +---------------------------------+
 ```
 
-### Configurazione del Nodo Sandbox (In 2 Passaggi)
+### Configurazione del Nodo Sandbox
 
-Per predisporre un nuovo container LXC o VM da utilizzare come Sandbox isolata:
-
-#### 1. Prepara il Nodo Sandbox
-Esegui lo script `sandbox_setup.sh` all'interno del container/VM destinato a fare da Sandbox per installare le dipendenze minimali (Python 3, OpenSSH Server) e configurare le regole SSH:
-
-```bash
-# Esegui sulla macchina Sandbox:
-curl -fsSL [https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/sandbox_setup.sh](https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/sandbox_setup.sh) | sudo bash
-```
-
-#### 2. Associa Controller -> Sandbox
-Dal Controller AI, genera ed invia la chiave SSH verso l'IP della Sandbox:
-
-```bash
-# 1. Genera la chiave SSH sul Controller (se non presente)
-ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519
-
-# 2. Autorizza la chiave sul nodo Sandbox
-ssh-copy-id -i /root/.ssh/id_ed25519.pub root@<IP_SANDBOX>
-
-# 3. Test di esecuzione via API Code Runner (:9000)
-curl -X POST http://localhost:9000/execute \
-  -H "Content-Type: application/json" \
-  -d '{
-    "code": "import sys, platform; print(f\"Sandbox attiva! OS: {platform.system()} - Python: {sys.version}\")",
-    "sandbox_ip": "<IP_SANDBOX>"
-  }'
-```
+1. **Prepara il Nodo Sandbox:** Esegui lo script direttamente nel container/VM destinato a fare da esecutore isolato:
+   ```bash
+   curl -fsSL [https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/sandbox_setup.sh](https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/sandbox_setup.sh) | sudo bash
+   ```
+2. **Associa Controller -> Sandbox:** Usa il gestore (es. opzione 5 nel menu) oppure genera e invia manualmente la chiave SSH:
+   ```bash
+   ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519
+   ssh-copy-id -i /root/.ssh/id_ed25519.pub root@<IP_SANDBOX>
+   ```
 
 ---
 
-## Funzionamento degli Installer (`manager.sh` / `manager-amd.sh`)
+## 💾 Gestione Storage e Directory
 
-In base all'hardware rilevato da `main.sh`, verrà avviata l'interfaccia di gestione specifica. Entrambi gli script offrono la medesima struttura TUI a menu per la gestione completa dell'ambiente.
+Per evitare di esaurire lo spazio sul disco root dell'LXC/VM, il filesystem è standardizzato:
 
-### Menu NVIDIA (`manager.sh`)
-* **`1) INSTALLA Servizi`**: Installazione automatica completa (Driver GPU, CUDA Toolkit, Unsloth, OpenCode AI, Code Runner API).
-* **`2) VERIFICA Stato`**: Controllo dello stato dei servizi `systemd` e della disponibilità GPU via PyTorch/CUDA.
-* **`3) AGGIORNA Componenti`**: Git pull e aggiornamento dipendenze per OpenCode AI e Unsloth.
-* **`4) CONFIGURA Sandbox`**: Helper interattivo per la gestione ed il test dell'endpoint API remota.
-* **`5) DISINSTALLA`**: Rimozione completa delle directory, configurazioni ed unità `systemd`.
-
-### Menu AMD (`manager-amd.sh`)
-Offre un menu TUI del tutto speculare a `manager.sh` (Installazione, Verifica, Aggiornamento, Sandbox, Disinstallazione), integrando in fase d'installazione la selezione guidata del backend per GPU AMD:
-
-* **`1) INSTALLA Servizi`**: Avvia l'installatore interattivo chiedendo di scegliere lo stack software desiderato prima di distribuire Unsloth, OpenCode AI e Code Runner:
-  1. **ROCm Ufficiale:** Installa `rocm-hip-sdk` e la build PyTorch ROCm ufficiale (consigliato per serie RX 6000/7000).
-  2. **Vulkan (llama.cpp):** Compila nativamente `llama.cpp` con accelerazione `GGML_VULKAN=1` per la massima stabilità su schede RDNA 1 (RX 5700 / 5700 XT).
-  3. **ROCm Sperimentale:** Applica l'environment hack `HSA_OVERRIDE_GFX_VERSION=10.3.0` ed imposta il runtime PyTorch ROCm per schede non ufficialmente supportate.
-* **`2) VERIFICA Stato`**: Controllo dello stato dei servizi `systemd` e del rilevamento della GPU AMD via PyTorch ROCm o Vulkan.
-* **`3) AGGIORNA Componenti`**: Git pull e aggiornamento dipendenze per gli strumenti AI ed i sorgenti `llama.cpp`.
-* **`4) CONFIGURA Sandbox`**: Helper interattivo per l'associazione SSH ed il test delle chiamate API verso la Sandbox.
-* **`5) DISINSTALLA`**: Rimozione completa di file, ambienti Python, repository e servizi `systemd` installati.
+* **Modelli GGUF (Inferenza)**: `/opt/homelab-ai/backend/models/`
+* **Cache HuggingFace (Unsloth)**: `~/.cache/huggingface/hub`
+* **Ambiente Virtuale (Backend/Frontend)**: `/opt/homelab-ai/*/venv/`
+* **Ambiente Virtuale (Unsloth)**: `/root/unsloth_env`
+* **Ambiente Virtuale (Jupyter)**: `/opt/jupyter_env/`
+* **Workspace Notebooks**: `/root/notebooks/`
 
 ---
 
-## Gestione Storage e Modelli
-
-Per evitare di esaurire lo spazio sul disco root dell'LXC/VM, le directory principali di lavoro e di cache dei modelli sono organizzate come segue:
-
-* **Cache Modelli HuggingFace / Unsloth**: `~/.cache/huggingface/hub`
-* **Ambiente Virtuale Python (`uv`)**: `/root/unsloth_env`
-* **Ambiente Virtuale JupyterLab**: `/opt/jupyter_env/`
-* **Cartella di Lavoro Notebook**: `/root/notebooks/`
-* **Servizio Code Runner**: `/opt/code_runner/`
-* **Binary llama.cpp (Vulkan)**: `./llama.cpp/build/bin/`
-
----
-
-## Verifica e Gestione Servizi
-
-Dopo il completamento dello script, puoi verificare il corretto riconoscimento della GPU eseguendo:
-
-### Per NVIDIA (CUDA):
-```bash
-/root/unsloth_env/bin/python3 -c "import torch; print('CUDA disponibile:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0))"
-```
-
-### Per AMD (ROCm):
-```bash
-/root/unsloth_env/bin/python3 -c "import torch; print('ROCm disponibile:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0))"
-```
-
-### Gestione tramite Systemd
-
-Puoi controllare i singoli servizi tramite `systemctl`:
-
-* **JupyterLab Server**: `systemctl status jupyter.service`
-* **Unsloth Studio**: `systemctl status unsloth-studio.service`
-* **OpenCode AI**: `systemctl status opencode.service`
-* **Code Runner API**: `systemctl status code-runner.service`
-
----
-
-## Risoluzione Problemi (FAQ)
+## 🩺 Risoluzione Problemi (FAQ)
 
 <details>
-<summary><b><code>nvidia-smi</code> o <code>rocm-smi</code> funziona nell'LXC ma PyTorch restituisce <code>CUDA available: False</code></b></summary>
+<summary><b>Conflitto porta 8080 (Address already in use)</b></summary>
+
+Se Open WebUI non parte e segnala errore `[Errno 98]`, verifica che `homelab-ai-frontend.service` stia esportando correttamente `Environment="WEBUI_PORT=3000"`. Riavvia con `systemctl daemon-reload && systemctl restart homelab-ai-frontend`.
+</details>
+
+<details>
+<summary><b><code>nvidia-smi</code> o <code>rocm-smi</code> funziona nell'LXC ma PyTorch restituisce <code>False</code></b></summary>
 
 Assicurati che i permessi dei nodi device all'interno del container siano corretti. Esegui:
 ```bash
-# Per NVIDIA:
-chmod 666 /dev/nvidia*
-# Per AMD:
-chmod 666 /dev/kfd /dev/dri/*
-```
-Se usi un container **Unprivileged**, verifica che i permessi UID/GID tra Host e LXC siano mappati correttamente per i nodi GPU.
-</details>
-
-<details>
-<summary><b>La RX 5700 XT va in Segmentation Fault / Kernel Panic in modalità ROCm</b></summary>
-
-L'architettura RDNA 1 (`gfx1010`) non è ufficialmente supportata dalle versioni recenti di ROCm 6.x. Se la modalità *ROCm Experimental* risulta instabile sul tuo sistema, riesegui `./main.sh`, seleziona la GPU AMD e scegli la modalità **Vulkan / llama.cpp**, che garantisce stabilità al 100% senza crash.
-</details>
-
-<details>
-<summary><b>Come recuperare il token di JupyterLab se smarrito?</b></summary>
-
-Ti basterà rieseguire lo script `./setup_jupyter.sh` oppure lanciare direttamente il comando:
-```bash
-/opt/jupyter_env/bin/jupyter server list
+chmod 666 /dev/nvidia*     # Per NVIDIA
+chmod 666 /dev/kfd /dev/dri/*  # Per AMD
 ```
 </details>
 
 <details>
-<summary><b>Errore di connessione SSH verso la Sandbox</b></summary>
+<summary><b>La RX 5700 XT va in Segmentation Fault in modalità ROCm</b></summary>
 
-Verifica che lo script `sandbox_setup.sh` sia stato eseguito sul nodo Sandbox e che il servizio SSH sia attivo (`systemctl status ssh`). Assicurati che l'IP del nodo Sandbox sia raggiungibile dal Controller via ping/SSH.
+L'architettura RDNA 1 non è ufficialmente supportata da ROCm 6.x. Se risulta instabile, riesegui `./manager-amd.sh`, seleziona **Disinstalla**, reinstalla e scegli la modalità **Vulkan / llama.cpp**, che garantisce stabilità al 100%.
 </details>
 
 <details>
 <summary><b>Errore di memoria durante il caricamento dei modelli LLM</b></summary>
 
-Per l'inferenza e il fine-tuning con Unsloth o vLLM, assegna al container LXC/VM almeno **16 GB di RAM** e abilita uno swap di almeno **8 GB** nelle impostazioni di Proxmox.
+Per l'inferenza e il fine-tuning assegna al container LXC/VM almeno **16 GB di RAM** e abilita uno swap di almeno **8 GB** nelle impostazioni di Proxmox.
 </details>
 
 ---
 
-## Roadmap & WIP Features
-
-- [x] Router hardware automatico (`main.sh`) per la selezione del driver
-- [x] Installatore automatico CUDA + NVIDIA Container Toolkit per LXC
-- [x] Supporto nativo AMD GPU via **ROCm Ufficiale**, **Vulkan** e **ROCm Experimental**
-- [x] Integrazione Unsloth Studio + OpenCode AI
-- [x] Script idoneo ed idempotente `setup_jupyter.sh` per la gestione di JupyterLab
-- [x] API Runner isolato con SSH Sandbox execution
-- [x] Script di provisioning dedicato `sandbox_setup.sh` per nodi remoti
-- [ ] Supporto multi-node Sandbox (gestione di più container esecutori in pool)
-- [ ] Dashboard Web centralizzata per il monitoraggio GPU/RAM
-- [ ] Integrazione opzionale ComfyUI (Generative AI Image/Video)
-
-
-
----
-
-## Requisiti di Sistema
+## 📋 Requisiti di Sistema
 
 * **Sistema Operativo**: Debian 13 (Trixie) o Ubuntu 24.04 LTS.
 * **Privilegi**: Accesso Root o utente con permessi `sudo`.
-* **Hardware GPU**: 
+* **Hardware GPU / CPU**: 
   * **NVIDIA:** GPU supportata da CUDA (consigliati almeno 8-12 GB VRAM).
-  * **AMD:** GPU RDNA1, RDNA2 o RDNA3 (RX 5000 / 6000 / 7000 series o modelli PRO).
-* **Virtualizzazione**: Bare-Metal oppure Container **Proxmox LXC** (Unprivileged/Privileged con GPU Pass-Through attivo).
+  * **AMD:** GPU RDNA1, RDNA2 o RDNA3 (RX 5000 / 6000 / 7000 series).
+  * **CPU:** Processore moderno con istruzioni AVX2 (minimo 16GB RAM di sistema).
+* **Virtualizzazione**: Bare-Metal oppure Container **Proxmox LXC** (con GPU Pass-Through attivo).
 
 ---
 
 ## ⚠️ Disclaimer
 
-Tutti gli script sono forniti "così come sono" (AS IS). Sebbene siano utilizzati e testati regolarmente nel mio ambiente, **sei caldamente invitato a leggere e comprendere il codice sorgente** prima di eseguirlo sui tuoi server, specialmente se in produzione. Non mi assumo alcuna responsabilità per eventuali malfunzionamenti o perdite di dati.
+Tutti gli script sono forniti "così come sono" (AS IS). Sebbene siano testati regolarmente, **sei caldamente invitato a leggere e comprendere il codice sorgente** prima di eseguirlo sui tuoi server, specialmente se in produzione. Non mi assumo alcuna responsabilità per eventuali malfunzionamenti o perdite di dati.
 
 ## 📄 Licenza
 
-Questo progetto è distribuito sotto licenza **MIT**. Sei libero di utilizzare, modificare e distribuire il codice, anche per scopi commerciali, mantenendo l'attribuzione originale.
+Questo progetto è distribuito sotto licenza **MIT**. Sei libero di utilizzare, modificare e distribuire il codice, mantenendo l'attribuzione originale.
 
 ---
 
-## Struttura della Repository
+## 📂 Struttura della Repository
 
 ```text
-
 homelab-ai-deployer/
 ├── README.md                 # Documentazione generale e guida rapida
-├── main.sh                   # Router principale per il rilevamento hardware (NVIDIA/AMD)
-├── manager.sh                # Script TUI principale per la gestione del Controller NVIDIA
-├── manager-amd.sh            # Script TUI principale per la gestione del Controller AMD (ROCm/Vulkan)
-├── prepare_sandbox_baremetal.md # Guida alla configurazione Sandbox su Bare Metal / VM
-├── prepare_sandbox_lxc.md    # Guida alla configurazione Sandbox LXC su Proxmox VE
-├── proxmox_lxc_sandbox_setup.sh # Script Proxmox VE per la creazione automatica dell'LXC
-├── sandbox.md                # Documentazione generale e requisiti delle Sandbox
+├── main.sh                   # Router principale per il rilevamento hardware
+├── manager.sh                # Script TUI per gestione Controller NVIDIA
+├── manager-amd.sh            # Script TUI per gestione Controller AMD (ROCm/Vulkan)
+├── manager-cpu.sh            # Script TUI per gestione fallback CPU-only
+├── prepare_sandbox_*.md      # Guide di riferimento testuali per le Sandbox
+├── proxmox_lxc_setup.sh      # Script Proxmox VE per la creazione automatica dell'LXC
 ├── sandbox_setup.sh          # Script di setup interno alla Sandbox (UTF-8, SSH, Python)
-└── setup_jupyter.sh          # Script di installazione, verifica e gestione per JupyterLab
-
+└── setup_jupyter.sh          # Installer autonomo per stack JupyterLab
