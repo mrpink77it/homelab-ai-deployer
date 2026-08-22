@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.5.5 (Uniformed Cancel/Esc Logic Across All Submenus)
+# Version: V.1.5.6 (Fixed CUDA Toolkit Package Reference)
 # ==============================================================================
 
 set -e
@@ -61,13 +61,17 @@ return_to_main() {
 
 setup_nvidia_stack() {
     if ! command -v nvcc &> /dev/null; then
-        apt update -qq && apt install -y cuda-toolkit-13-2 pciutils kmod build-essential curl wget git
-        ln -sfn /usr/local/cuda-13.2 /usr/local/cuda
-        ln -sf /usr/local/cuda/bin/nvcc /usr/local/bin/nvcc
-        echo "/usr/local/cuda/lib64" > /etc/ld.so.conf.d/cuda.conf
-        ldconfig 2>/dev/null || true
+        apt update -qq && apt install -y cuda-toolkit pciutils kmod build-essential curl wget git
+        # Rileva dinamicamente la cartella CUDA installata in /usr/local/
+        CUDA_DIR=$(ls -d /usr/local/cuda-* 2>/dev/null | head -n 1)
+        if [ -n "$CUDA_DIR" ]; then
+            ln -sfn "$CUDA_DIR" /usr/local/cuda
+            ln -sf /usr/local/cuda/bin/nvcc /usr/local/bin/nvcc
+            echo "/usr/local/cuda/lib64" > /etc/ld.so.conf.d/cuda.conf
+            ldconfig 2>/dev/null || true
+            export PATH="/usr/local/cuda/bin${PATH:+:${PATH}}"
+        fi
     fi
-    export PATH=/usr/local/cuda-13.2/bin${PATH:+:${PATH}}
 }
 
 # ------------------------------------------------------------------------------
@@ -277,7 +281,7 @@ show_dashboard_banner() {
         GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader -i 0)
     fi
 
-    local DASH_TEXT="=== HARDWARE & GPU ===\n• IP Locale : $LOCAL_IP\n• GPU       : $GPU_INFO\n\n=== STATO SERVIZI E PORTE ===\n• llama.cpp : $st_llama\n• Unsloth   : $st_unsloth\n• Ollama    : $st_ollama\n• Open WebUI: $st_webui\n\nTutti i servizi attivi operano in parallelo senza conflitti."
+    local DASH_TEXT="=== HARDWARE & GPU ===\n• IP Locale : $LOCAL_IP\n• GPU        : $GPU_INFO\n\n=== STATO SERVIZI E PORTE ===\n• llama.cpp : $st_llama\n• Unsloth    : $st_unsloth\n• Ollama     : $st_ollama\n• Open WebUI: $st_webui\n\nTutti i servizi attivi operano in parallelo senza conflitti."
 
     whiptail --title "Dashboard di Sistema - NVIDIA Manager" --msgbox "$DASH_TEXT" 20 75
 }
@@ -311,8 +315,8 @@ manage_models() {
         MODEL_CHOICE=$(whiptail --title "Gestione & Attivazione Modelli GPU" \
             --menu "Scegli l'operazione sui modelli:" 18 75 5 \
             "ACTIVATE_GGUF" "Seleziona e attiva un GGUF su llama.cpp" \
-            "OLLAMA_LIST"   "Visualizza modelli locali Ollama" \
-            "OLLAMA_PULL"   "Scarica nuovo modello con Ollama (pull)" \
+            "OLLAMA_LIST"    "Visualizza modelli locali Ollama" \
+            "OLLAMA_PULL"    "Scarica nuovo modello con Ollama (pull)" \
             "DOWNLOAD_GGUF" "Scarica file GGUF da HuggingFace" \
             "BACK"          "Torna al menu principale" \
             3>&1 1>&2 2>&3)
@@ -399,7 +403,7 @@ manage_models() {
 if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.5)" \
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.6)" \
         --menu "\nSeleziona un'operazione:" 22 80 11 \
         "A" "Express Auto-Deploy (Tutto in un click)" \
         "1" "Compila llama.cpp (CUDA)" \
