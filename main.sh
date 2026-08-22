@@ -53,45 +53,44 @@ elif lspci | grep -i "vga\|3d\|display" | grep -iq "AMD\|Radeon" || [ -d "/sys/m
 fi
 
 # ------------------------------------------------------------------------------
-# BANNER INTRODUTTIVO (Stile Whiptail)
+# BANNER INTRODUTTIVO (Stile Whiptail Centrato)
 # ------------------------------------------------------------------------------
 show_intro_banner() {
-    # Usiamo cat con 'EOF' tra apici singoli per non far interpretare a bash 
-    # i caratteri speciali (come i backtick) presenti nell'ASCII Art
+    # Usiamo cat con 'EOF' per preservare la formattazione e gli spazi
     local ASCII_LOGO=$(cat << 'EOF'
- _   _                      _       _        ___  ___ 
-| | | | ___  _ __ ___   ___| | __ _| |__    / _ \|_ _|
-| |_| |/ _ \| '_ ` _ \ / _ \ |/ _` | '_ \  | |_| || | 
-|  _  | (_) | | | | | |  __/ | (_| | |_) | |  _  || | 
-|_| |_|\___/|_| |_| |_|\___|_|\__,_|_.__/  |_| |_|___|
+         _   _                      _       _        ___  ___ 
+        | | | | ___  _ __ ___   ___| | __ _| |__    / _ \|_ _|
+        | |_| |/ _ \| '_ ` _ \ / _ \ |/ _` | '_ \  | |_| || | 
+        |  _  | (_) | | | | | |  __/ | (_| | |_) | |  _  || | 
+        |_| |_|\___/|_| |_| |_|\___|_|\__,_|_.__/  |_| |_|___|
 EOF
 )
 
     local INFO_TEXT="
-                  DEPLOYER V.1.1.5
+                            DEPLOYER V.1.1.5
 
-Benvenuto nell'ecosistema Homelab AI Deployer!
+             Benvenuto nell'ecosistema Homelab AI Deployer!
 
-Questo strumento analizza automaticamente il tuo hardware
-e ti guida nell'orchestrazione del tuo stack AI:
+        Questo strumento analizza automaticamente il tuo hardware
+             e ti guida nell'orchestrazione del tuo stack AI:
 
-  • Backend:  llama.cpp ottimizzato (NVIDIA / AMD / CPU)
-  • Frontend: Unsloth Studio, Open WebUI, JupyterLab
-  • Servizi:  Configurazione Bare-Metal via systemd
+            • Backend:  llama.cpp ottimizzato (NVIDIA / AMD / CPU)
+            • Frontend: Unsloth Studio, Open WebUI, JupyterLab
+            • Servizi:  Configurazione Bare-Metal via systemd
 
------------------------------------------------------------
-Ambiente rilevato: $VIRT_ENV
-Hardware rilevato: $HW_DETECTED
------------------------------------------------------------
+        -------------------------------------------------------
+                    Ambiente: $VIRT_ENV
+                    Hardware: $HW_DETECTED
+        -------------------------------------------------------
 
-Premi <Ok> per iniziare (avvio automatico tra 120s)."
+           Premi <Ok> per iniziare (avvio automatico tra 120s)."
 
     # Uniamo il logo e il testo
     local FULL_BANNER="$ASCII_LOGO$INFO_TEXT"
 
     # Utilizziamo 'timeout' per chiudere il msgbox dopo 120 secondi.
-    # Se va in timeout restituisce exit code 124, il '|| true' previene 
-    # l'interruzione dello script a causa del 'set -e' globale.
+    # L'uscita di timeout è ignorata grazie a || true, in modo da non far
+    # bloccare l'intero script che usa 'set -e'.
     timeout 120 whiptail --title " Homelab AI Deployer " --msgbox "$FULL_BANNER" 26 75 || true
 }
 
