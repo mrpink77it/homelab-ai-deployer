@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.2.0.6 (Full Featured + Advanced Services + Non-Free Repo Auto-Enable)
+# Version: V.2.0.7 (Full Featured + DEB822 Sources Support for Debian 13)
 # ==============================================================================
 
 set -euo pipefail
@@ -12,7 +12,7 @@ trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-nvidia.sh si è int
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-VERSION="2.0.6"
+VERSION="2.0.7"
 LOG_FILE="/var/log/homelab-ai-nvidia.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -86,20 +86,29 @@ return_to_main() {
 
 install_dependencies() {
     export DEBIAN_FRONTEND=noninteractive
-    log_info "Verifica e abilitazione repository non-free (Debian/Ubuntu)..."
+    log_info "Configurazione e abilitazione repository non-free (supporto DEB822 / sources.list)..."
     
     if grep -q "debian" /etc/os-release; then
-        # Abilita contrib, non-free e non-free-firmware sui sorgenti apt di Debian
-        if [ -f /etc/apt/sources.list ]; then
-            sed -i 's/main$/main contrib non-free non-free-firmware/g' /etc/apt/sources.list || true
-            sed -i 's/main buster/main contrib non-free non-free-firmware buster/g' /etc/apt/sources.list || true
-            sed -i 's/main bookworm/main contrib non-free non-free-firmware bookworm/g' /etc/apt/sources.list || true
-            sed -i 's/main trixie/main contrib non-free non-free-firmware trixie/g' /etc/apt/sources.list || true
-        fi
-        # Gestione formati moderni sources.list.d se presenti
-        for f in /etc/apt/sources.list.d/*.list; do
-            [ -f "$f" ] && sed -i 's/\bmain\b/main contrib non-free non-free-firmware/g' "$f" || true
+        # 1. Gestione formato moderno DEB822 (.sources) in /etc/apt/sources.list.d/
+        for sfile in /etc/apt/sources.list.d/*.sources; do
+            if [ -f "$sfile" ]; then
+                if grep -q "Types:" "$sfile" && grep -q "Components:" "$sfile"; then
+                    # Aggiorna la riga Components aggiungendo contrib non-free non-free-firmware se mancanti
+                    sed -i '/^Components:/ { /contrib/! s/$/ contrib non-free non-free-firmware/ }' "$sfile" || true
+                fi
+            fi
         done
+        
+        # 2. Gestione formato classico in /etc/apt/sources.list
+        if [ -f /etc/apt/sources.list ]; then
+            sed -i 's/\bmain\b/main contrib non-free non-free-firmware/g' /etc/apt/sources.list || true
+        fi
+        
+        # 3. Gestione file .list tradizionali in sources.list.d
+        for lfile in /etc/apt/sources.list.d/*.list; do
+            [ -f "$lfile" ] && sed -i 's/\bmain\b/main contrib non-free non-free-firmware/g' "$lfile" || true
+        done
+
     elif grep -q "ubuntu" /etc/os-release; then
         apt-get install -y software-properties-common -qq || true
         add-apt-repository -y restricted universe multiverse || true
@@ -123,7 +132,7 @@ compile_llama_cuda() {
 
     if ! command -v nvcc &> /dev/null && [ ! -f "${CUDAToolkit_ROOT}/bin/nvcc" ]; then
         log_err "Compilatore nvcc (CUDA Toolkit) non trovato! Assicurati di installare nvidia-cuda-toolkit."
-        whiptail --title "Errore CUDA" --msgbox "Toolkit CUDA non rilevato nel sistema. Installa nvidia-cuda-toolkit prima di procedere." 10 60
+        whiptail --title "Errore CUDA" --msgbox "Toolkit CUDA non rilevato nel sistema. Assicurati che i repository non-free siano attivi." 10 60
         return 1
     fi
 
