@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.0.8
+# Version: V.1.0.9
 # ==============================================================================
 
 set -e
@@ -51,7 +51,6 @@ setup_nvidia_stack() {
     echo -e "${BLUE}        DIAGNOSTICA E SETUP STACK NVIDIA            ${NC}"
     echo -e "${BLUE}====================================================${NC}"
 
-    # 1. Rilevamento OS
     local os_str="debian12"
     if [ -f /etc/os-release ]; then
         . /etc/os-release
@@ -66,7 +65,6 @@ setup_nvidia_stack() {
         fi
     fi
 
-    # 2. Rilevamento versione driver Host
     if [ -f /proc/driver/nvidia/version ]; then
         NVRM_VERSION=$(grep NVRM /proc/driver/nvidia/version | awk '{print $8}')
         echo -e "${GREEN}[OK] Modulo Kernel NVIDIA rilevato. Versione Host: ${NVRM_VERSION}${NC}"
@@ -75,7 +73,6 @@ setup_nvidia_stack() {
         echo -e "${YELLOW}[WARN] Modulo kernel NVIDIA non trovato su /proc.${NC}"
     fi
 
-    # 3. Setup Repository Ufficiale CUDA via Keyring
     if ! dpkg -l | grep -q cuda-keyring; then
         echo -e "${YELLOW}[INFO] Installazione cuda-keyring ufficiale NVIDIA per ${os_str}...${NC}"
         wget -q "https://developer.download.nvidia.com/compute/cuda/repos/${os_str}/x86_64/cuda-keyring_1.1-1_all.deb" -O /tmp/cuda-keyring.deb
@@ -84,7 +81,6 @@ setup_nvidia_stack() {
         apt update -qq
     fi
 
-    # 4. Logica di Installazione: LXC vs Bare-Metal
     if grep -q "container=lxc" /proc/1/environ 2>/dev/null; then
         echo -e "${YELLOW}[INFO] Ambiente LXC Proxmox rilevato.${NC}"
         if [ -n "$NVRM_VERSION" ]; then
@@ -115,7 +111,6 @@ setup_nvidia_stack() {
         fi
     fi
 
-    # 5. Configurazione Globale CUDA (Symlink & LD_LIBRARY_PATH)
     echo -e "${YELLOW}[INFO] Configurazione Symlink e Librerie Globali per CUDA 13.2...${NC}"
     ln -sfn /usr/local/cuda-13.2 /usr/local/cuda
     ln -sf /usr/local/cuda/bin/nvcc /usr/local/bin/nvcc
@@ -132,11 +127,11 @@ setup_nvidia_stack() {
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 1: INSTALLA SERVIZI
+# 1. EXPRESS AUTO-DEPLOY
 # ------------------------------------------------------------------------------
-install_services() {
+express_auto_deploy() {
     echo -e "${BLUE}====================================================${NC}"
-    echo -e "${BLUE}       AVVIO INSTALLAZIONE HOMELAB AI STACK        ${NC}"
+    echo -e "${BLUE}       🚀 AVVIO EXPRESS AUTO-DEPLOY (NVIDIA)       ${NC}"
     echo -e "${BLUE}====================================================${NC}"
 
     setup_xdg_fix
@@ -166,7 +161,6 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$BACKEND_DIR/llama.cpp
-# Di default cerca un modello placeholder, modificalo dalla dashboard o GUI se necessario
 ExecStart=$BACKEND_DIR/llama.cpp/llama-server --host 0.0.0.0 --port 8080 -m $BACKEND_DIR/models/default.gguf
 Restart=always
 RestartSec=5
@@ -182,8 +176,6 @@ EOF
     fi
     
     "$UNSLOTH_ENV/bin/pip" install --upgrade pip wheel "setuptools<82"
-    
-    # FIX APPLICATO QUI: Pinning versione Torch inferiore a 2.12.0 per Unsloth
     "$UNSLOTH_ENV/bin/pip" install -U "torch<2.12.0" "torchvision<0.27.0" torchaudio --extra-index-url https://download.pytorch.org/whl/cu121
     "$UNSLOTH_ENV/bin/pip" install -U jupyterlab unsloth unsloth-zoo trl xformers
 
@@ -206,11 +198,9 @@ WantedBy=multi-user.target
 EOF
 
     echo -e "${YELLOW}[5/5] Setup OpenCode AI e Code Runner API...${NC}"
-    
     mkdir -p "$OPENCODE_DIR"
     npm install -g opencode-ai 2>/dev/null || true
     
-    # Ricerca dinamica e infallibile del binario globale npm
     NPM_BIN_DIR=$(npm -g bin 2>/dev/null || echo "/usr/bin")
     if [ -x "$NPM_BIN_DIR/opencode" ]; then
         OPENCODE_BIN="$NPM_BIN_DIR/opencode"
@@ -301,16 +291,15 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 2: VERIFICA STATO
+# 2. DASHBOARD DI SISTEMA
 # ------------------------------------------------------------------------------
-check_status() {
+system_dashboard() {
     export PATH=/usr/local/cuda-13.2/bin${PATH:+:${PATH}}
     clear
-    echo -e "${BLUE}====================================================================${NC}"
-    echo -e "${BLUE}                 DIAGNOSTICA E STATO DEL SISTEMA                   ${NC}"
-    echo -e "${BLUE}====================================================================${NC}"
+    echo -e "${CYAN}====================================================================${NC}"
+    echo -e "${CYAN}                 📊 DASHBOARD DI SISTEMA (NVIDIA)                  ${NC}"
+    echo -e "${CYAN}====================================================================${NC}"
 
-    # 1. INFO DI SISTEMA E RISORSE HW
     echo -e "\n${YELLOW}[1] RISORSE HARDWARE E SISTEMA${NC}"
     local OS_NAME=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2 || echo "Linux")
     local LOCAL_IP=$(hostname -I | awk '{print $1}')
@@ -326,7 +315,6 @@ check_status() {
     echo -e "  • Utilizzo RAM: ${GREEN}$RAM_INFO${NC}"
     echo -e "  • Disco (Root): ${GREEN}$DISK_INFO${NC}"
 
-    # 2. STACK DRIVER NVIDIA E CUDA
     echo -e "\n${YELLOW}[2] STACK DRIVER NVIDIA E CUDA${NC}"
     if command -v nvidia-smi &> /dev/null; then
         local NV_DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader -i 0)
@@ -358,7 +346,6 @@ check_status() {
         echo -e "  • PyTorch CUDA: ${RED}Ambiente virtuale Unsloth assente${NC}"
     fi
 
-    # 3. STATO SERVIZI, PORTE E API
     echo -e "\n${YELLOW}[3] STATO SERVIZI, PORTE E API${NC}"
     
     print_service_status() {
@@ -366,7 +353,6 @@ check_status() {
         local SRV_NAME=$2
         local PORT=$3
 
-        # Controllo stato Systemd
         local EN_STATE=$(systemctl is-enabled "$SRV_FILE" 2>/dev/null || echo "not-found")
         local ACT_STATE=$(systemctl is-active "$SRV_FILE" 2>/dev/null || echo "inactive")
         
@@ -375,7 +361,6 @@ check_status() {
         local EN_STR=""
         [ "$EN_STATE" = "enabled" ] && EN_STR="${GREEN}Abilitato al boot${NC}" || EN_STR="${RED}Disabilitato ($EN_STATE)${NC}"
 
-        # Controllo stato Rete
         local PORT_STR=""
         if ss -tulpn 2>/dev/null | grep -q ":$PORT " || netstat -tulpn 2>/dev/null | grep -q ":$PORT "; then
             PORT_STR="${GREEN}IN ASCOLTO${NC}"
@@ -387,7 +372,6 @@ check_status() {
         echo -e "     Systemd : $SYS_STR ($EN_STR)"
         echo -e "     Rete    : Porta $PORT -> $PORT_STR"
         
-        # Stampa URL se la porta è in ascolto e abbiamo un IP
         if [ "$PORT_STR" == "${GREEN}IN ASCOLTO${NC}" ] && [ -n "$LOCAL_IP" ]; then
             echo -e "     URL API : http://$LOCAL_IP:$PORT"
         fi
@@ -399,11 +383,38 @@ check_status() {
     print_service_status "opencode.service" "OpenCode AI (Web Server)" "8000"
     print_service_status "code-runner.service" "Code Runner API (FastAPI)" "9000"
 
-    echo -e "${BLUE}====================================================================${NC}"
+    echo -e "${CYAN}====================================================================${NC}"
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 3: AGGIORNA COMPONENTI
+# 3. GESTIONE MODELLI
+# ------------------------------------------------------------------------------
+manage_models() {
+    clear
+    echo -e "${YELLOW}====================================================${NC}"
+    echo -e "${YELLOW}        🧠 GESTIONE MODELLI (Hugging Face)          ${NC}"
+    echo -e "${YELLOW}====================================================${NC}"
+    
+    mkdir -p "$BACKEND_DIR/models"
+    cd "$BACKEND_DIR/models"
+    
+    echo -e "I modelli verranno salvati in: ${CYAN}$BACKEND_DIR/models${NC}\n"
+    echo -ne "Inserisci l'URL di download diretto del modello GGUF: "
+    read -r MODEL_URL
+    
+    if [ -n "$MODEL_URL" ]; then
+        echo -e "\n${GREEN}Inizio il download del modello...${NC}"
+        wget -c --show-progress "$MODEL_URL"
+        
+        echo -e "\n${GREEN}[OK] Download completato.${NC}"
+        echo -e "${YELLOW}Ricordati di aggiornare il file homelab-ai-backend.service con il nuovo nome del modello.${NC}"
+    else
+        echo -e "${RED}URL non inserito. Annullato.${NC}"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# 4. AGGIORNA COMPONENTI
 # ------------------------------------------------------------------------------
 update_components() {
     echo -e "${BLUE}====================================================${NC}"
@@ -454,7 +465,6 @@ update_components() {
 
     if [ -d "$UNSLOTH_ENV" ]; then
         echo -e "${YELLOW}---> Aggiornamento PyTorch + CUDA Wheels nel VENV Unsloth...${NC}"
-        # FIX APPLICATO QUI: Pinning versione Torch durante l'aggiornamento
         "$UNSLOTH_ENV/bin/pip" install -U "torch<2.12.0" "torchvision<0.27.0" torchaudio --extra-index-url https://download.pytorch.org/whl/cu121
         
         echo -e "${YELLOW}---> Aggiornamento Jupyter Lab, Unsloth, Trl, Xformers...${NC}"
@@ -475,7 +485,7 @@ update_components() {
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 4: CONFIGURA SANDBOX
+# 5. CONFIGURA SANDBOX
 # ------------------------------------------------------------------------------
 configure_sandbox() {
     echo -e "${BLUE}====================================================${NC}"
@@ -521,7 +531,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 5: DISINSTALLA / PURGE COMPLETO
+# 6. DISINSTALLA / PURGE COMPLETO
 # ------------------------------------------------------------------------------
 remove_core_services() {
     echo -e "${YELLOW}---> Arresto e disattivazione servizi systemd...${NC}"
@@ -560,7 +570,7 @@ purge_system_dependencies() {
 uninstall_services() {
     clear
     echo -e "${RED}====================================================${NC}"
-    echo -e "${RED}         DISINSTALLAZIONE E PULIZIA STACK           ${NC}"
+    echo -e "${RED}         🗑️ DISINSTALLAZIONE E PULIZIA STACK         ${NC}"
     echo -e "${RED}====================================================${NC}"
     echo -e " 1) ${YELLOW}Disinstalla Solo Servizi${NC} (Mantiene Driver NVIDIA e CUDA)"
     echo -e " 2) ${RED}Purge Completo${NC} (Rimuove TUTTO: Servizi, Driver NVIDIA, CUDA)"
@@ -601,28 +611,30 @@ uninstall_services() {
 show_menu() {
     clear
     echo -e "${BLUE}====================================================${NC}"
-    echo -e "${BLUE}      🦥 HOMELAB AI DEPLOYER - MANAGER MENU        ${NC}"
+    echo -e "${BLUE}      🦥 HOMELAB AI DEPLOYER - MANAGER NVIDIA      ${NC}"
     echo -e "${BLUE}====================================================${NC}"
-    echo -e " 1) ${GREEN}INSTALLA Servizi${NC}   (GPU Driver, CUDA, Llama.cpp, Unsloth, API)"
-    echo -e " 2) ${YELLOW}VERIFICA Stato${NC}     (Check Servizi Systemd, Porte e GPU CUDA)"
-    echo -e " 3) ${BLUE}AGGIORNA Componenti${NC} (Git pull, llama.cpp, VENV Unsloth, API)"
-    echo -e " 4) ${YELLOW}CONFIGURA Sandbox${NC}   (Setup Chiavi SSH & Test Endpoint API)"
-    echo -e " 5) ${RED}DISINSTALLA / PURGE${NC} (Rimozione Servizi o Pulizia Completa)"
-    echo -e " 6) Uscita"
+    echo -e " 1) 🚀 ${GREEN}EXPRESS AUTO-DEPLOY${NC}  (Installazione Completa)"
+    echo -e " 2) 📊 ${CYAN}DASHBOARD DI SISTEMA${NC} (Stato, Risorse e Porte)"
+    echo -e " 3) 🧠 ${YELLOW}GESTIONE MODELLI${NC}     (Download GGUF da HF)"
+    echo -e " 4) 🔄 ${BLUE}AGGIORNA COMPONENTI${NC}  (Pull Git & Update Env)"
+    echo -e " 5) 🔌 ${YELLOW}CONFIGURA SANDBOX${NC}    (Setup Chiavi SSH & API)"
+    echo -e " 6) 🗑️ ${RED}DISINSTALLA / PURGE${NC}  (Servizi o Pulizia Totale)"
+    echo -e " 7) 🚪 ${CYAN}ESCI${NC}"
     echo -e "${BLUE}====================================================${NC}"
-    echo -ne "Seleziona un'opzione [1-6]: "
+    echo -ne "Seleziona un'opzione [1-7]: "
 }
 
 while true; do
     show_menu
     read -r choice
     case $choice in
-        1) install_services ;;
-        2) check_status ;;
-        3) update_components ;;
-        4) configure_sandbox ;;
-        5) uninstall_services ;;
-        6) echo -e "${GREEN}Uscita... Bye!${NC}"; exit 0 ;;
+        1) express_auto_deploy ;;
+        2) system_dashboard ;;
+        3) manage_models ;;
+        4) update_components ;;
+        5) configure_sandbox ;;
+        6) uninstall_services ;;
+        7) echo -e "${GREEN}Uscita... Bye!${NC}"; exit 0 ;;
         *) echo -e "${RED}Opzione non valida!${NC}" ;;
     esac
     echo -ne "\n${YELLOW}Premi INVIO per continuare...${NC}"
