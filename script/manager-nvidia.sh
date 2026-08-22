@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.5.3 (Unified Model Manager & Syntax Fixed)
+# Version: V.1.5.5 (Uniformed Cancel/Esc Logic Across All Submenus)
 # ==============================================================================
 
 set -e
@@ -119,7 +119,9 @@ configure_and_start_services() {
         "open-webui" "Open WebUI (Porta $OPENWEBUI_PORT)" OFF \
         3>&1 1>&2 2>&3)
         
-    if [ $? -ne 0 ]; then return; fi
+    if [ $? -ne 0 ]; then
+        return
+    fi
 
     source "$PORT_CONFIG"
 
@@ -196,7 +198,7 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# GESTIONE PORTE E STATO ATTIVO
+# GESTIONE PORTE E STATO ATTIVO (Con Cancel uniforme)
 # ------------------------------------------------------------------------------
 manage_ports() {
     while true; do
@@ -232,12 +234,15 @@ manage_ports() {
                     "OLLAMA_PORT" "Ollama (Attuale: $OLLAMA_PORT)" \
                     "OPENWEBUI_PORT" "Open WebUI (Attuale: $OPENWEBUI_PORT)" \
                     3>&1 1>&2 2>&3)
-                if [ $? -eq 0 ] && [ -n "$TARGET_SRV" ]; then
-                    NEW_PORT=$(whiptail --title "Nuova Porta" --inputbox "Inserisci il nuovo numero di porta per $TARGET_SRV:" 10 50 3>&1 1>&2 2>&3)
-                    if [ $? -eq 0 ] && [ -n "$NEW_PORT" ]; then
-                        sed -i "s/^${TARGET_SRV}=.*/${TARGET_SRV}=${NEW_PORT}/" "$PORT_CONFIG"
-                        whiptail --title "Aggiornato" --msgbox "Porta modificata nel file di configurazione. Ricordati di riavviare i servizi." 10 60
-                    fi
+                
+                if [ $? -ne 0 ] || [ -z "$TARGET_SRV" ]; then
+                    continue
+                fi
+
+                NEW_PORT=$(whiptail --title "Nuova Porta" --inputbox "Inserisci il nuovo numero di porta per $TARGET_SRV:" 10 50 3>&1 1>&2 2>&3)
+                if [ $? -eq 0 ] && [ -n "$NEW_PORT" ]; then
+                    sed -i "s/^${TARGET_SRV}=.*/${TARGET_SRV}=${NEW_PORT}/" "$PORT_CONFIG"
+                    whiptail --title "Aggiornato" --msgbox "Porta modificata nel file di configurazione. Ricordati di riavviare i servizi." 10 60
                 fi
                 ;;
             "RESTART")
@@ -299,7 +304,7 @@ run_benchmark() {
 }
 
 # ------------------------------------------------------------------------------
-# GESTIONE, DOWNLOAD E ATTIVAZIONE MODELLI (MENU 6)
+# GESTIONE, DOWNLOAD E ATTIVAZIONE MODELLI (MENU 6 - Con Cancel uniforme)
 # ------------------------------------------------------------------------------
 manage_models() {
     while true; do
@@ -311,6 +316,7 @@ manage_models() {
             "DOWNLOAD_GGUF" "Scarica file GGUF da HuggingFace" \
             "BACK"          "Torna al menu principale" \
             3>&1 1>&2 2>&3)
+            
         if [ $? -ne 0 ]; then break; fi
 
         case "$MODEL_CHOICE" in
@@ -330,24 +336,26 @@ manage_models() {
 
                 SELECTED_GGUF=$(whiptail --title "Attiva Modello su llama.cpp" --menu "Seleziona il GGUF da mettere in esecuzione:" 20 75 8 "${GGUF_LIST[@]}" 3>&1 1>&2 2>&3)
                 
-                if [ $? -eq 0 ] && [ -n "$SELECTED_GGUF" ]; then
-                    SERVICE_FILE="/etc/systemd/system/homelab-ai-backend.service"
-                    if [ -f "$SERVICE_FILE" ]; then
-                        sed -i "s|-m $BACKEND_DIR/models/.*.gguf|-m $BACKEND_DIR/models/$SELECTED_GGUF|" "$SERVICE_FILE"
-                        
-                        systemctl daemon-reload
-                        if systemctl is-active --quiet homelab-ai-backend.service; then
-                            systemctl restart homelab-ai-backend.service
-                            STATUS_MSG="Modello '$SELECTED_GGUF' attivato e servizio llama.cpp riavviato con successo!"
-                        else
-                            systemctl enable homelab-ai-backend.service --now
-                            STATUS_MSG="Modello '$SELECTED_GGUF' impostato e servizio avviato per la prima volta!"
-                        fi
-                        
-                        whiptail --title "Successo" --msgbox "$STATUS_MSG" 10 60
+                if [ $? -ne 0 ] || [ -z "$SELECTED_GGUF" ]; then
+                    continue
+                fi
+
+                SERVICE_FILE="/etc/systemd/system/homelab-ai-backend.service"
+                if [ -f "$SERVICE_FILE" ]; then
+                    sed -i "s|-m $BACKEND_DIR/models/.*.gguf|-m $BACKEND_DIR/models/$SELECTED_GGUF|" "$SERVICE_FILE"
+                    
+                    systemctl daemon-reload
+                    if systemctl is-active --quiet homelab-ai-backend.service; then
+                        systemctl restart homelab-ai-backend.service
+                        STATUS_MSG="Modello '$SELECTED_GGUF' attivato e servizio llama.cpp riavviato con successo!"
                     else
-                        whiptail --title "Errore" --msgbox "Il servizio systemd 'homelab-ai-backend.service' non esiste.\nConfigura prima i servizi tramite il menu principale." 10 60
+                        systemctl enable homelab-ai-backend.service --now
+                        STATUS_MSG="Modello '$SELECTED_GGUF' impostato e servizio avviato per la prima volta!"
                     fi
+                    
+                    whiptail --title "Successo" --msgbox "$STATUS_MSG" 10 60
+                else
+                    whiptail --title "Errore" --msgbox "Il servizio systemd 'homelab-ai-backend.service' non esiste.\nConfigura prima i servizi tramite il menu principale." 10 60
                 fi
                 ;;
             "OLLAMA_LIST")
@@ -391,7 +399,7 @@ manage_models() {
 if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.3)" \
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.5)" \
         --menu "\nSeleziona un'operazione:" 22 80 11 \
         "A" "Express Auto-Deploy (Tutto in un click)" \
         "1" "Compila llama.cpp (CUDA)" \
