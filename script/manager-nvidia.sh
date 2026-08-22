@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.0.9
+# Version: V.1.1.0
 # ==============================================================================
 
 set -e
@@ -41,6 +41,28 @@ fix_apt_repos() {
     rm -f /etc/apt/sources.list.d/nvidia-container-toolkit.list
     rm -f /etc/apt/sources.list.d/cuda*.list
     rm -f /etc/apt/sources.list.d/archive_uri-https_developer_download_nvidia_com_*.list
+}
+
+# ------------------------------------------------------------------------------
+# FUNZIONE DI RITORNO AL MAIN DISPATCHER
+# ------------------------------------------------------------------------------
+return_to_main() {
+    clear
+    echo -e "${GREEN}Ritorno al menu principale...${NC}"
+    sleep 1
+    
+    # Cerca il file main in base ai percorsi più probabili
+    if [ -f "./main.sh" ]; then
+        exec ./main.sh
+    elif [ -f "../main.sh" ]; then
+        cd .. && exec ./main.sh
+    elif [ -f "./manager.sh" ]; then
+        exec ./manager.sh
+    else
+        # Se non trova il dispatcher, esce normalmente
+        echo -e "${YELLOW}Menu principale non trovato. Uscita definitiva.${NC}"
+        exit 0
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -392,7 +414,7 @@ system_dashboard() {
 manage_models() {
     clear
     echo -e "${YELLOW}====================================================${NC}"
-    echo -e "${YELLOW}        🧠 GESTIONE MODELLI (Hugging Face)          ${NC}"
+    echo -e "${YELLOW}         🧠 GESTIONE MODELLI (Hugging Face)         ${NC}"
     echo -e "${YELLOW}====================================================${NC}"
     
     mkdir -p "$BACKEND_DIR/models"
@@ -439,11 +461,15 @@ update_components() {
             git clone "$REPO_URL" "$TARGET_REPO_DIR"
             cd "$TARGET_REPO_DIR"
         fi
-        chmod +x manager.sh
-        echo -e "${GREEN}[OK] Repository aggiornata.${NC}"
-        echo -e "${YELLOW}---> Riavvio dello script aggiornato...${NC}"
-        sleep 2
-        exec ./manager.sh
+        
+        # Riavviamo lo script o ritorniamo al main
+        if [ -f "./main.sh" ]; then
+            chmod +x main.sh manager-nvidia.sh 2>/dev/null || true
+            echo -e "${GREEN}[OK] Repository aggiornata.${NC}"
+            echo -e "${YELLOW}---> Ritorno al dispatcher aggiornato...${NC}"
+            sleep 2
+            exec ./main.sh
+        fi
     fi
 
     echo -e "${YELLOW}---> Aggiornamento di llama.cpp...${NC}"
@@ -627,14 +653,12 @@ while true; do
         "4" "AGGIORNA COMPONENTI (Pull Git & Update Env)" \
         "5" "CONFIGURA SANDBOX (Setup Chiavi SSH & API)" \
         "6" "DISINSTALLA / PURGE (Servizi o Pulizia Totale)" \
-        "7" "ESCI" \
+        "7" "TORNA AL MENU PRINCIPALE" \
         3>&1 1>&2 2>&3)
         
-    # Gestione tasto Cancel o ESC
+    # Gestione tasto Cancel o ESC: Ritorna al Main Dispatcher
     if [ $? -ne 0 ]; then
-        clear
-        echo -e "${GREEN}Uscita dal Manager NVIDIA. A presto!${NC}"
-        exit 0
+        return_to_main
     fi
 
     clear # Pulisce lo schermo prima di eseguire il comando
@@ -645,10 +669,10 @@ while true; do
         4) update_components ;;
         5) configure_sandbox ;;
         6) uninstall_services ;;
-        7) echo -e "${GREEN}Uscita... Bye!${NC}"; exit 0 ;;
+        7) return_to_main ;; # Usa la stessa funzione in caso di "ESCI"
     esac
     
     # Pausa per leggere l'output prima di ricaricare il menu grafico
-    echo -ne "\n${YELLOW}Premi INVIO per tornare al menu...${NC}"
+    echo -ne "\n${YELLOW}Premi INVIO per tornare al menu NVIDIA...${NC}"
     read -r
 done
