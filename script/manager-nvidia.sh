@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Homelab AI Deployer - Manager Script (NVIDIA - CMake Stack)
+# Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.6.2 (CMake Migration for llama.cpp)
+# Version: V.1.6.4 (Full Custom Stack + CMake Build Fix)
 # ==============================================================================
 
 set -e
@@ -67,7 +67,7 @@ setup_nvidia_stack() {
             OS_VER=$VERSION_ID
         fi
 
-        echo -e "${CYAN}Installazione dipendenze di base e cmake...${NC}"
+        echo -e "${CYAN}Installazione dipendenze di base per la compilazione...${NC}"
         apt update -qq && apt install -y pciutils kmod build-essential cmake curl wget git lsb-release
 
         if [ ! -f /etc/apt/sources.list.d/cuda.list ]; then
@@ -84,9 +84,11 @@ setup_nvidia_stack() {
             rm -f /tmp/cuda-keyring.deb
         fi
 
+        # Passaggio CRITICO: ricarica i repository NVIDIA aggiunti dal keyring
         echo -e "${CYAN}Aggiornamento indici APT dai repository ufficiali NVIDIA...${NC}"
         apt update -y
 
+        # Installazione robusta con fallback a cascata
         if ! apt install -y cuda pciutils kmod build-essential cmake; then
             echo -e "${YELLOW}[WARNING] Metapacchetto 'cuda' non trovato, provo con 'cuda-toolkit'...${NC}"
             if ! apt install -y cuda-toolkit pciutils kmod build-essential cmake; then
@@ -95,6 +97,7 @@ setup_nvidia_stack() {
             fi
         fi
 
+        # Rileva dinamicamente la cartella CUDA installata in /usr/local/
         CUDA_DIR=$(ls -d /usr/local/cuda-* 2>/dev/null | head -n 1)
         if [ -n "$CUDA_DIR" ]; then
             ln -sfn "$CUDA_DIR" /usr/local/cuda
@@ -112,9 +115,7 @@ setup_nvidia_stack() {
 # MODULI DI INSTALLAZIONE (Aggiornato a CMake per llama.cpp)
 # ------------------------------------------------------------------------------
 compile_llamacpp() {
-    apt install -y cmake build-release 2>/dev/null || apt install -y cmake build-essential
     mkdir -p "$BACKEND_DIR/models"
-    
     if [ ! -d "$BACKEND_DIR/llama.cpp" ]; then
         git clone https://github.com/ggerganov/llama.cpp.git "$BACKEND_DIR/llama.cpp"
     else
@@ -132,8 +133,8 @@ compile_llamacpp() {
     
     echo -e "${CYAN}Compilazione in corso con $(nproc) thread...${NC}"
     cmake --build . --config Release -j$(nproc)
-    
-    # Crea un link o copia i binari compilati per retrocompatibilità con i servizi systemd
+
+    # Gestione symlink per retrocompatibilità dei binari nella struttura systemd
     if [ -f "$BACKEND_DIR/llama.cpp/build/bin/llama-server" ]; then
         ln -sf "$BACKEND_DIR/llama.cpp/build/bin/llama-server" "$BACKEND_DIR/llama.cpp/llama-server"
     fi
@@ -170,10 +171,10 @@ install_ollama_webui() {
 configure_and_start_services() {
     source "$PORT_CONFIG"
     
-    # Puntiamo direttamente al binario nella cartella build di cmake
+    # Puntiamo al binario CMake se esiste, altrimenti al fallback
     LLAMA_SERVER_BIN="$BACKEND_DIR/llama.cpp/build/bin/llama-server"
     [ ! -f "$LLAMA_SERVER_BIN" ] && LLAMA_SERVER_BIN="$BACKEND_DIR/llama.cpp/llama-server"
-
+    
     SELECTED_SERVICES=$(whiptail --title "Gestione Servizi Systemd" \
         --checklist "Seleziona quali componenti attivare nella configurazione:" 20 78 4 \
         "llama-backend" "llama.cpp server (Porta $LLAMACPP_PORT)" ON \
@@ -465,7 +466,7 @@ manage_models() {
 if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.6.2)" \
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.6.4)" \
         --menu "\nSeleziona un'operazione:" 22 80 11 \
         "A" "Express Auto-Deploy (Tutto in un click)" \
         "1" "Compila llama.cpp (CMake CUDA)" \
