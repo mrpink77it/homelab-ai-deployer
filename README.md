@@ -194,12 +194,24 @@ Questo progetto è distribuito sotto licenza **MIT**. Sei libero di utilizzare, 
 
 ```text
 homelab-ai-deployer/
-├── README.md                 # Documentazione generale e guida rapida
-├── main.sh                   # Router principale per il rilevamento hardware
-├── manager.sh                # Script TUI per gestione Controller NVIDIA
-├── manager-amd.sh            # Script TUI per gestione Controller AMD (ROCm/Vulkan)
-├── manager-cpu.sh            # Script TUI per gestione fallback CPU-only
-├── prepare_sandbox_*.md      # Guide di riferimento testuali per le Sandbox
-├── proxmox_lxc_setup.sh      # Script Proxmox VE per la creazione automatica dell'LXC
-├── sandbox_setup.sh          # Script di setup interno alla Sandbox (UTF-8, SSH, Python)
-└── setup_jupyter.sh          # Installer autonomo per stack JupyterLab
+├── docs/                               # Documentazione e guide
+│   ├── prepare_sandbox_baremetal.md
+│   ├── prepare_sandbox_lxc.md
+│   └── sandbox.md
+├── script/                             # Script secondari e di utilità
+│   ├── monitor.sh
+│   ├── proxmox_lxc_sandbox_setup.sh
+│   ├── purge-homelab-ai.sh
+│   ├── sandbox_setup.sh
+│   ├── setup_jupyter.sh
+│   └── uninstall.sh
+├── README.md                           # Documentazione generale (Italiano)
+├── README_ENG.md                       # Documentazione generale (Inglese)
+├── install.sh                          # Script di avvio rapido
+├── main.sh                             # Router per rilevamento hardware
+├── manager-amd.sh                      # TUI per gestione Controller AMD
+├── manager-cpu.sh                      # TUI per gestione fallback CPU
+├── manager-fine-tuning-nvidia.sh       # TUI per Fine-Tuning su NVIDIA
+├── manager-nvidia.sh                   # TUI per gestione Controller NVIDIA
+├── purge-homelab-ai.sh                 # Tool root-level di pulizia ambiente
+└── uninstall.sh                        # Tool root-level di rimozione servizi
