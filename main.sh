@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Homelab AI Deployer - Main Dispatcher Menu
+# Homelab AI Deployer - Main Dispatcher TUI
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.0.7
+# Version: V.1.1.0
 # ==============================================================================
 
 set -e
@@ -14,6 +14,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+BG_CYAN='\033[46;30m' # Sfondo Ciano, Testo Nero per selezione
 
 # Controllo Permessi Root
 if [ "$EUID" -ne 0 ]; then
@@ -22,54 +23,125 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# Assicuriamoci che tutti gli script abbiano i permessi di esecuzione
+# Assegna permessi di esecuzione
 chmod +x manager-*.sh uninstall.sh purge-homelab-ai.sh 2>/dev/null || true
 
-# Funzione per eseguire in modo sicuro gli script esterni
+# ------------------------------------------------------------------------------
+# DIAGNOSTICA HARDWARE
+# ------------------------------------------------------------------------------
+HAS_NVIDIA=false
+HAS_AMD=false
+SELECTED_INDEX=2 # Default a CPU-Only
+
+echo -e "${YELLOW}Ricerca hardware in corso...${NC}"
+
+if lspci | grep -iq "NVIDIA" || [ -d "/proc/driver/nvidia" ] || command -v nvidia-smi &> /dev/null; then
+    HAS_NVIDIA=true
+    SELECTED_INDEX=0 # Posiziona su NVIDIA
+elif lspci | grep -i "vga\|3d\|display" | grep -iq "AMD\|Radeon" || [ -d "/sys/module/amdgpu" ]; then
+    HAS_AMD=true
+    SELECTED_INDEX=1 # Posiziona su AMD
+fi
+
+# ------------------------------------------------------------------------------
+# FUNZIONI DI GESTIONE E AVVIO
+# ------------------------------------------------------------------------------
 run_script() {
     local script_name=$1
     if [ -f "./$script_name" ]; then
+        clear
         echo -e "${CYAN}Avvio di $script_name in corso...${NC}\n"
         sleep 1
         exec "./$script_name"
     else
-        echo -e "${RED}[ERROR] File $script_name non trovato nella directory corrente!${NC}"
-        echo -e "${YELLOW}Assicurati di aver clonato correttamente la repository o che il file esista.${NC}"
+        clear
+        echo -e "${RED}[ERROR] File $script_name non trovato!${NC}"
+        echo -e "${YELLOW}Assicurati di essere nella root della repository e che il file esista.${NC}"
+        exit 1
     fi
 }
 
+# Array delle opzioni del menu
+OPTIONS=(
+    "🟢 AMBIENTE NVIDIA      (manager-nvidia.sh)"
+    "🔴 AMBIENTE AMD         (manager-amd.sh)"
+    "⚪ AMBIENTE CPU-ONLY    (manager-cpu.sh)"
+    "🛠️  MODULO FINE-TUNING   (manager-finetuning.sh)"
+    "🗑️  DISINSTALLA SERVIZI  (uninstall.sh)"
+    "💥 PURGE ESTREMO        (purge-homelab-ai.sh)"
+    "🚪 ESCI"
+)
+NUM_OPTIONS=${#OPTIONS[@]}
+
 # ------------------------------------------------------------------------------
-# MENU INTERATTIVO TUI
+# RENDER DEL MENU INTERATTIVO
 # ------------------------------------------------------------------------------
-show_menu() {
+render_menu() {
     clear
     echo -e "${BLUE}====================================================${NC}"
-    echo -e "${BLUE}           HOMELAB AI DEPLOYER - MAIN MENU        ${NC}"
+    echo -e "${BLUE}         🦥 HOMELAB AI DEPLOYER - MAIN MENU        ${NC}"
     echo -e "${BLUE}====================================================${NC}"
-    echo -e " 1) 🟢 ${GREEN}AMBIENTE NVIDIA${NC}      (manager-nvidia.sh)"
-    echo -e " 2) 🔴 ${RED}AMBIENTE AMD${NC}         (manager-amd.sh)"
-    echo -e " 3) ⚪ ${CYAN}AMBIENTE CPU-ONLY${NC}    (manager-cpu.sh)"
-    echo -e " 4) 🛠️  ${YELLOW}MODULO FINE-TUNING${NC}   (manager-finetuning.sh)"
-    echo -e " 5) 🗑️  ${YELLOW}DISINSTALLA SERVIZI${NC}  (uninstall.sh)"
-    echo -e " 6) 💥 ${RED}PURGE ESTREMO${NC}        (purge-homelab-ai.sh)"
-    echo -e " 7) 🚪 ${CYAN}ESCI${NC}"
+    
+    # Mostra l'hardware rilevato per rassicurare l'utente
+    if [ "$HAS_NVIDIA" = true ]; then
+        echo -e " ${YELLOW}Hardware Rilevato:${NC} ${GREEN}GPU NVIDIA${NC} (Consigliato)"
+    elif [ "$HAS_AMD" = true ]; then
+        echo -e " ${YELLOW}Hardware Rilevato:${NC} ${RED}GPU AMD${NC} (Consigliato)"
+    else
+        echo -e " ${YELLOW}Hardware Rilevato:${NC} ${CYAN}Nessuna GPU / CPU-Only${NC}"
+    fi
+    echo -e "${BLUE}----------------------------------------------------${NC}"
+
+    for i in "${!OPTIONS[@]}"; do
+        if [ "$i" -eq "$SELECTED_INDEX" ]; then
+            # Opzione Selezionata
+            echo -e " ${BG_CYAN} ➔  ${OPTIONS[$i]} ${NC}"
+        else
+            # Opzione Deselezionata
+            echo -e "    ${OPTIONS[$i]} "
+        fi
+    done
+
     echo -e "${BLUE}====================================================${NC}"
-    echo -ne "Seleziona un'opzione [1-7]: "
+    echo -e "Usa le frecce direzionali ${YELLOW}[↑]${NC} e ${YELLOW}[↓]${NC} per muoverti."
+    echo -e "Premi ${YELLOW}[INVIO]${NC} per confermare."
 }
 
+# ------------------------------------------------------------------------------
+# LOOP DI NAVIGAZIONE
+# ------------------------------------------------------------------------------
 while true; do
-    show_menu
-    read -r choice
-    case $choice in
-        1) run_script "manager-nvidia.sh" ;;
-        2) run_script "manager-amd.sh" ;;
-        3) run_script "manager-cpu.sh" ;;
-        4) run_script "manager-finetuning.sh" ;;
-        5) run_script "uninstall.sh" ;;
-        6) run_script "purge-homelab-ai.sh" ;;
-        7) echo -e "${GREEN}Uscita dal deployer. A presto!${NC}"; exit 0 ;;
-        *) echo -e "${RED}Opzione non valida!${NC}" ;;
-    esac
-    echo -ne "\n${YELLOW}Premi INVIO per continuare...${NC}"
-    read -r
+    render_menu
+    
+    # Cattura input dei tasti
+    read -rsn1 key
+    if [[ $key == $'\x1b' ]]; then
+        # Legge sequenze di escape per le frecce direzionali
+        read -rsn2 -t 0.1 seq
+        if [[ $seq == "[A" ]]; then
+            # Freccia Su
+            ((SELECTED_INDEX--))
+            if [ "$SELECTED_INDEX" -lt 0 ]; then SELECTED_INDEX=$((NUM_OPTIONS - 1)); fi
+        elif [[ $seq == "[B" ]]; then
+            # Freccia Giù
+            ((SELECTED_INDEX++))
+            if [ "$SELECTED_INDEX" -ge "$NUM_OPTIONS" ]; then SELECTED_INDEX=0; fi
+        fi
+    elif [[ $key == "" ]]; then
+        # Tasto INVIO
+        break
+    fi
 done
+
+# ------------------------------------------------------------------------------
+# AZIONE IN BASE ALLA SELEZIONE
+# ------------------------------------------------------------------------------
+case $SELECTED_INDEX in
+    0) run_script "manager-nvidia.sh" ;;
+    1) run_script "manager-amd.sh" ;;
+    2) run_script "manager-cpu.sh" ;;
+    3) run_script "manager-finetuning.sh" ;;
+    4) run_script "uninstall.sh" ;;
+    5) run_script "purge-homelab-ai.sh" ;;
+    6) clear; echo -e "${GREEN}Uscita dal deployer. A presto!${NC}"; exit 0 ;;
+esac
