@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Main Dispatcher
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.1.5
+# Version: V.1.1.6
 # ==============================================================================
 
 set -e
@@ -67,7 +67,7 @@ EOF
 )
 
     local INFO_TEXT="
-                            DEPLOYER V.1.1.5
+                            DEPLOYER V.1.1.6
 
              Benvenuto nell'ecosistema Homelab AI Deployer!
 
@@ -88,10 +88,9 @@ EOF
     # Uniamo il logo e il testo
     local FULL_BANNER="$ASCII_LOGO$INFO_TEXT"
 
-    # Utilizziamo 'timeout' per chiudere il msgbox dopo 120 secondi.
-    # L'uscita di timeout è ignorata grazie a || true, in modo da non far
-    # bloccare l'intero script che usa 'set -e'.
-    timeout 120 whiptail --title " Homelab AI Deployer " --msgbox "$FULL_BANNER" 26 75 || true
+    # L'opzione --foreground permette a timeout di non bloccare l'input
+    # della tastiera (il TTY), facendo funzionare correttamente il tasto Ok.
+    timeout --foreground 120 whiptail --title " Homelab AI Deployer " --msgbox "$FULL_BANNER" 26 75 || true
 }
 
 # ------------------------------------------------------------------------------
