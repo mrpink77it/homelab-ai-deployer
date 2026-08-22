@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.6.5 (Full Custom Stack + CMake + Zstd Fix)
+# Version: V.1.6.6 (Full Custom Stack + CMake GCC-12 Host Fix + Zstd)
 # ==============================================================================
 
 set -e
@@ -67,8 +67,8 @@ setup_nvidia_stack() {
             OS_VER=$VERSION_ID
         fi
 
-        echo -e "${CYAN}Installazione dipendenze di base per la compilazione...${NC}"
-        apt update -qq && apt install -y pciutils kmod build-essential cmake curl wget git lsb-release zstd
+        echo -e "${CYAN}Installazione dipendenze di base per la compilazione (inclusi gcc-12 per CUDA)...${NC}"
+        apt update -qq && apt install -y pciutils kmod build-essential cmake curl wget git lsb-release zstd gcc-12 g++-12
 
         if [ ! -f /etc/apt/sources.list.d/cuda.list ]; then
             if [ "$OS_ID" = "ubuntu" ]; then
@@ -89,11 +89,11 @@ setup_nvidia_stack() {
         apt update -y
 
         # Installazione robusta con fallback a cascata
-        if ! apt install -y cuda pciutils kmod build-essential cmake; then
+        if ! apt install -y cuda pciutils kmod build-essential cmake gcc-12 g++-12; then
             echo -e "${YELLOW}[WARNING] Metapacchetto 'cuda' non trovato, provo con 'cuda-toolkit'...${NC}"
-            if ! apt install -y cuda-toolkit pciutils kmod build-essential cmake; then
+            if ! apt install -y cuda-toolkit pciutils kmod build-essential cmake gcc-12 g++-12; then
                 echo -e "${YELLOW}[WARNING] Fallimento repository NVIDIA, uso i pacchetti nativi (nvidia-cuda-toolkit)...${NC}"
-                apt install -y nvidia-cuda-toolkit build-essential cmake
+                apt install -y nvidia-cuda-toolkit build-essential cmake gcc-12 g++-12
             fi
         fi
 
@@ -112,9 +112,14 @@ setup_nvidia_stack() {
 }
 
 # ------------------------------------------------------------------------------
-# MODULI DI INSTALLAZIONE (Aggiornato a CMake per llama.cpp)
+# MODULI DI INSTALLAZIONE (Aggiornato con GCC-12 Host Compiler per CMake)
 # ------------------------------------------------------------------------------
 compile_llamacpp() {
+    # Assicura la presenza di gcc-12/g++-12 anche se CUDA era già installato
+    if ! command -v gcc-12 &> /dev/null; then
+        apt update -qq && apt install -y gcc-12 g++-12 -qq
+    fi
+
     mkdir -p "$BACKEND_DIR/models"
     if [ ! -d "$BACKEND_DIR/llama.cpp" ]; then
         git clone https://github.com/ggerganov/llama.cpp.git "$BACKEND_DIR/llama.cpp"
@@ -128,8 +133,13 @@ compile_llamacpp() {
     mkdir build
     cd build
     
-    echo -e "${CYAN}Configurazione build con CMake (CUDA abilitato)...${NC}"
-    cmake .. -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+    echo -e "${CYAN}Configurazione build con CMake (CUDA abilitato + GCC 12 Host)...${NC}"
+    cmake .. \
+        -DGGML_CUDA=ON \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER=/usr/bin/gcc-12 \
+        -DCMAKE_CXX_COMPILER=/usr/bin/g++-12 \
+        -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-12
     
     echo -e "${CYAN}Compilazione in corso con $(nproc) thread...${NC}"
     cmake --build . --config Release -j$(nproc)
@@ -471,7 +481,7 @@ manage_models() {
 if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.6.5)" \
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.6.6)" \
         --menu "\nSeleziona un'operazione:" 22 80 11 \
         "A" "Express Auto-Deploy (Tutto in un click)" \
         "1" "Compila llama.cpp (CMake CUDA)" \
