@@ -606,28 +606,39 @@ uninstall_services() {
 }
 
 # ------------------------------------------------------------------------------
-# MENU INTERATTIVO TUI
+# MENU INTERATTIVO TUI (Whiptail)
 # ------------------------------------------------------------------------------
-show_menu() {
-    clear
-    echo -e "${BLUE}====================================================${NC}"
-    echo -e "${BLUE}      🦥 HOMELAB AI DEPLOYER - MANAGER NVIDIA      ${NC}"
-    echo -e "${BLUE}====================================================${NC}"
-    echo -e " 1) 🚀 ${GREEN}EXPRESS AUTO-DEPLOY${NC}  (Installazione Completa)"
-    echo -e " 2) 📊 ${CYAN}DASHBOARD DI SISTEMA${NC} (Stato, Risorse e Porte)"
-    echo -e " 3) 🧠 ${YELLOW}GESTIONE MODELLI${NC}     (Download GGUF da HF)"
-    echo -e " 4) 🔄 ${BLUE}AGGIORNA COMPONENTI${NC}  (Pull Git & Update Env)"
-    echo -e " 5) 🔌 ${YELLOW}CONFIGURA SANDBOX${NC}    (Setup Chiavi SSH & API)"
-    echo -e " 6) 🗑️ ${RED}DISINSTALLA / PURGE${NC}  (Servizi o Pulizia Totale)"
-    echo -e " 7) 🚪 ${CYAN}ESCI${NC}"
-    echo -e "${BLUE}====================================================${NC}"
-    echo -ne "Seleziona un'opzione [1-7]: "
-}
+if ! command -v whiptail &> /dev/null; then
+    apt-get update -qq && apt-get install -y whiptail -qq
+fi
+
+if grep -q "container=lxc" /proc/1/environ 2>/dev/null; then
+    VIRT_ENV="LXC (Proxmox)"
+else
+    VIRT_ENV="Bare-Metal / VM"
+fi
 
 while true; do
-    show_menu
-    read -r choice
-    case $choice in
+    CHOICE=$(whiptail --title "Homelab AI - Manager NVIDIA" \
+        --menu "\nAmbiente: $VIRT_ENV\nScegli un'operazione:" 20 75 7 \
+        "1" "EXPRESS AUTO-DEPLOY (Installazione Completa)" \
+        "2" "DASHBOARD DI SISTEMA (Stato, Risorse e Porte)" \
+        "3" "GESTIONE MODELLI (Download GGUF da HF)" \
+        "4" "AGGIORNA COMPONENTI (Pull Git & Update Env)" \
+        "5" "CONFIGURA SANDBOX (Setup Chiavi SSH & API)" \
+        "6" "DISINSTALLA / PURGE (Servizi o Pulizia Totale)" \
+        "7" "ESCI" \
+        3>&1 1>&2 2>&3)
+        
+    # Gestione tasto Cancel o ESC
+    if [ $? -ne 0 ]; then
+        clear
+        echo -e "${GREEN}Uscita dal Manager NVIDIA. A presto!${NC}"
+        exit 0
+    fi
+
+    clear # Pulisce lo schermo prima di eseguire il comando
+    case $CHOICE in
         1) express_auto_deploy ;;
         2) system_dashboard ;;
         3) manage_models ;;
@@ -635,8 +646,9 @@ while true; do
         5) configure_sandbox ;;
         6) uninstall_services ;;
         7) echo -e "${GREEN}Uscita... Bye!${NC}"; exit 0 ;;
-        *) echo -e "${RED}Opzione non valida!${NC}" ;;
     esac
-    echo -ne "\n${YELLOW}Premi INVIO per continuare...${NC}"
+    
+    # Pausa per leggere l'output prima di ricaricare il menu grafico
+    echo -ne "\n${YELLOW}Premi INVIO per tornare al menu...${NC}"
     read -r
 done
