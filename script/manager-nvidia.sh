@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.5.6 (Fixed CUDA Toolkit Package Reference)
+# Version: V.1.5.7 (Fixed NVIDIA Keyring & CUDA Repository Setup)
 # ==============================================================================
 
 set -e
@@ -61,7 +61,19 @@ return_to_main() {
 
 setup_nvidia_stack() {
     if ! command -v nvcc &> /dev/null; then
-        apt update -qq && apt install -y cuda-toolkit pciutils kmod build-essential curl wget git
+        UBUNTU_VER=$(lsb_release -rs | tr -d '.')
+        
+        apt update -qq && apt install -y pciutils kmod build-essential curl wget git lsb-release
+        
+        if [ ! -f /etc/apt/sources.list.d/cuda.list ]; then
+            wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb
+            dpkg -i /tmp/cuda-keyring.deb
+            rm -f /tmp/cuda-keyring.deb
+            apt update -qq
+        fi
+
+        apt install -y cuda-toolkit pciutils kmod build-essential
+
         # Rileva dinamicamente la cartella CUDA installata in /usr/local/
         CUDA_DIR=$(ls -d /usr/local/cuda-* 2>/dev/null | head -n 1)
         if [ -n "$CUDA_DIR" ]; then
@@ -403,7 +415,7 @@ manage_models() {
 if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.6)" \
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.7)" \
         --menu "\nSeleziona un'operazione:" 22 80 11 \
         "A" "Express Auto-Deploy (Tutto in un click)" \
         "1" "Compila llama.cpp (CUDA)" \
