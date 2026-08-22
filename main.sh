@@ -39,9 +39,22 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+# RILEVAMENTO AMBIENTE WINDOWS (WSL)
+# ------------------------------------------------------------------------------
+is_wsl() {
+    if grep -qi microsoft /proc/version 2>/dev/null || grep -qi wsl /proc/version 2>/dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # DIAGNOSTICA HARDWARE E AMBIENTE
 # ------------------------------------------------------------------------------
-if grep -q "container=lxc" /proc/1/environ 2>/dev/null; then
+if is_wsl; then
+    VIRT_ENV="Windows WSL 2"
+elif grep -q "container=lxc" /proc/1/environ 2>/dev/null; then
     VIRT_ENV="LXC (Proxmox)"
 else
     VIRT_ENV="Bare-Metal / VM"
@@ -63,24 +76,24 @@ fi
 # ------------------------------------------------------------------------------
 show_intro_banner() {
     local INFO_TEXT="
-                   HOMELAB AI DEPLOYER (V.1.1.9)
+                    HOMELAB AI DEPLOYER (V.1.1.9)
         --------------------------------------------------
-         Benvenuto nell'ecosistema di orchestrazione AI!
-        --------------------------------------------------
-
-         Questo strumento analizza automaticamente il tuo hardware
-         e ti guida nella configurazione dello stack:
-
-           * Backend:  llama.cpp ottimizzato (NVIDIA/AMD/CPU)
-           * Frontend: Unsloth Studio, Open WebUI, JupyterLab
-           * Servizi:  Bare-Metal services via systemd
-
-        --------------------------------------------------
-         Ambiente : $VIRT_ENV
-         Hardware : $HW_DETECTED
+          Benvenuto nell'ecosistema di orchestrazione AI!
         --------------------------------------------------
 
-         Premi <Ok> per procedere (avvio automatico tra 120s)."
+          Questo strumento analizza automaticamente il tuo hardware
+          e ti guida nella configurazione dello stack:
+
+            * Backend:  llama.cpp ottimizzato (NVIDIA/AMD/CPU)
+            * Frontend: Unsloth Studio, Open WebUI, JupyterLab
+            * Servizi:  Bare-Metal services via systemd
+
+        --------------------------------------------------
+          Ambiente : $VIRT_ENV
+          Hardware : $HW_DETECTED
+        --------------------------------------------------
+
+          Premi <Ok> per procedere (avvio automatico tra 120s)."
 
     timeout --foreground 120 whiptail --title " Homelab AI Deployer " --msgbox "$INFO_TEXT" 22 80 || true
 }
@@ -112,16 +125,29 @@ run_script() {
 # MENU GRAFICO PRINCIPALE
 # ------------------------------------------------------------------------------
 show_menu() {
-    CHOICE=$(whiptail --title "Homelab AI - Main Dispatcher" \
-        --default-item "$DEFAULT_ITEM" \
-        --menu "\nAmbiente: $VIRT_ENV\nHardware Rilevato: $HW_DETECTED\n\nScegli un'operazione:" 20 80 7 \
-        "1" "Ambiente NVIDIA      (manager-nvidia.sh)" \
-        "2" "Ambiente AMD         (manager-amd.sh)" \
-        "3" "Ambiente CPU-Only    (manager-cpu.sh)" \
-        "4" "Modulo Fine-Tuning   (manager-finetuning.sh)" \
-        "5" "Disinstalla Servizi  (uninstall.sh)" \
-        "6" "Purge Estremo        (purge-homelab-ai.sh)" \
-        3>&1 1>&2 2>&3)
+    if is_wsl; then
+        CHOICE=$(whiptail --title "Homelab AI - Dispatcher Windows (WSL)" \
+            --default-item "$DEFAULT_ITEM" \
+            --menu "\nAmbiente: $VIRT_ENV\nHardware Rilevato: $HW_DETECTED\n\nScegli un'operazione per Windows:" 20 80 6 \
+            "1" "Ambiente NVIDIA WSL (manager-wsl-nvidia.sh)" \
+            "2" "Ambiente AMD WSL    (manager-wsl-amd.sh)" \
+            "3" "Ambiente CPU WSL    (manager-wsl-cpu.sh)" \
+            "4" "Modulo Fine-Tuning  (manager-finetuning.sh)" \
+            "5" "Disinstalla Servizi (uninstall.sh)" \
+            "6" "Purge Estremo       (purge-homelab-ai.sh)" \
+            3>&1 1>&2 2>&3)
+    else
+        CHOICE=$(whiptail --title "Homelab AI - Main Dispatcher" \
+            --default-item "$DEFAULT_ITEM" \
+            --menu "\nAmbiente: $VIRT_ENV\nHardware Rilevato: $HW_DETECTED\n\nScegli un'operazione:" 20 80 7 \
+            "1" "Ambiente NVIDIA     (manager-nvidia.sh)" \
+            "2" "Ambiente AMD         (manager-amd.sh)" \
+            "3" "Ambiente CPU-Only    (manager-cpu.sh)" \
+            "4" "Modulo Fine-Tuning   (manager-finetuning.sh)" \
+            "5" "Disinstalla Servizi  (uninstall.sh)" \
+            "6" "Purge Estremo        (purge-homelab-ai.sh)" \
+            3>&1 1>&2 2>&3)
+    fi
         
     if [ $? -ne 0 ]; then
         clear
@@ -137,12 +163,23 @@ show_intro_banner
 
 while true; do
     show_menu
-    case $CHOICE in
-        1) run_script "manager-nvidia.sh" ;;
-        2) run_script "manager-amd.sh" ;;
-        3) run_script "manager-cpu.sh" ;;
-        4) run_script "manager-finetuning.sh" ;;
-        5) run_script "uninstall.sh" ;;
-        6) run_script "purge-homelab-ai.sh" ;;
-    esac
+    if is_wsl; then
+        case $CHOICE in
+            1) run_script "manager-wsl-nvidia.sh" ;;
+            2) run_script "manager-wsl-amd.sh" ;;
+            3) run_script "manager-wsl-cpu.sh" ;;
+            4) run_script "manager-finetuning.sh" ;;
+            5) run_script "uninstall.sh" ;;
+            6) run_script "purge-homelab-ai.sh" ;;
+        esac
+    else
+        case $CHOICE in
+            1) run_script "manager-nvidia.sh" ;;
+            2) run_script "manager-amd.sh" ;;
+            3) run_script "manager-cpu.sh" ;;
+            4) run_script "manager-finetuning.sh" ;;
+            5) run_script "uninstall.sh" ;;
+            6) run_script "purge-homelab-ai.sh" ;;
+        esac
+    fi
 done
