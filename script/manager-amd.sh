@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (AMD - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.2.0.3 (Full Featured + Advanced Services + Fix CMake Node.js Error)
+# Version: V.2.0.4 (Full Featured + Advanced Services + Disable Llama UI Flag)
 # ==============================================================================
 
 set -euo pipefail
@@ -12,7 +12,7 @@ trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-amd.sh si è interr
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-VERSION="2.0.3"
+VERSION="2.0.4"
 LOG_FILE="/var/log/homelab-ai-amd.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -102,8 +102,8 @@ compile_llama_amd() {
         git clone https://github.com/ggerganov/llama.cpp.git "${LLAMA_DIR}"
     fi
     
-    # Compilazione con supporto Vulkan ed esclusione test/frontend Node.js
-    cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_VULKAN=ON -DGGML_BUILD_TESTS=OFF
+    # Compilazione con supporto Vulkan ed esclusione test/UI integrata
+    cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_VULKAN=ON -DGGML_BUILD_TESTS=OFF -DGGML_NO_LLAMA_UI=ON
     cmake --build "${LLAMA_DIR}/build" --config Release -j$(nproc)
     
     local host="0.0.0.0"
