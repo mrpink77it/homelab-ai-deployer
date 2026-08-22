@@ -7,6 +7,9 @@
 
 set -e
 
+# ------------------------------------------------------------------------------
+# CONTROLLI PRELIMINARI
+# ------------------------------------------------------------------------------
 # Controllo Permessi Root
 if [ "$EUID" -ne 0 ]; then
   echo -e "\033[0;31m[ERROR] Questo script deve essere eseguito come root!\033[0m"
@@ -50,45 +53,50 @@ elif lspci | grep -i "vga\|3d\|display" | grep -iq "AMD\|Radeon" || [ -d "/sys/m
 fi
 
 # ------------------------------------------------------------------------------
-# BANNER INTRODUTTIVO
+# BANNER INTRODUTTIVO (Stile Whiptail)
 # ------------------------------------------------------------------------------
 show_intro_banner() {
-    clear
-    echo -e "\033[0;36m"
-    cat << "EOF"
+    # Usiamo cat con 'EOF' tra apici singoli per non far interpretare a bash 
+    # i caratteri speciali (come i backtick) presenti nell'ASCII Art
+    local ASCII_LOGO=$(cat << 'EOF'
  _   _                      _       _        ___  ___ 
 | | | | ___  _ __ ___   ___| | __ _| |__    / _ \|_ _|
 | |_| |/ _ \| '_ ` _ \ / _ \ |/ _` | '_ \  | |_| || | 
 |  _  | (_) | | | | | |  __/ | (_| | |_) | |  _  || | 
 |_| |_|\___/|_| |_| |_|\___|_|\__,_|_.__/  |_| |_|___|
-                                                      
-                  DEPLOYER V.1.1.5
 EOF
-    echo -e "\033[0m"
-    echo -e "\033[1;37m=================================================================\033[0m"
-    echo -e "\033[1;32m Benvenuto nell'ecosistema Homelab AI Deployer!\033[0m"
-    echo -e "\033[1;37m=================================================================\033[0m"
-    echo -e "Questo strumento analizza automaticamente il tuo hardware"
-    echo -e "e ti guida nell'installazione e orchestrazione del tuo stack AI:"
-    echo -e ""
-    echo -e "  \033[0;33m•\033[0m \033[1;36mBackend:\033[0m  llama.cpp ottimizzato per (NVIDIA / AMD / CPU)"
-    echo -e "  \033[0;33m•\033[0m \033[1;36mFrontend:\033[0m Unsloth Studio, Open WebUI, OpenCode AI"
-    echo -e "  \033[0;33m•\033[0m \033[1;36mServizi:\033[0m  Configurazione automatica systemd e API remote"
-    echo -e ""
-    echo -e "\033[1;37m=================================================================\033[0m"
-    echo -e " \033[1;35mAmbiente rilevato:\033[0m $VIRT_ENV"
-    echo -e " \033[1;35mHardware rilevato:\033[0m $HW_DETECTED"
-    echo -e "\033[1;37m=================================================================\033[0m"
-    echo -e ""
-    echo -e "\033[1;33mPremi un tasto qualsiasi per avviare la console di gestione..."
-    echo -e "(L'avvio automatico avverrà tra 120 secondi)\033[0m"
-    
-    # Aspetta la pressione di un tasto (-n 1) per 120 secondi (-t 120) in modalità silenziosa (-s)
-    read -t 120 -n 1 -s -r || true
+)
+
+    local INFO_TEXT="
+                  DEPLOYER V.1.1.5
+
+Benvenuto nell'ecosistema Homelab AI Deployer!
+
+Questo strumento analizza automaticamente il tuo hardware
+e ti guida nell'orchestrazione del tuo stack AI:
+
+  • Backend:  llama.cpp ottimizzato (NVIDIA / AMD / CPU)
+  • Frontend: Unsloth Studio, Open WebUI, JupyterLab
+  • Servizi:  Configurazione Bare-Metal via systemd
+
+-----------------------------------------------------------
+Ambiente rilevato: $VIRT_ENV
+Hardware rilevato: $HW_DETECTED
+-----------------------------------------------------------
+
+Premi <Ok> per iniziare (avvio automatico tra 120s)."
+
+    # Uniamo il logo e il testo
+    local FULL_BANNER="$ASCII_LOGO$INFO_TEXT"
+
+    # Utilizziamo 'timeout' per chiudere il msgbox dopo 120 secondi.
+    # Se va in timeout restituisce exit code 124, il '|| true' previene 
+    # l'interruzione dello script a causa del 'set -e' globale.
+    timeout 120 whiptail --title " Homelab AI Deployer " --msgbox "$FULL_BANNER" 26 75 || true
 }
 
 # ------------------------------------------------------------------------------
-# FUNZIONE DI ESECUZIONE (Fix Percorsi)
+# FUNZIONE DI ESECUZIONE 
 # ------------------------------------------------------------------------------
 run_script() {
     local target_script="$1"
@@ -141,6 +149,7 @@ show_menu() {
 # Mostra il banner introduttivo una sola volta all'avvio
 show_intro_banner
 
+# Avvia il loop infinito del menu principale
 while true; do
     show_menu
     case $CHOICE in
