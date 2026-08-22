@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.2.0.7 (Full Featured + DEB822 Sources Support for Debian 13)
+# Version: V.2.0.8 (Robust DEB822 Fix & APT Pre-flight Check)
 # ==============================================================================
 
 set -euo pipefail
@@ -12,7 +12,7 @@ trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-nvidia.sh si è int
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-VERSION="2.0.7"
+VERSION="2.0.8"
 LOG_FILE="/var/log/homelab-ai-nvidia.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -86,15 +86,20 @@ return_to_main() {
 
 install_dependencies() {
     export DEBIAN_FRONTEND=noninteractive
-    log_info "Configurazione e abilitazione repository non-free (supporto DEB822 / sources.list)..."
+    log_info "Configurazione e abilitazione repository non-free (supporto avanzato DEB822 / sources.list)..."
     
     if grep -q "debian" /etc/os-release; then
         # 1. Gestione formato moderno DEB822 (.sources) in /etc/apt/sources.list.d/
         for sfile in /etc/apt/sources.list.d/*.sources; do
             if [ -f "$sfile" ]; then
-                if grep -q "Types:" "$sfile" && grep -q "Components:" "$sfile"; then
-                    # Aggiorna la riga Components aggiungendo contrib non-free non-free-firmware se mancanti
-                    sed -i '/^Components:/ { /contrib/! s/$/ contrib non-free non-free-firmware/ }' "$sfile" || true
+                log_info "Elaborazione file sorgente DEB822: $sfile"
+                # Assicura che contrib, non-free e non-free-firmware siano presenti nella riga Components
+                if grep -q "^Components:" "$sfile"; then
+                    for comp in contrib non-free non-free-firmware; do
+                        if ! grep -q "$comp" "$sfile"; then
+                            sed -i "/^Components:/ s/$/ $comp/" "$sfile"
+                        fi
+                    done
                 fi
             fi
         done
@@ -114,9 +119,21 @@ install_dependencies() {
         add-apt-repository -y restricted universe multiverse || true
     fi
 
-    log_info "Aggiornamento e installazione dipendenze di sistema NVIDIA..."
+    log_info "Aggiornamento indici APT e installazione dipendenze di sistema..."
     apt-get update -qq
+    
+    # Verifica preventiva disponibilità pacchetto CUDA toolkit
+    if ! apt-cache policy nvidia-cuda-toolkit | grep -q "Candidate: [^ ]"; then
+        log_warn "Il pacchetto nvidia-cuda-toolkit non risulta ancora agganciato dai repository attivi."
+        log_warn "Tentativo di forzatura aggiunta componenti non-free su tutti i file .sources..."
+        for sfile in /etc/apt/sources.list.d/*.sources; do
+            [ -f "$sfile" ] && sed -i 's/Components: *\(.*\)/Components: \1 contrib non-free non-free-firmware/' "$sfile"
+        done
+        apt-get update -qq
+    fi
+
     apt-get install -y curl wget git build-essential cmake zstd ffmpeg python3-pip python3-dev pciutils nvidia-cuda-toolkit whiptail -qq
+    log_info "Dipendenze di sistema installate con successo."
 }
 
 compile_llama_cuda() {
@@ -132,7 +149,7 @@ compile_llama_cuda() {
 
     if ! command -v nvcc &> /dev/null && [ ! -f "${CUDAToolkit_ROOT}/bin/nvcc" ]; then
         log_err "Compilatore nvcc (CUDA Toolkit) non trovato! Assicurati di installare nvidia-cuda-toolkit."
-        whiptail --title "Errore CUDA" --msgbox "Toolkit CUDA non rilevato nel sistema. Assicurati che i repository non-free siano attivi." 10 60
+        whiptail --title "Errore CUDA" --msgbox "Toolkit CUDA non rilevato nel sistema. Assicurati che i repository non-free siano attivi in Debian 13." 10 60
         return 1
     fi
 
