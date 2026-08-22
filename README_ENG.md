@@ -204,8 +204,8 @@ homelab-ai-deployer/
 │   ├── purge-homelab-ai.sh
 │   ├── sandbox_setup.sh
 │   ├── setup_jupyter.sh
-│   ├── purge-homelab-ai.sh                 # Root-level environment purge tool
-│   └── uninstall.sh                        # Root-level service removal tool
+│   ├── purge-homelab-ai.sh             # Root-level environment purge tool
+│   └── uninstall.sh                    # Root-level service removal tool
 ├── README.md                           # General documentation (Italian)
 ├── README_ENG.md                       # General documentation (English)
 ├── install.sh                          # Quick start script
