@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Script: manager-amd.sh
-# Versione: 1.0.1
-# Descrizione: Gestore deployment, frontend, servizi systemd e ciclo AI per GPU AMD
-# Ambienti: Bare-Metal & Proxmox LXC (Debian 13 / Ubuntu 24.04 LTS)
+# Homelab AI Deployer - Manager Script (AMD)
+# Repo: mrpink77it/homelab-ai-deployer
+# Version: V.1.5.5 (Uniformed Menus & 3 AMD Architectures Support)
 # ==============================================================================
 
 set -euo pipefail
@@ -19,7 +18,7 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 # ------------------------------------------------------------------------------
 # Configurazione Variabili Globali
 # ------------------------------------------------------------------------------
-VERSION="1.0.1"
+VERSION="1.5.5"
 LOG_FILE="/var/log/homelab-ai-amd.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -30,9 +29,23 @@ SERVICE_NAME="homelab-ai-backend"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 FRONTEND_SERVICE_FILE="/etc/systemd/system/homelab-ai-frontend.service"
 
+# File di configurazione porte persistenti
+PORT_CONFIG="/etc/homelab-ai/ports.conf"
+mkdir -p /etc/homelab-ai
+
+# Porte predefinite (se non configurate)
+if [ ! -f "$PORT_CONFIG" ]; then
+    cat <<EOF > "$PORT_CONFIG"
+LLAMACPP_PORT=8080
+OPENWEBUI_PORT=3000
+EOF
+fi
+source "$PORT_CONFIG"
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
 # ------------------------------------------------------------------------------
@@ -70,6 +83,15 @@ detect_environment() {
 init_env() {
     mkdir -p "$(dirname "$LOG_FILE")" "${MODELS_DIR}" "${WEBUI_DIR}"
     touch "${LOG_FILE}" || true
+}
+
+return_to_main() {
+    clear
+    echo -e "${GREEN}Ritorno al menu principale...${NC}"
+    sleep 1
+    if [ -f "./main.sh" ]; then exec ./main.sh
+    elif [ -f "../main.sh" ]; then cd .. && exec ./main.sh
+    else exit 0; fi
 }
 
 # ------------------------------------------------------------------------------
@@ -216,10 +238,11 @@ compile_llama() {
 }
 
 auto_setup_systemd_service() {
+    source "$PORT_CONFIG"
     local type="$1"
     local override="$2"
     local host="0.0.0.0"
-    local port="8080"
+    local port="$LLAMACPP_PORT"
     local model_path="${MODELS_DIR}/model.gguf"
 
     local env_directives=""
@@ -256,13 +279,14 @@ EOF
     systemctl daemon-reload
     systemctl enable "${SERVICE_NAME}"
     systemctl restart "${SERVICE_NAME}" || true
-    log_info "Servizio ${SERVICE_NAME} configurato con variabili d'ambiente ROCm e avviato."
+    log_info "Servizio ${SERVICE_NAME} configurato su porta $port e avviato."
 }
 
 # ------------------------------------------------------------------------------
 # Gestione Frontend (Open WebUI)
 # ------------------------------------------------------------------------------
 install_open_webui() {
+    source "$PORT_CONFIG"
     log_info "Installazione/Aggiornamento Open WebUI (Frontend)..."
     mkdir -p "${WEBUI_DIR}"
     
@@ -295,9 +319,9 @@ Type=simple
 User=root
 WorkingDirectory=${WEBUI_DIR}
 Environment="HOST=0.0.0.0"
-Environment="PORT=3000"
-Environment="WEBUI_PORT=3000"
-Environment="OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1"
+Environment="PORT=$OPENWEBUI_PORT"
+Environment="WEBUI_PORT=$OPENWEBUI_PORT"
+Environment="OPENAI_API_BASE_URL=http://127.0.0.1:$LLAMACPP_PORT/v1"
 ExecStart=${WEBUI_DIR}/venv/bin/open-webui serve
 Restart=always
 RestartSec=5
@@ -311,27 +335,149 @@ EOF
     systemctl daemon-reload
     systemctl enable homelab-ai-frontend
     systemctl restart homelab-ai-frontend
-    log_info "Open WebUI configurato con successo (Porta 3000)."
-    read -rp "Premi Invio per continuare..."
+    log_info "Open WebUI configurato con successo sulla porta $OPENWEBUI_PORT."
+    whiptail --title "Successo" --msgbox "Open WebUI installato e avviato correttamente sulla porta $OPENWEBUI_PORT!" 10 60
 }
 
 # ------------------------------------------------------------------------------
-# Gestione Modelli GGUF
+# GESTIONE PORTE E STATO ATTIVO (Con Cancel uniforme)
 # ------------------------------------------------------------------------------
-download_model() {
-    local model_url
-    model_url=$(whiptail --title "Gestione Modelli GGUF" --inputbox "Inserisci l'URL diretto del file GGUF da scaricare:" 10 78 "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf" 3>&1 1>&2 2>&3)
+manage_ports() {
+    while true; do
+        source "$PORT_CONFIG"
+        
+        local s_llama="CHIUSA"
+        ss -tulpn | grep -q ":$LLAMACPP_PORT " && s_llama="ATTIVO"
+        local s_webui="CHIUSA"
+        ss -tulpn | grep -q ":$OPENWEBUI_PORT " && s_webui="ATTIVO"
+
+        PORT_CHOICE=$(whiptail --title "Gestione Porte & Stato Servizi AMD" \
+            --menu "Stato attuale e porte configurate:\n\n \
+ 1. llama.cpp Server  : Porta $LLAMACPP_PORT [$s_llama]\n \
+ 2. Open WebUI        : Porta $OPENWEBUI_PORT [$s_webui]\n" 18 75 3 \
+            "CHANGE" "Modifica una porta di ascolto" \
+            "RESTART" "Riavvia i servizi con le porte aggiornate" \
+            "BACK" "Torna al menu principale" \
+            3>&1 1>&2 2>&3)
+            
+        if [ $? -ne 0 ]; then break; fi
+
+        case $PORT_CHOICE in
+            "CHANGE")
+                TARGET_SRV=$(whiptail --title "Cambia Porta" --menu "Seleziona il servizio da modificare:" 12 60 2 \
+                    "LLAMACPP_PORT" "llama.cpp (Attuale: $LLAMACPP_PORT)" \
+                    "OPENWEBUI_PORT" "Open WebUI (Attuale: $OPENWEBUI_PORT)" \
+                    3>&1 1>&2 2>&3)
+                
+                if [ $? -ne 0 ] || [ -z "$TARGET_SRV" ]; then
+                    continue
+                fi
+
+                NEW_PORT=$(whiptail --title "Nuova Porta" --inputbox "Inserisci il nuovo numero di porta per $TARGET_SRV:" 10 50 3>&1 1>&2 2>&3)
+                if [ $? -eq 0 ] && [ -n "$NEW_PORT" ]; then
+                    sed -i "s/^${TARGET_SRV}=.*/${TARGET_SRV}=${NEW_PORT}/" "$PORT_CONFIG"
+                    whiptail --title "Aggiornato" --msgbox "Porta modificata nel file di configurazione. Ricordati di riavviare i servizi." 10 60
+                fi
+                ;;
+            "RESTART")
+                systemctl restart "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
+                whiptail --title "Riavviati" --msgbox "Servizi riavviati con le nuove porte!" 8 50
+                ;;
+            "BACK")
+                break
+                ;;
+        esac
+    done
+}
+
+# ------------------------------------------------------------------------------
+# DASHBOARD IN BANNER WHIPTAIL
+# ------------------------------------------------------------------------------
+show_dashboard_banner() {
+    source "$PORT_CONFIG"
+    local LOCAL_IP
+    LOCAL_IP=$(hostname -I | awk '{print $1}')
     
-    if [[ -n "${model_url}" ]]; then
-        local filename
-        filename=$(basename "${model_url}" | cut -d? -f1)
-        log_info "Download del modello ${filename} in corso..."
-        wget -O "${MODELS_DIR}/${filename}" "${model_url}"
-        ln -sf "${MODELS_DIR}/${filename}" "${MODELS_DIR}/model.gguf"
-        log_info "Modello scaricato e impostato come default (model.gguf)."
-        systemctl restart "${SERVICE_NAME}" 2>/dev/null || true
-    fi
-    read -rp "Premi Invio per continuare..."
+    local st_llama="Spento"
+    ss -tulpn | grep -q ":$LLAMACPP_PORT " && st_llama="In ascolto (Porta $LLAMACPP_PORT)"
+    local st_webui="Spento"
+    ss -tulpn | grep -q ":$OPENWEBUI_PORT " && st_webui="In ascolto (Porta $OPENWEBUI_PORT)"
+
+    local GPU_INFO="Nessuna GPU AMD rilevata via lspci"
+    GPU_INFO=$(lspci | grep -iE 'vga|3d|display' | grep -i amd | head -n 1)
+
+    local DASH_TEXT="=== HARDWARE & GPU AMD ===\n• IP Locale : $LOCAL_IP\n• GPU       : $GPU_INFO\n\n=== STATO SERVIZI E PORTE ===\n• llama.cpp : $st_llama\n• Open WebUI: $st_webui\n\nTutti i servizi attivi operano in parallelo senza conflitti."
+
+    whiptail --title "Dashboard di Sistema - AMD Manager" --msgbox "$DASH_TEXT" 20 75
+}
+
+# ------------------------------------------------------------------------------
+# GESTIONE, DOWNLOAD E ATTIVAZIONE MODELLI (Con Cancel uniforme)
+# ------------------------------------------------------------------------------
+manage_models() {
+    while true; do
+        MODEL_CHOICE=$(whiptail --title "Gestione & Attivazione Modelli GGUF (AMD)" \
+            --menu "Scegli l'operazione sui modelli:" 15 75 3 \
+            "ACTIVATE_GGUF" "Seleziona e attiva un GGUF su llama.cpp" \
+            "DOWNLOAD_GGUF" "Scarica file GGUF da HuggingFace" \
+            "BACK"          "Torna al menu principale" \
+            3>&1 1>&2 2>&3)
+            
+        if [ $? -ne 0 ]; then break; fi
+
+        case "$MODEL_CHOICE" in
+            "ACTIVATE_GGUF")
+                mkdir -p "$MODELS_DIR"
+                if [ -z "$(ls -A "$MODELS_DIR"/*.gguf 2>/dev/null)" ]; then
+                    whiptail --title "Attenzione" --msgbox "Nessun file GGUF trovato in $MODELS_DIR.\nScaricalo prima usando l'opzione 'Scarica file GGUF da HuggingFace'." 10 60
+                    continue
+                fi
+                
+                GGUF_LIST=()
+                while IFS= read -r file; do
+                    fname=$(basename "$file")
+                    fsize=$(du -h "$file" | awk '{print $1}')
+                    GGUF_LIST+=("$fname" "Size: $fsize")
+                done < <(find "$MODELS_DIR" -maxdepth 1 -name "*.gguf")
+
+                SELECTED_GGUF=$(whiptail --title "Attiva Modello su llama.cpp" --menu "Seleziona il GGUF da mettere in esecuzione:" 20 75 8 "${GGUF_LIST[@]}" 3>&1 1>&2 2>&3)
+                
+                if [ $? -ne 0 ] || [ -z "$SELECTED_GGUF" ]; then
+                    continue
+                fi
+
+                ln -sf "${MODELS_DIR}/$SELECTED_GGUF" "${MODELS_DIR}/model.gguf"
+                
+                if [ -f "$SERVICE_FILE" ]; then
+                    sed -i "s|-m \".*\"|-m \"${MODELS_DIR}/model.gguf\"|" "$SERVICE_FILE"
+                    systemctl daemon-reload
+                    systemctl restart "${SERVICE_NAME}" 2>/dev/null || true
+                    whiptail --title "Successo" --msgbox "Modello '$SELECTED_GGUF' attivato e servizio llama.cpp riavviato!" 10 60
+                else
+                    whiptail --title "Errore" --msgbox "Il servizio systemd non esiste. Configura prima il backend." 10 60
+                fi
+                ;;
+            "DOWNLOAD_GGUF")
+                URL_GGUF=$(whiptail --title "Download GGUF" --inputbox "Inserisci URL diretto del file GGUF (es. da HuggingFace):" 10 65 "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf" 3>&1 1>&2 2>&3)
+                if [ $? -eq 0 ] && [ -n "$URL_GGUF" ]; then
+                    mkdir -p "$MODELS_DIR"
+                    cd "$MODELS_DIR"
+                    clear
+                    wget -c --show-progress "$URL_GGUF"
+                    local downloaded_file
+                    downloaded_file=$(basename "$URL_GGUF" | cut -d? -f1)
+                    if [ -f "$downloaded_file" ]; then
+                        ln -sf "${MODELS_DIR}/${downloaded_file}" "${MODELS_DIR}/model.gguf"
+                    fi
+                    echo -ne "\nPremi INVIO per continuare..."
+                    read -r
+                fi
+                ;;
+            "BACK")
+                break
+                ;;
+        esac
+    done
 }
 
 # ------------------------------------------------------------------------------
@@ -342,7 +488,6 @@ update_repo() {
     if [[ -d "${REPO_ROOT}/.git" ]]; then
         git -C "${REPO_ROOT}" pull origin main || true
         
-        # Applica i permessi corretti dopo il pull rispettando la nuova struttura
         chmod +x "${SCRIPT_DIR}"/*.sh 2>/dev/null || true
         [[ -f "${REPO_ROOT}/main.sh" ]] && chmod +x "${REPO_ROOT}/main.sh"
         
@@ -356,7 +501,6 @@ update_repo() {
 }
 
 run_uninstall() {
-    # Cerca prima l'uninstall, in fallback cerca purge-homelab
     if [[ -x "${SCRIPT_DIR}/uninstall.sh" ]]; then
         clear
         log_warn "Avvio script di disinstallazione..."
@@ -368,8 +512,12 @@ run_uninstall() {
         "${SCRIPT_DIR}/purge-homelab-ai.sh"
         exit 0
     else
-        log_err "Nessuno script di disinstallazione trovato nella cartella ${SCRIPT_DIR}."
-        read -rp "Premi Invio per continuare..."
+        if (whiptail --title "Conferma" --yesno "Vuoi rimuovere i servizi e ripulire lo stack AMD?" 10 60); then
+            systemctl stop "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
+            rm -f "${SERVICE_FILE}" "${FRONTEND_SERVICE_FILE}"
+            systemctl daemon-reload
+            whiptail --title "Completato" --msgbox "Servizi rimossi con successo." 8 50
+        fi
     fi
 }
 
@@ -424,32 +572,44 @@ select_backend() {
 }
 
 main_menu() {
+    if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
+
     while true; do
         local choice
         choice=$(whiptail --title "Homelab AI - AMD Management Console (v${VERSION})" \
-            --menu "\nAmbiente: $(detect_environment)\nScegli un'operazione:" 20 78 9 \
-            "1" "Seleziona/Compila Backend Llama.cpp (Auto GPU + Patch FP8)" \
+            --menu "\nAmbiente: $(detect_environment)\nScegli un'operazione:" 22 80 12 \
+            "A" "Express Auto-Deploy (Tutto in un click - Vulkan)" \
+            "1" "Seleziona/Compila Backend Llama.cpp (3 Architetture)" \
             "2" "Installa / Configura Open WebUI (Frontend)" \
             "3" "Scarica / Gestisci Modelli GGUF" \
             "4" "Gestione Servizi (Avvia/Ferma/Riavvia)" \
-            "5" "Stato Servizi (Backend & Frontend)" \
-            "6" "Visualizza Log di Sistema" \
-            "7" "Aggiorna Repository (Manager e Script)" \
-            "8" "Disinstalla Stack Homelab AI" \
-            "9" "Esci" \
+            "5" "Gestione Porte & Stato Servizi Attivi" \
+            "6" "Mostra Dashboard di Sistema (Banner)" \
+            "7" "Visualizza Log di Sistema" \
+            "8" "Aggiorna Repository (Manager e Script)" \
+            "9" "Disinstalla Stack Homelab AI" \
+            "0" "Esci al Menu Principale" \
             3>&1 1>&2 2>&3)
 
+        if [ $? -ne 0 ]; then return_to_main; fi
+
         case "$choice" in
-            1) select_backend; read -rp "Premi Invio per continuare..." ;;
-            2) install_open_webui ;;
-            3) download_model ;;
-            4) manage_service_menu ;;
-            5) systemctl status "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true; read -rp "Premi Invio per continuare..." ;;
-            6) tail -n 50 "${LOG_FILE}" || true; read -rp "Premi Invio per continuare..." ;;
-            7) update_repo ;;
-            8) run_uninstall ;;
-            9) break ;;
-            *) break ;;
+            "A")
+                install_dependencies
+                compile_llama "vulkan"
+                install_open_webui
+                ;;
+            "1") select_backend; read -rp "Premi Invio per continuare..." ;;
+            "2") install_open_webui ;;
+            "3") manage_models ;;
+            "4") manage_service_menu ;;
+            "5") manage_ports ;;
+            "6") show_dashboard_banner; read -rp "Premi Invio per continuare..." ;;
+            "7") clear; tail -n 50 "${LOG_FILE}" || true; echo -ne "\nPremi INVIO per continuare..."; read -r ;;
+            "8") update_repo ;;
+            "9") run_uninstall ;;
+            "0") return_to_main ;;
+            *) return_to_main ;;
         esac
     done
 }
