@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.2.0.4 (Full Featured + Advanced Services + Disable Llama UI Flag)
+# Version: V.2.0.5 (Full Featured + Advanced Services + CUDA Path Fix)
 # ==============================================================================
 
 set -euo pipefail
@@ -12,7 +12,7 @@ trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-nvidia.sh si è int
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-VERSION="2.0.4"
+VERSION="2.0.5"
 LOG_FILE="/var/log/homelab-ai-nvidia.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -88,11 +88,27 @@ install_dependencies() {
     export DEBIAN_FRONTEND=noninteractive
     log_info "Aggiornamento e installazione dipendenze di sistema NVIDIA..."
     apt-get update -qq
-    apt-get install -y curl wget git build-essential cmake zstd ffmpeg python3-pip python3-dev pciutils whiptail -qq
+    apt-get install -y curl wget git build-essential cmake zstd ffmpeg python3-pip python3-dev pciutils nvidia-cuda-toolkit whiptail -qq
 }
 
 compile_llama_cuda() {
     systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+    log_info "Verifica e configurazione percorsi CUDA..."
+    
+    # Individuazione automatica o forzatura dei path CUDA per CMake
+    if [ -d "/usr/local/cuda" ]; then
+        export CUDAToolkit_ROOT="/usr/local/cuda"
+        export PATH="$PATH:/usr/local/cuda/bin"
+    elif [ -d "/usr" ] && [ -f "/usr/bin/nvcc" ]; then
+        export CUDAToolkit_ROOT="/usr"
+    fi
+
+    if ! command -v nvcc &> /dev/null && [ ! -f "${CUDAToolkit_ROOT}/bin/nvcc" ]; then
+        log_err "Compilatore nvcc (CUDA Toolkit) non trovato! Assicurati di installare nvidia-cuda-toolkit."
+        whiptail --title "Errore CUDA" --msgbox "Toolkit CUDA non rilevato nel sistema. Installa nvidia-cuda-toolkit prima di procedere." 10 60
+        return 1
+    fi
+
     log_info "Clonazione e compilazione di llama.cpp con supporto CUDA..."
     mkdir -p "${LLAMA_DIR}"
     
@@ -102,8 +118,13 @@ compile_llama_cuda() {
         git clone https://github.com/ggerganov/llama.cpp.git "${LLAMA_DIR}"
     fi
     
-    # Esclusione test e UI integrata (evita chiamate a npm/Node)
-    cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_CUDA=ON -DGGML_BUILD_TESTS=OFF -DGGML_NO_LLAMA_UI=ON
+    # Configurazione CMake con puntamento esplicito a CUDAToolkit ed esclusione test/UI
+    cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" \
+        -DGGML_CUDA=ON \
+        -DGGML_BUILD_TESTS=OFF \
+        -DGGML_NO_LLAMA_UI=ON \
+        -DCUDAToolkit_ROOT="${CUDAToolkit_ROOT:-/usr/local/cuda}"
+
     cmake --build "${LLAMA_DIR}/build" --config Release -j$(nproc)
     
     local host="0.0.0.0"
