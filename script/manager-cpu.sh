@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script Name: manager-cpu.sh
-# Version:     1.3.7
+# Version:     1.3.8
 # Project:     homelab-ai-deployer
 # Description: CPU Manager per llama.cpp (AVX2/AVX-512) & Open WebUI (uv / Python 3.11)
 # ==============================================================================
 
 set -euo pipefail
+
+# --- RISOLUZIONE PERCORSI RELATIVI ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # --- VARIABILI GLOBALI DI SISTEMA ---
 BASE_DIR="/opt/homelab-ai"
@@ -354,11 +358,47 @@ run_express_deploy() {
     apply_systemd_config
 }
 
+# --- INTEGRAZIONE GESTIONE REPOSITORY ---
+update_repo() {
+    log_info "Aggiornamento Repository in corso..."
+    if [[ -d "${REPO_ROOT}/.git" ]]; then
+        git -C "${REPO_ROOT}" pull origin main || true
+        
+        # Applica i permessi corretti dopo il pull rispettando la nuova struttura
+        chmod +x "${SCRIPT_DIR}"/*.sh 2>/dev/null || true
+        [[ -f "${REPO_ROOT}/main.sh" ]] && chmod +x "${REPO_ROOT}/main.sh"
+        
+        log_info "Repository aggiornata. Riavvio del manager CPU in corso..."
+        sleep 2
+        exec "${SCRIPT_DIR}/manager-cpu.sh"
+    else
+        log_warn "Repository non clonata tramite git. Aggiornamento manuale necessario."
+        read -rp "Premi [INVIO] per continuare..."
+    fi
+}
+
+run_uninstall() {
+    if [[ -x "${SCRIPT_DIR}/uninstall.sh" ]]; then
+        clear
+        log_warn "Avvio script di disinstallazione..."
+        "${SCRIPT_DIR}/uninstall.sh"
+        exit 0
+    elif [[ -x "${SCRIPT_DIR}/purge-homelab-ai.sh" ]]; then
+        clear
+        log_warn "Avvio script di purga stack AI..."
+        "${SCRIPT_DIR}/purge-homelab-ai.sh"
+        exit 0
+    else
+        log_err "Nessuno script di disinstallazione trovato nella cartella ${SCRIPT_DIR}."
+        read -rp "Premi [INVIO] per continuare..."
+    fi
+}
+
 # --- DASHBOARD DI USCITA ---
 show_exit_summary() {
     local exit_code=$?
     echo -e "\n================================================================="
-    echo -e "              HOMELAB AI DEPLOYER - CPU DASHBOARD                "
+    echo -e "             HOMELAB AI DEPLOYER - CPU DASHBOARD                "
     echo -e "================================================================="
     local ip_addr
     ip_addr=$(hostname -I | awk '{print $1}' || echo "127.0.0.1")
@@ -388,8 +428,8 @@ show_menu() {
 
     while true; do
         local choice
-        choice=$(whiptail --title "Homelab AI Deployer - Manager CPU (v1.3.7)" \
-            --menu "\nSeleziona un'operazione:" 20 80 8 \
+        choice=$(whiptail --title "Homelab AI Deployer - Manager CPU (v1.3.8)" \
+            --menu "\nSeleziona un'operazione:" 22 80 10 \
             "A" "Express Auto-Deploy (Pipeline Completa)" \
             "1" "Compila llama.cpp (AVX2/AVX-512 + OpenMP)" \
             "2" "Installa Open WebUI (Python venv via uv)" \
@@ -397,6 +437,8 @@ show_menu() {
             "4" "Mostra Profilo Hardware (CPU & RAM)" \
             "5" "Download & Tuning Modelli CPU" \
             "6" "Esegui Benchmark CPU (llama-bench)" \
+            "7" "Aggiorna Repository (Manager e Script)" \
+            "8" "Disinstalla Stack Homelab AI" \
             "0" "Esci e Mostra Dashboard" 3>&1 1>&2 2>&3) || exit 0
 
         case "${choice}" in
@@ -407,6 +449,8 @@ show_menu() {
             4) show_hardware_profile ;;
             5) download_and_tune_model_menu ;;
             6) run_cpu_benchmark ;;
+            7) update_repo ;;
+            8) run_uninstall ;;
             0) exit 0 ;;
         esac
     done
