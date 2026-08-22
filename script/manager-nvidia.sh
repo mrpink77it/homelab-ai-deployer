@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.2.0.3 (Full Featured + Advanced Services + Fix CMake Node.js Error)
+# Version: V.2.0.4 (Full Featured + Advanced Services + Disable Llama UI Flag)
 # ==============================================================================
 
 set -euo pipefail
@@ -12,7 +12,7 @@ trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-nvidia.sh si è int
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-VERSION="2.0.3"
+VERSION="2.0.4"
 LOG_FILE="/var/log/homelab-ai-nvidia.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -102,8 +102,8 @@ compile_llama_cuda() {
         git clone https://github.com/ggerganov/llama.cpp.git "${LLAMA_DIR}"
     fi
     
-    # Esclusione test e frontend Node.js obsoleti per evitare errori di compilazione
-    cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_CUDA=ON -DGGML_BUILD_TESTS=OFF
+    # Esclusione test e UI integrata (evita chiamate a npm/Node)
+    cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_CUDA=ON -DGGML_BUILD_TESTS=OFF -DGGML_NO_LLAMA_UI=ON
     cmake --build "${LLAMA_DIR}/build" --config Release -j$(nproc)
     
     local host="0.0.0.0"
