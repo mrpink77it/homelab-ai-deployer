@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.5.2 (Syntax Fixed)
+# Version: V.1.5.3 (Unified Model Manager & Syntax Fixed)
 # ==============================================================================
 
 set -e
@@ -278,7 +278,7 @@ show_dashboard_banner() {
 }
 
 # ------------------------------------------------------------------------------
-# BENCHMARK E MODELLI
+# BENCHMARK
 # ------------------------------------------------------------------------------
 run_benchmark() {
     clear
@@ -298,36 +298,91 @@ run_benchmark() {
     read -r
 }
 
+# ------------------------------------------------------------------------------
+# GESTIONE, DOWNLOAD E ATTIVAZIONE MODELLI (MENU 6)
+# ------------------------------------------------------------------------------
 manage_models() {
-    local MODEL_CHOICE
-    MODEL_CHOICE=$(whiptail --title "Download & Tuning Modelli GPU" \
-        --menu "Seleziona la modalità di gestione modelli:" 18 70 2 \
-        "OLLAMA" "Pull modello tramite Ollama CLI" \
-        "GGUF" "Scarica modello GGUF da HuggingFace" \
-        3>&1 1>&2 2>&3)
-    if [ $? -ne 0 ]; then return; fi
+    while true; do
+        MODEL_CHOICE=$(whiptail --title "Gestione & Attivazione Modelli GPU" \
+            --menu "Scegli l'operazione sui modelli:" 18 75 5 \
+            "ACTIVATE_GGUF" "Seleziona e attiva un GGUF su llama.cpp" \
+            "OLLAMA_LIST"   "Visualizza modelli locali Ollama" \
+            "OLLAMA_PULL"   "Scarica nuovo modello con Ollama (pull)" \
+            "DOWNLOAD_GGUF" "Scarica file GGUF da HuggingFace" \
+            "BACK"          "Torna al menu principale" \
+            3>&1 1>&2 2>&3)
+        if [ $? -ne 0 ]; then break; fi
 
-    if [ "$MODEL_CHOICE" == "OLLAMA" ]; then
-        local M_NAME
-        M_NAME=$(whiptail --title "Ollama Pull" --inputbox "Inserisci il nome del modello (es. deepseek-r1, qwen2.5):" 10 60 3>&1 1>&2 2>&3)
-        if [ $? -eq 0 ] && [ -n "$M_NAME" ]; then
-            clear
-            ollama pull "$M_NAME"
-            echo -ne "\nPremi INVIO per continuare..."
-            read -r
-        fi
-    elif [ "$MODEL_CHOICE" == "GGUF" ]; then
-        local URL_GGUF
-        URL_GGUF=$(whiptail --title "Download GGUF" --inputbox "Inserisci URL diretto del file GGUF:" 10 65 3>&1 1>&2 2>&3)
-        if [ $? -eq 0 ] && [ -n "$URL_GGUF" ]; then
-            mkdir -p "$BACKEND_DIR/models"
-            cd "$BACKEND_DIR/models"
-            clear
-            wget -c --show-progress "$URL_GGUF"
-            echo -ne "\nPremi INVIO per continuare..."
-            read -r
-        fi
-    fi
+        case "$MODEL_CHOICE" in
+            "ACTIVATE_GGUF")
+                mkdir -p "$BACKEND_DIR/models"
+                if [ -z "$(ls -A "$BACKEND_DIR/models"/*.gguf 2>/dev/null)" ]; then
+                    whiptail --title "Attenzione" --msgbox "Nessun file GGUF trovato in $BACKEND_DIR/models.\nScaricalo prima usando l'opzione 'Scarica file GGUF da HuggingFace'." 10 60
+                    continue
+                fi
+                
+                GGUF_LIST=()
+                while IFS= read -r file; do
+                    fname=$(basename "$file")
+                    fsize=$(du -h "$file" | awk '{print $1}')
+                    GGUF_LIST+=("$fname" "Size: $fsize")
+                done < <(find "$BACKEND_DIR/models" -maxdepth 1 -name "*.gguf")
+
+                SELECTED_GGUF=$(whiptail --title "Attiva Modello su llama.cpp" --menu "Seleziona il GGUF da mettere in esecuzione:" 20 75 8 "${GGUF_LIST[@]}" 3>&1 1>&2 2>&3)
+                
+                if [ $? -eq 0 ] && [ -n "$SELECTED_GGUF" ]; then
+                    SERVICE_FILE="/etc/systemd/system/homelab-ai-backend.service"
+                    if [ -f "$SERVICE_FILE" ]; then
+                        sed -i "s|-m $BACKEND_DIR/models/.*.gguf|-m $BACKEND_DIR/models/$SELECTED_GGUF|" "$SERVICE_FILE"
+                        
+                        systemctl daemon-reload
+                        if systemctl is-active --quiet homelab-ai-backend.service; then
+                            systemctl restart homelab-ai-backend.service
+                            STATUS_MSG="Modello '$SELECTED_GGUF' attivato e servizio llama.cpp riavviato con successo!"
+                        else
+                            systemctl enable homelab-ai-backend.service --now
+                            STATUS_MSG="Modello '$SELECTED_GGUF' impostato e servizio avviato per la prima volta!"
+                        fi
+                        
+                        whiptail --title "Successo" --msgbox "$STATUS_MSG" 10 60
+                    else
+                        whiptail --title "Errore" --msgbox "Il servizio systemd 'homelab-ai-backend.service' non esiste.\nConfigura prima i servizi tramite il menu principale." 10 60
+                    fi
+                fi
+                ;;
+            "OLLAMA_LIST")
+                if ! command -v ollama &> /dev/null; then
+                    whiptail --title "Errore" --msgbox "Ollama non risulta installato sul sistema." 8 45
+                else
+                    OLLAMA_DATA=$(ollama list 2>/dev/null || echo "Ollama non è in esecuzione o nessun modello trovato.")
+                    whiptail --title "Modelli Ollama Installati" --msgbox "$OLLAMA_DATA" 22 75
+                fi
+                ;;
+            "OLLAMA_PULL")
+                M_NAME=$(whiptail --title "Ollama Pull" --inputbox "Inserisci il nome del modello (es. deepseek-r1:7b, qwen2.5:7b):" 10 60 3>&1 1>&2 2>&3)
+                if [ $? -eq 0 ] && [ -n "$M_NAME" ]; then
+                    clear
+                    ollama pull "$M_NAME"
+                    echo -ne "\nPremi INVIO per continuare..."
+                    read -r
+                fi
+                ;;
+            "DOWNLOAD_GGUF")
+                URL_GGUF=$(whiptail --title "Download GGUF" --inputbox "Inserisci URL diretto del file GGUF (es. da HuggingFace):" 10 65 3>&1 1>&2 2>&3)
+                if [ $? -eq 0 ] && [ -n "$URL_GGUF" ]; then
+                    mkdir -p "$BACKEND_DIR/models"
+                    cd "$BACKEND_DIR/models"
+                    clear
+                    wget -c --show-progress "$URL_GGUF"
+                    echo -ne "\nPremi INVIO per continuare..."
+                    read -r
+                fi
+                ;;
+            "BACK")
+                break
+                ;;
+        esac
+    done
 }
 
 # ------------------------------------------------------------------------------
@@ -336,7 +391,7 @@ manage_models() {
 if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.2)" \
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.3)" \
         --menu "\nSeleziona un'operazione:" 22 80 11 \
         "A" "Express Auto-Deploy (Tutto in un click)" \
         "1" "Compila llama.cpp (CUDA)" \
@@ -344,7 +399,7 @@ while true; do
         "3" "Configura & Avvia Servizi (Scelta Multipla Stack)" \
         "4" "Gestione Porte & Stato Servizi Attivi" \
         "5" "Mostra Dashboard di Sistema (Banner)" \
-        "6" "Download & Tuning Modelli GPU" \
+        "6" "Gestione & Attivazione Modelli (GGUF/Ollama)" \
         "7" "Esegui Benchmark GPU (llama-bench)" \
         "8" "Aggiorna Repository & Componenti" \
         "9" "Disinstalla / Pulizia Completa" \
