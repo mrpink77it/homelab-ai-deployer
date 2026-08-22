@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Main Dispatcher Menu
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.0.6
+# Version: V.1.0.7
 # ==============================================================================
 
 set -e
@@ -22,8 +22,8 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# Assicuriamoci che tutti gli script manager abbiano i permessi di esecuzione
-chmod +x manager-*.sh 2>/dev/null || true
+# Assicuriamoci che tutti gli script abbiano i permessi di esecuzione
+chmod +x manager-*.sh uninstall.sh purge-homelab-ai.sh 2>/dev/null || true
 
 # Funzione per eseguire in modo sicuro gli script esterni
 run_script() {
@@ -34,49 +34,42 @@ run_script() {
         exec "./$script_name"
     else
         echo -e "${RED}[ERROR] File $script_name non trovato nella directory corrente!${NC}"
-        echo -e "${YELLOW}Assicurati di aver clonato correttamente la repository.${NC}"
+        echo -e "${YELLOW}Assicurati di aver clonato correttamente la repository o che il file esista.${NC}"
     fi
 }
 
+# ------------------------------------------------------------------------------
+# MENU INTERATTIVO TUI
+# ------------------------------------------------------------------------------
 show_menu() {
     clear
     echo -e "${BLUE}====================================================${NC}"
-    echo -e "${BLUE}        🦥 HOMELAB AI DEPLOYER - MAIN MENU         ${NC}"
+    echo -e "${BLUE}           HOMELAB AI DEPLOYER - MAIN MENU        ${NC}"
     echo -e "${BLUE}====================================================${NC}"
-    echo -e " Seleziona l'ambiente di destinazione:"
-    echo -e ""
-    echo -e " 1) 🟢 ${GREEN}Ambiente NVIDIA${NC}       (manager-nvidia.sh)"
-    echo -e " 2) 🔴 ${RED}Ambiente AMD${NC}          (manager-amd.sh)"
-    echo -e " 3) ⚪ ${CYAN}Ambiente CPU-Only${NC}     (manager-cpu.sh)"
-    echo -e " 4) 🛠️  ${YELLOW}Modulo Fine-Tuning${NC}    (manager-finetuning.sh)"
-    echo -e " 5) 🚪 ${BLUE}Esci${NC}"
+    echo -e " 1) 🟢 ${GREEN}AMBIENTE NVIDIA${NC}      (manager-nvidia.sh)"
+    echo -e " 2) 🔴 ${RED}AMBIENTE AMD${NC}         (manager-amd.sh)"
+    echo -e " 3) ⚪ ${CYAN}AMBIENTE CPU-ONLY${NC}    (manager-cpu.sh)"
+    echo -e " 4) 🛠️  ${YELLOW}MODULO FINE-TUNING${NC}   (manager-finetuning.sh)"
+    echo -e " 5) 🗑️  ${YELLOW}DISINSTALLA SERVIZI${NC}  (uninstall.sh)"
+    echo -e " 6) 💥 ${RED}PURGE ESTREMO${NC}        (purge-homelab-ai.sh)"
+    echo -e " 7) 🚪 ${CYAN}ESCI${NC}"
     echo -e "${BLUE}====================================================${NC}"
-    echo -ne "Scegli un'opzione [1-5]: "
+    echo -ne "Seleziona un'opzione [1-7]: "
 }
 
 while true; do
     show_menu
     read -r choice
     case $choice in
-        1) 
-            run_script "manager-nvidia.sh"
-            ;;
-        2) 
-            run_script "manager-amd.sh"
-            ;;
-        3) 
-            run_script "manager-cpu.sh"
-            ;;
-        4) 
-            run_script "manager-finetuning.sh"
-            ;;
-        5) 
-            echo -e "\n${GREEN}Uscita dal deployer. A presto!${NC}"
-            exit 0 
-            ;;
-        *) 
-            echo -e "\n${RED}Opzione non valida! Inserisci un numero da 1 a 5.${NC}"
-            sleep 2
-            ;;
+        1) run_script "manager-nvidia.sh" ;;
+        2) run_script "manager-amd.sh" ;;
+        3) run_script "manager-cpu.sh" ;;
+        4) run_script "manager-finetuning.sh" ;;
+        5) run_script "uninstall.sh" ;;
+        6) run_script "purge-homelab-ai.sh" ;;
+        7) echo -e "${GREEN}Uscita dal deployer. A presto!${NC}"; exit 0 ;;
+        *) echo -e "${RED}Opzione non valida!${NC}" ;;
     esac
+    echo -ne "\n${YELLOW}Premi INVIO per continuare...${NC}"
+    read -r
 done
