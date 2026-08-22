@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu & Debian Support)
+# Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.6.0 (Universal Ubuntu/Debian CUDA Stack)
+# Version: V.1.6.1 (Full Ubuntu CUDA Fix)
 # ==============================================================================
 
 set -e
@@ -61,38 +61,40 @@ return_to_main() {
 
 setup_nvidia_stack() {
     if ! command -v nvcc &> /dev/null; then
-        # Rilevamento automatico OS (Ubuntu o Debian)
         if [ -f /etc/os-release ]; then
             . /etc/os-release
             OS_ID=$ID
             OS_VER=$VERSION_ID
         fi
 
+        echo -e "${CYAN}Installazione dipendenze di base per la compilazione...${NC}"
         apt update -qq && apt install -y pciutils kmod build-essential curl wget git lsb-release
 
         if [ ! -f /etc/apt/sources.list.d/cuda.list ]; then
             if [ "$OS_ID" = "ubuntu" ]; then
                 UBUNTU_VER=$(echo "$OS_VER" | tr -d '.')
                 KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/cuda-keyring_1.1-1_all.deb"
-            elif [ "$OS_ID" = "debian" ]; then
-                KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/debian${OS_VER}/x86_64/cuda-keyring_1.1-1_all.deb"
             else
-                # Fallback predefinito su Ubuntu 24.04 se l'OS non è riconosciuto esplicitamente
                 KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb"
             fi
 
+            echo -e "${CYAN}Download del keyring NVIDIA...${NC}"
             wget "$KEYRING_URL" -O /tmp/cuda-keyring.deb
             dpkg -i /tmp/cuda-keyring.deb
             rm -f /tmp/cuda-keyring.deb
         fi
 
-        echo -e "${CYAN}Aggiornamento indici APT dai repository NVIDIA ($OS_ID $OS_VER)...${NC}"
+        # Passaggio CRITICO: ricarica i repository NVIDIA aggiunti dal keyring
+        echo -e "${CYAN}Aggiornamento indici APT dai repository ufficiali NVIDIA...${NC}"
         apt update -y
 
-        # Installazione robusta del toolkit/driver
+        # Installazione robusta con fallback a cascata
         if ! apt install -y cuda pciutils kmod build-essential; then
-            echo -e "${YELLOW}[WARNING] Installazione del metapacchetto 'cuda' fallita, tentativo con 'cuda-toolkit'...${NC}"
-            apt install -y cuda-toolkit pciutils kmod build-essential
+            echo -e "${YELLOW}[WARNING] Metapacchetto 'cuda' non trovato, provo con 'cuda-toolkit'...${NC}"
+            if ! apt install -y cuda-toolkit pciutils kmod build-essential; then
+                echo -e "${YELLOW}[WARNING] Fallimento repository NVIDIA, uso i pacchetti nativi Ubuntu (nvidia-cuda-toolkit)...${NC}"
+                apt install -y nvidia-cuda-toolkit build-essential
+            fi
         fi
 
         # Rileva dinamicamente la cartella CUDA installata in /usr/local/
@@ -103,6 +105,8 @@ setup_nvidia_stack() {
             echo "/usr/local/cuda/lib64" > /etc/ld.so.conf.d/cuda.conf
             ldconfig 2>/dev/null || true
             export PATH="/usr/local/cuda/bin${PATH:+:${PATH}}"
+        elif [ -f /usr/bin/nvcc ]; then
+            ln -sf /usr/bin/nvcc /usr/local/bin/nvcc
         fi
     fi
 }
@@ -436,7 +440,7 @@ manage_models() {
 if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.6.0)" \
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.6.1)" \
         --menu "\nSeleziona un'operazione:" 22 80 11 \
         "A" "Express Auto-Deploy (Tutto in un click)" \
         "1" "Compila llama.cpp (CUDA)" \
