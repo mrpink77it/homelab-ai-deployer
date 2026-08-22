@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.5.0 (Flexible Multi-Stack & Whiptail Dashboard)
+# Version: V.1.5.1 (Fixed Syntax & Flexible Multi-Stack)
 # ==============================================================================
 
 set -e
@@ -15,12 +15,8 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-REPO_URL="https://github.com/mrpink77it/homelab-ai-deployer.git"
-TARGET_REPO_DIR="/root/homelab-ai-deployer"
 UNSLOTH_ENV="/root/unsloth_env"
 OPENWEBUI_ENV="/opt/openwebui_env"
-CODE_RUNNER_DIR="/opt/code_runner"
-CODE_RUNNER_ENV="/opt/code_runner/venv"
 BACKEND_DIR="/opt/homelab-ai/backend"
 
 # File di configurazione porte persistenti
@@ -28,12 +24,14 @@ PORT_CONFIG="/etc/homelab-ai/ports.conf"
 mkdir -p /etc/homelab-ai
 
 # Porte predefinite (se non configurate)
-[ ! -f "$PORT_CONFIG" ] && cat <<EOF > "$PORT_CONFIG"
+if [ ! -f "$PORT_CONFIG" ]; then
+    cat <<EOF > "$PORT_CONFIG"
 LLAMACPP_PORT=8080
 UNSLOTH_PORT=8888
 OLLAMA_PORT=11434
 OPENWEBUI_PORT=8081
 EOF
+fi
 source "$PORT_CONFIG"
 
 if [ "$EUID" -ne 0 ]; then
@@ -113,9 +111,8 @@ install_ollama_webui() {
 configure_and_start_services() {
     source "$PORT_CONFIG"
     
-    # Selezione multipla dei servizi da abilitare
     SELECTED_SERVICES=$(whiptail --title "Gestione Servizi Systemd" \
-        --checklist "Seleziona quali componenti attivare nella configurazione:" 20 78 5 \
+        --checklist "Seleziona quali componenti attivare nella configurazione:" 20 78 4 \
         "llama-backend" "llama.cpp server (Porta $LLAMACPP_PORT)" ON \
         "unsloth-studio" "Unsloth Jupyter Lab (Porta $UNSLOTH_PORT)" ON \
         "ollama" "Ollama Engine (Porta $OLLAMA_PORT)" OFF \
@@ -124,10 +121,8 @@ configure_and_start_services() {
         
     if [ $? -ne 0 ]; then return; fi
 
-    # Ricarica configurazione porte
     source "$PORT_CONFIG"
 
-    # Scrittura dinamica dei file systemd in base alle scelte
     if [[ "$SELECTED_SERVICES" == *"llama-backend"* ]]; then
         cat <<EOF > /etc/systemd/system/homelab-ai-backend.service
 [Unit]
@@ -201,13 +196,12 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# GESTIONE PORTE E STATO ATTIVO (Menu Dedicato)
+# GESTIONE PORTE E STATO ATTIVO
 # ------------------------------------------------------------------------------
 manage_ports() {
     while true; do
         source "$PORT_CONFIG"
         
-        # Controllo stato attivo in tempo reale per il menu
         local s_llama="CHIUSA"
         ss -tulpn | grep -q ":$LLAMACPP_PORT " && s_llama="ATTIVO"
         local s_unsloth="CHIUSA"
@@ -222,7 +216,7 @@ manage_ports() {
  1. llama.cpp Server  : Porta $LLAMACPP_PORT [$s_llama]\n \
  2. Unsloth Jupyter   : Porta $UNSLOTH_PORT [$s_unsloth]\n \
  3. Ollama Engine     : Porta $OLLAMA_PORT [$s_ollama]\n \
- 4. Open WebUI        : Porta $OPENWEBUI_PORT [$s_webui]\n" 22 75 6 \
+ 4. Open WebUI        : Porta $OPENWEBUI_PORT [$s_webui]\n" 22 75 3 \
             "CHANGE" "Modifica una porta di ascolto" \
             "RESTART" "Riavvia i servizi con le porte aggiornate" \
             "BACK" "Torna al menu principale" \
@@ -257,13 +251,13 @@ manage_ports() {
 }
 
 # ------------------------------------------------------------------------------
-# DASHBOARD IN BANNER WHIPTAIL (Non esce dall'app)
+# DASHBOARD IN BANNER WHIPTAIL
 # ------------------------------------------------------------------------------
 show_dashboard_banner() {
     source "$PORT_CONFIG"
-    local LOCAL_IP=$(hostname -I | awk '{print $1}')
+    local LOCAL_IP
+    LOCAL_IP=$(hostname -I | awk '{print $1}')
     
-    # Rilevamento stato porte e servizi
     local st_llama="Spento"
     ss -tulpn | grep -q ":$LLAMACPP_PORT " && st_llama="In ascolto (Porta $LLAMACPP_PORT)"
     local st_unsloth="Spento"
@@ -292,7 +286,8 @@ run_benchmark() {
         whiptail --title "Errore" --msgbox "llama-bench non trovato. Compila prima llama.cpp." 10 60
         return
     }
-    local MODEL_PATH=$(find "$BACKEND_DIR/models" -name "*.gguf" | head -n 1)
+    local MODEL_PATH
+    MODEL_PATH=$(find "$BACKEND_DIR/models" -name "*.gguf" | head -n 1)
     clear
     if [ -z "$MODEL_PATH" ]; then
         "$BACKEND_DIR/llama.cpp/llama-bench" -p 512,1024 -n 128
@@ -304,14 +299,16 @@ run_benchmark() {
 }
 
 manage_models() {
-    local MODEL_CHOICE=$(whiptail --title "Download & Tuning Modelli GPU" \
-        --menu "Seleziona la modalità di gestione modelli:" 18 70 4 \
+    local MODEL_CHOICE
+    MODEL_CHOICE=$(whiptail --title "Download & Tuning Modelli GPU" \
+        --menu "Seleziona la modalità di gestione modelli:" 18 70 2 \
         "OLLAMA" "Pull modello tramite Ollama CLI" \
         "GGUF" "Scarica modello GGUF da HuggingFace" \
         3>&1 1>&2 2>&3)
     if [ $? -ne 0 ]; then return; fi
 
     if [ "$MODEL_CHOICE" == "OLLAMA" ]; then
+        local M_NAME
         M_NAME=$(whiptail --title "Ollama Pull" --inputbox "Inserisci il nome del modello (es. deepseek-r1, qwen2.5):" 10 60 3>&1 1>&2 2>&3)
         if [ $? -eq 0 ] && [ -n "$M_NAME" ]; then
             clear
@@ -320,6 +317,7 @@ manage_models() {
             read -r
         fi
     elif [ "$MODEL_CHOICE" == "GGUF" ]; then
+        local URL_GGUF
         URL_GGUF=$(whiptail --title "Download GGUF" --inputbox "Inserisci URL diretto del file GGUF:" 10 65 3>&1 1>&2 2>&3)
         if [ $? -eq 0 ] && [ -n "$URL_GGUF" ]; then
             mkdir -p "$BACKEND_DIR/models"
@@ -338,7 +336,7 @@ manage_models() {
 if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.0)" \
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.5.1)" \
         --menu "\nSeleziona un'operazione:" 22 80 11 \
         "A" "Express Auto-Deploy (Tutto in un click)" \
         "1" "Compila llama.cpp (CUDA)" \
