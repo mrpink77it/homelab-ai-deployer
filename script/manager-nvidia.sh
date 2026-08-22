@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.2.0.5 (Full Featured + Advanced Services + CUDA Path Fix)
+# Version: V.2.0.6 (Full Featured + Advanced Services + Non-Free Repo Auto-Enable)
 # ==============================================================================
 
 set -euo pipefail
@@ -12,7 +12,7 @@ trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-nvidia.sh si è int
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-VERSION="2.0.5"
+VERSION="2.0.6"
 LOG_FILE="/var/log/homelab-ai-nvidia.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -86,6 +86,25 @@ return_to_main() {
 
 install_dependencies() {
     export DEBIAN_FRONTEND=noninteractive
+    log_info "Verifica e abilitazione repository non-free (Debian/Ubuntu)..."
+    
+    if grep -q "debian" /etc/os-release; then
+        # Abilita contrib, non-free e non-free-firmware sui sorgenti apt di Debian
+        if [ -f /etc/apt/sources.list ]; then
+            sed -i 's/main$/main contrib non-free non-free-firmware/g' /etc/apt/sources.list || true
+            sed -i 's/main buster/main contrib non-free non-free-firmware buster/g' /etc/apt/sources.list || true
+            sed -i 's/main bookworm/main contrib non-free non-free-firmware bookworm/g' /etc/apt/sources.list || true
+            sed -i 's/main trixie/main contrib non-free non-free-firmware trixie/g' /etc/apt/sources.list || true
+        fi
+        # Gestione formati moderni sources.list.d se presenti
+        for f in /etc/apt/sources.list.d/*.list; do
+            [ -f "$f" ] && sed -i 's/\bmain\b/main contrib non-free non-free-firmware/g' "$f" || true
+        done
+    elif grep -q "ubuntu" /etc/os-release; then
+        apt-get install -y software-properties-common -qq || true
+        add-apt-repository -y restricted universe multiverse || true
+    fi
+
     log_info "Aggiornamento e installazione dipendenze di sistema NVIDIA..."
     apt-get update -qq
     apt-get install -y curl wget git build-essential cmake zstd ffmpeg python3-pip python3-dev pciutils nvidia-cuda-toolkit whiptail -qq
@@ -95,7 +114,6 @@ compile_llama_cuda() {
     systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
     log_info "Verifica e configurazione percorsi CUDA..."
     
-    # Individuazione automatica o forzatura dei path CUDA per CMake
     if [ -d "/usr/local/cuda" ]; then
         export CUDAToolkit_ROOT="/usr/local/cuda"
         export PATH="$PATH:/usr/local/cuda/bin"
@@ -118,7 +136,6 @@ compile_llama_cuda() {
         git clone https://github.com/ggerganov/llama.cpp.git "${LLAMA_DIR}"
     fi
     
-    # Configurazione CMake con puntamento esplicito a CUDAToolkit ed esclusione test/UI
     cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" \
         -DGGML_CUDA=ON \
         -DGGML_BUILD_TESTS=OFF \
