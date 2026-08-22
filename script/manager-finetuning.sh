@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Homelab AI Deployer - Manager Script
+# Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
+# Version: V.1.6.7 (Full Custom Stack + Debian 13 OpenPGP Fix + GCC-12)
 # ==============================================================================
 
 set -e
@@ -11,405 +12,518 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+NC='\033[0m'
 
-REPO_URL="https://github.com/mrpink77it/homelab-ai-deployer.git"
-TARGET_REPO_DIR="/root/homelab-ai-deployer"
 UNSLOTH_ENV="/root/unsloth_env"
-CODE_RUNNER_DIR="/opt/code_runner"
-CODE_RUNNER_ENV="/opt/code_runner/venv"
-OPENCODE_DIR="/opt/opencode"
+OPENWEBUI_ENV="/opt/openwebui_env"
+BACKEND_DIR="/opt/homelab-ai/backend"
 
-# Controllo Permessi Root
+# File di configurazione porte persistenti
+PORT_CONFIG="/etc/homelab-ai/ports.conf"
+mkdir -p /etc/homelab-ai
+
+# Porte predefinite (se non configurate)
+if [ ! -f "$PORT_CONFIG" ]; then
+    cat <<EOF > "$PORT_CONFIG"
+LLAMACPP_PORT=8080
+UNSLOTH_PORT=8888
+OLLAMA_PORT=11434
+OPENWEBUI_PORT=8081
+EOF
+fi
+source "$PORT_CONFIG"
+
 if [ "$EUID" -ne 0 ]; then
   echo -e "${RED}[ERROR] Questo script deve essere eseguito come root!${NC}"
   exit 1
 fi
 
-# Fix preventivo per xdg-open su ambienti headless LXC/Server
 setup_xdg_fix() {
     if ! command -v xdg-open &> /dev/null; then
-        echo -e "${YELLOW}[FIX] Creazione symlink xdg-open -> /bin/true per headless server...${NC}"
         ln -sf /bin/true /usr/local/bin/xdg-open
     fi
 }
 
-# Fix per repository APT corrotti o non validi
 fix_apt_repos() {
-    echo -e "${YELLOW}[FIX] Pulizia eventuali repository APT obsoleti/non validi...${NC}"
     rm -f /etc/apt/sources.list.d/nvidia-container-toolkit.list
     rm -f /etc/apt/sources.list.d/cuda*.list
 }
 
+return_to_main() {
+    clear
+    echo -e "${GREEN}Ritorno al menu principale...${NC}"
+    sleep 1
+    if [ -f "./main.sh" ]; then exec ./main.sh
+    elif [ -f "../main.sh" ]; then cd .. && exec ./main.sh
+    else exit 0; fi
+}
+
+setup_nvidia_stack() {
+    if ! command -v nvcc &> /dev/null; then
+        if [ -f /etc/os-release ]; then
+            . /etc/os-release
+            OS_ID=$ID
+            OS_VER=$VERSION_ID
+        fi
+
+        echo -e "${CYAN}Installazione dipendenze di base per la compilazione (inclusi gcc-12 per CUDA)...${NC}"
+        apt update -qq && apt install -y pciutils kmod build-essential cmake curl wget git lsb-release zstd gcc-12 g++-12
+
+        if [ ! -f /etc/apt/sources.list.d/cuda.list ]; then
+            if [ "$OS_ID" = "ubuntu" ]; then
+                UBUNTU_VER=$(echo "$OS_VER" | tr -d '.')
+                KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/cuda-keyring_1.1-1_all.deb"
+                
+                echo -e "${CYAN}Download del keyring NVIDIA...${NC}"
+                wget "$KEYRING_URL" -O /tmp/cuda-keyring.deb
+                dpkg -i /tmp/cuda-keyring.deb
+                rm -f /tmp/cuda-keyring.deb
+            else
+                # Su Debian usiamo il repository debian12 e forziamo il trust per aggirare il blocco SHA-1 di sqv su Debian 13
+                KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb"
+                echo "deb [trusted=yes] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /" > /etc/apt/sources.list.d/cuda.list
+                
+                echo -e "${CYAN}Download del keyring NVIDIA (Debian)...${NC}"
+                wget "$KEYRING_URL" -O /tmp/cuda-keyring.deb
+                dpkg -i /tmp/cuda-keyring.deb
+                rm -f /tmp/cuda-keyring.deb
+            fi
+        fi
+
+        # Passaggio CRITICO: ricarica i repository NVIDIA
+        echo -e "${CYAN}Aggiornamento indici APT dai repository ufficiali NVIDIA...${NC}"
+        apt update -y
+
+        # Installazione robusta con fallback a cascata
+        if ! apt install -y cuda pciutils kmod build-essential cmake gcc-12 g++-12; then
+            echo -e "${YELLOW}[WARNING] Metapacchetto 'cuda' non trovato, provo con 'cuda-toolkit'...${NC}"
+            if ! apt install -y cuda-toolkit pciutils kmod build-essential cmake gcc-12 g++-12; then
+                echo -e "${YELLOW}[WARNING] Fallimento repository NVIDIA, uso i pacchetti nativi (nvidia-cuda-toolkit)...${NC}"
+                apt install -y nvidia-cuda-toolkit build-essential cmake gcc-12 g++-12
+            fi
+        fi
+
+        # Rileva dinamicamente la cartella CUDA installata in /usr/local/
+        CUDA_DIR=$(ls -d /usr/local/cuda-* 2>/dev/null | head -n 1)
+        if [ -n "$CUDA_DIR" ]; then
+            ln -sfn "$CUDA_DIR" /usr/local/cuda
+            ln -sf /usr/local/cuda/bin/nvcc /usr/local/bin/nvcc
+            echo "/usr/local/cuda/lib64" > /etc/ld.so.conf.d/cuda.conf
+            ldconfig 2>/dev/null || true
+            export PATH="/usr/local/cuda/bin${PATH:+:${PATH}}"
+        elif [ -f /usr/bin/nvcc ]; then
+            ln -sf /usr/bin/nvcc /usr/local/bin/nvcc
+        fi
+    fi
+}
+
 # ------------------------------------------------------------------------------
-# OPZIONE 1: INSTALLA SERVIZI
+# MODULI DI INSTALLAZIONE (Aggiornato con GCC-12 Host Compiler per CMake)
 # ------------------------------------------------------------------------------
-install_services() {
-    echo -e "${BLUE}====================================================${NC}"
-    echo -e "${BLUE}       AVVIO INSTALLAZIONE HOMELAB AI STACK        ${NC}"
-    echo -e "${BLUE}====================================================${NC}"
+compile_llamacpp() {
+    if ! command -v gcc-12 &> /dev/null; then
+        apt update -qq && apt install -y gcc-12 g++-12 -qq
+    fi
 
-    setup_xdg_fix
-    fix_apt_repos
-
-    # 1. Aggiornamento Pacchetti di Sistema
-    echo -e "${YELLOW}[1/5] Installazione Dipendenze di Sistema, Node.js e Driver CUDA...${NC}"
-    apt update || echo -e "${YELLOW}[NOTE] Ignorati warning minori di APT...${NC}"
-    
-    apt install -y curl wget git build-essential python3 python3-pip python3-venv openssh-client net-tools pciutils nodejs
-
-    if command -v nvidia-smi &> /dev/null; then
-        echo -e "${GREEN}[OK] GPU NVIDIA e Driver rilevati tramite nvidia-smi.${NC}"
+    mkdir -p "$BACKEND_DIR/models"
+    if [ ! -d "$BACKEND_DIR/llama.cpp" ]; then
+        git clone https://github.com/ggerganov/llama.cpp.git "$BACKEND_DIR/llama.cpp"
     else
-        echo -e "${YELLOW}[INFO] nvidia-smi non trovato. Tento l'installazione di nvidia-cuda-toolkit...${NC}"
-        apt install -y nvidia-cuda-toolkit || echo -e "${YELLOW}[NOTE] Se sei dentro un LXC Proxmox, assicurati di aver fatto il passthrough GPU.${NC}"
+        cd "$BACKEND_DIR/llama.cpp"
+        git pull origin master 2>/dev/null || git pull origin main 2>/dev/null || true
     fi
 
-    # 2. Configurazione Unsloth Studio nel VENV (/root/unsloth_env)
-    echo -e "${YELLOW}[2/5] Setup Unsloth Studio & PyTorch CUDA nel VENV dedicato...${NC}"
-    if [ ! -d "$UNSLOTH_ENV" ]; then
-        python3 -m venv "$UNSLOTH_ENV"
-    fi
-    "$UNSLOTH_ENV/bin/pip" install --upgrade pip setuptools wheel
+    cd "$BACKEND_DIR/llama.cpp"
+    rm -rf build
+    mkdir build
+    cd build
     
-    "$UNSLOTH_ENV/bin/pip" install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu121
-    "$UNSLOTH_ENV/bin/pip" install jupyterlab unsloth trl xformers
+    echo -e "${CYAN}Configurazione build con CMake (CUDA abilitato + GCC 12 Host)...${NC}"
+    cmake .. \
+        -DGGML_CUDA=ON \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER=/usr/bin/gcc-12 \
+        -DCMAKE_CXX_COMPILER=/usr/bin/g++-12 \
+        -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-12
+    
+    echo -e "${CYAN}Compilazione in corso con $(nproc) thread...${NC}"
+    cmake --build . --config Release -j$(nproc)
 
-    cat <<EOF > /etc/systemd/system/unsloth-studio.service
+    if [ -f "$BACKEND_DIR/llama.cpp/build/bin/llama-server" ]; then
+        ln -sf "$BACKEND_DIR/llama.cpp/build/bin/llama-server" "$BACKEND_DIR/llama.cpp/llama-server"
+    fi
+    if [ -f "$BACKEND_DIR/llama.cpp/build/bin/llama-bench" ]; then
+        ln -sf "$BACKEND_DIR/llama.cpp/build/bin/llama-bench" "$BACKEND_DIR/llama.cpp/llama-bench"
+    fi
+}
+
+install_unsloth_stack() {
+    if [ ! -d "$UNSLOTH_ENV" ]; then python3 -m venv "$UNSLOTH_ENV"; fi
+    "$UNSLOTH_ENV/bin/pip" install --upgrade pip wheel "setuptools<82"
+    "$UNSLOTH_ENV/bin/pip" install -U "torch<2.12.0" "torchvision<0.27.0" torchaudio --extra-index-url https://download.pytorch.org/whl/cu121
+    "$UNSLOTH_ENV/bin/pip" install -U jupyterlab unsloth unsloth-zoo trl xformers
+    apt install -y nodejs npm
+    npm install -g opencode-ai 2>/dev/null || true
+}
+
+install_ollama_webui() {
+    if ! command -v zstd &> /dev/null; then
+        echo -e "${CYAN}Installazione di zstd (richiesto da Ollama)...${NC}"
+        apt-get update -qq && apt-get install -y zstd -qq
+    fi
+
+    if ! command -v ollama &> /dev/null; then
+        curl -fsSL https://ollama.com/install.sh | sh
+    fi
+    if ! command -v uv &> /dev/null; then
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+    fi
+    if [ ! -d "$OPENWEBUI_ENV" ]; then
+        uv venv "$OPENWEBUI_ENV"
+    fi
+    "$OPENWEBUI_ENV/bin/uv" pip install open-webui
+}
+
+# ------------------------------------------------------------------------------
+# CONFIGURAZIONE SERVIZI FLESSIBILE (Con Checkbox Whiptail)
+# ------------------------------------------------------------------------------
+configure_and_start_services() {
+    source "$PORT_CONFIG"
+    
+    LLAMA_SERVER_BIN="$BACKEND_DIR/llama.cpp/build/bin/llama-server"
+    [ ! -f "$LLAMA_SERVER_BIN" ] && LLAMA_SERVER_BIN="$BACKEND_DIR/llama.cpp/llama-server"
+    
+    SELECTED_SERVICES=$(whiptail --title "Gestione Servizi Systemd" \
+        --checklist "Seleziona quali componenti attivare nella configurazione:" 20 78 4 \
+        "llama-backend" "llama.cpp server (Porta $LLAMACPP_PORT)" ON \
+        "unsloth-studio" "Unsloth Jupyter Lab (Porta $UNSLOTH_PORT)" ON \
+        "ollama" "Ollama Engine (Porta $OLLAMA_PORT)" OFF \
+        "open-webui" "Open WebUI (Porta $OPENWEBUI_PORT)" OFF \
+        3>&1 1>&2 2>&3)
+        
+    if [ $? -ne 0 ]; then
+        return
+    fi
+
+    source "$PORT_CONFIG"
+
+    if [[ "$SELECTED_SERVICES" == *"llama-backend"* ]]; then
+        cat <<EOF > /etc/systemd/system/homelab-ai-backend.service
+[Unit]
+Description=Homelab AI Backend (llama.cpp)
+After=network.target
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$BACKEND_DIR/llama.cpp
+ExecStart=$LLAMA_SERVER_BIN --host 0.0.0.0 --port $LLAMACPP_PORT -m $BACKEND_DIR/models/default.gguf
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl enable homelab-ai-backend.service --now
+    else
+        systemctl stop homelab-ai-backend.service 2>/dev/null || true
+        systemctl disable homelab-ai-backend.service 2>/dev/null || true
+    fi
+
+    if [[ "$SELECTED_SERVICES" == *"unsloth-studio"* ]]; then
+        cat <<EOF > /etc/systemd/system/unsloth-studio.service
 [Unit]
 Description=Unsloth Studio AI Service
 After=network.target
-
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/root
-ExecStart=$UNSLOTH_ENV/bin/jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --ServerApp.token='' --ServerApp.password=''
+ExecStart=$UNSLOTH_ENV/bin/jupyter lab --ip=0.0.0.0 --port=$UNSLOTH_PORT --no-browser --allow-root --ServerApp.token=''
 Restart=always
-RestartSec=5
-
 [Install]
 WantedBy=multi-user.target
 EOF
-
-    # 3. Setup OpenCode AI Web Service via NPM
-    echo -e "${YELLOW}[3/5] Installazione OpenCode AI via NPM...${NC}"
-    mkdir -p "$OPENCODE_DIR"
-    npm install -g opencode-ai 2>/dev/null || true
-
-    OPENCODE_BIN=$(which opencode 2>/dev/null || echo "/usr/local/bin/opencode")
-
-    cat <<EOF > /etc/systemd/system/opencode.service
-[Unit]
-Description=OpenCode AI Web Service
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=$OPENCODE_DIR
-ExecStart=$OPENCODE_BIN web --port 8000 --hostname 0.0.0.0 --print-logs
-Restart=always
-RestartSec=5
-Environment=BROWSER=echo
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    # 4. Setup Code Runner API Service nel suo VENV dedicato (/opt/code_runner/venv)
-    echo -e "${YELLOW}[4/5] Setup Code Runner API Service e relativo VENV...${NC}"
-    mkdir -p "$CODE_RUNNER_DIR"
-
-    if [ ! -d "$CODE_RUNNER_ENV" ]; then
-        python3 -m venv "$CODE_RUNNER_ENV"
+        systemctl enable unsloth-studio.service --now
+    else
+        systemctl stop unsloth-studio.service 2>/dev/null || true
+        systemctl disable unsloth-studio.service 2>/dev/null || true
     fi
-    "$CODE_RUNNER_ENV/bin/pip" install --upgrade pip setuptools wheel
-    "$CODE_RUNNER_ENV/bin/pip" install fastapi uvicorn pydantic
 
-    cat <<EOF > "$CODE_RUNNER_DIR/code_runner_api.py"
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import subprocess
-import base64
+    if [[ "$SELECTED_SERVICES" == *"ollama"* ]]; then
+        systemctl enable ollama --now
+    else
+        systemctl stop ollama 2>/dev/null || true
+        systemctl disable ollama 2>/dev/null || true
+    fi
 
-app = FastAPI(title="Code Runner API")
-
-class ExecutionRequest(BaseModel):
-    code: str
-    sandbox_ip: str
-
-@app.get("/")
-def health():
-    return {"status": "active", "service": "Code Runner API"}
-
-@app.post("/execute")
-def execute_code(req: ExecutionRequest):
-    # Encoding Base64 per evitare qualsiasi errore di escaping Bash con apici/virgolette
-    b64_code = base64.b64encode(req.code.encode('utf-8')).decode('utf-8')
-    remote_cmd = f"echo {b64_code} | base64 -d | python3"
-    
-    ssh_cmd = [
-        "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
-        f"root@{req.sandbox_ip}", remote_cmd
-    ]
-    try:
-        res = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
-        return {"stdout": res.stdout, "stderr": res.stderr, "exit_code": res.returncode}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-EOF
-
-    cat <<EOF > /etc/systemd/system/code-runner.service
+    if [[ "$SELECTED_SERVICES" == *"open-webui"* ]]; then
+        cat <<EOF > /etc/systemd/system/open-webui.service
 [Unit]
-Description=Code Runner API Service
-After=network.target
-
+Description=Open WebUI Service
+After=network.target ollama.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$CODE_RUNNER_DIR
-ExecStart=$CODE_RUNNER_ENV/bin/uvicorn code_runner_api:app --host 0.0.0.0 --port 9000
+Environment="PORT=$OPENWEBUI_PORT"
+Environment="OLLAMA_BASE_URL=http://127.0.0.1:$OLLAMA_PORT"
+ExecStart=$OPENWEBUI_ENV/bin/open-webui serve
 Restart=always
-RestartSec=5
-
 [Install]
 WantedBy=multi-user.target
 EOF
+        systemctl enable open-webui.service --now
+    else
+        systemctl stop open-webui.service 2>/dev/null || true
+        systemctl disable open-webui.service 2>/dev/null || true
+    fi
 
-    # 5. Ricarica Systemd e Abilita al Boot
-    echo -e "${YELLOW}[5/5] Ricarico systemd, abilito ed avvio tutti i servizi...${NC}"
     systemctl daemon-reload
-    
-    for srv in unsloth-studio opencode code-runner; do
-        systemctl enable "$srv.service"
-        systemctl restart "$srv.service"
-        echo -e "${GREEN}[OK] Servizio $srv.service abilitato al boot e avviato.${NC}"
-    done
-
-    echo -e "${GREEN}====================================================${NC}"
-    echo -e "${GREEN}     INSTALLAZIONE E CONFIGURAZIONE COMPLETATA!     ${NC}"
-    echo -e "${GREEN}====================================================${NC}"
+    whiptail --title "Successo" --msgbox "Configurazione servizi applicata e avviata correttamente!" 10 60
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 2: VERIFICA STATO
+# GESTIONE PORTE E STATO ATTIVO
 # ------------------------------------------------------------------------------
-check_status() {
-    echo -e "${BLUE}====================================================${NC}"
-    echo -e "${BLUE}             VERIFICA STATO DEL SISTEMA             ${NC}"
-    echo -e "${BLUE}====================================================${NC}"
-
-    # Stato Servizi Systemd
-    echo -e "${YELLOW}---> Stato Servizi Systemd:${NC}"
-    for srv in unsloth-studio opencode code-runner; do
-        EN_STATE=$(systemctl is-enabled "$srv.service" 2>/dev/null || echo "not-found")
-        ACT_STATE=$(systemctl is-active "$srv.service" 2>/dev/null || echo "inactive")
+manage_ports() {
+    while true; do
+        source "$PORT_CONFIG"
         
-        [ "$ACT_STATE" = "active" ] && ACT_STR="${GREEN}ATTIVO (Running)${NC}" || ACT_STR="${RED}INATTIVO ($ACT_STATE)${NC}"
-        [ "$EN_STATE" = "enabled" ] && EN_STR="${GREEN}ENABLED${NC}" || EN_STR="${RED}DISABLED ($EN_STATE)${NC}"
+        local s_llama="CHIUSA"
+        ss -tulpn | grep -q ":$LLAMACPP_PORT " && s_llama="ATTIVO"
+        local s_unsloth="CHIUSA"
+        ss -tulpn | grep -q ":$UNSLOTH_PORT " && s_unsloth="ATTIVO"
+        local s_ollama="CHIUSA"
+        ss -tulpn | grep -q ":$OLLAMA_PORT " && s_ollama="ATTIVO"
+        local s_webui="CHIUSA"
+        ss -tulpn | grep -q ":$OPENWEBUI_PORT " && s_webui="ATTIVO"
 
-        echo -e "  $srv.service -> Boot: [$EN_STR] | Stato: [$ACT_STR]"
+        PORT_CHOICE=$(whiptail --title "Gestione Porte & Stato Servizi" \
+            --menu "Stato attuale e porte configurate:\n\n \
+ 1. llama.cpp Server  : Porta $LLAMACPP_PORT [$s_llama]\n \
+ 2. Unsloth Jupyter   : Porta $UNSLOTH_PORT [$s_unsloth]\n \
+ 3. Ollama Engine     : Porta $OLLAMA_PORT [$s_ollama]\n \
+ 4. Open WebUI        : Porta $OPENWEBUI_PORT [$s_webui]\n" 22 75 3 \
+            "CHANGE" "Modifica una porta di ascolto" \
+            "RESTART" "Riavvia i servizi con le porte aggiornate" \
+            "BACK" "Torna al menu principale" \
+            3>&1 1>&2 2>&3)
+            
+        if [ $? -ne 0 ]; then break; fi
+
+        case $PORT_CHOICE in
+            "CHANGE")
+                TARGET_SRV=$(whiptail --title "Cambia Porta" --menu "Seleziona il servizio da modificare:" 15 60 4 \
+                    "LLAMACPP_PORT" "llama.cpp (Attuale: $LLAMACPP_PORT)" \
+                    "UNSLOTH_PORT" "Unsloth Jupyter (Attuale: $UNSLOTH_PORT)" \
+                    "OLLAMA_PORT" "Ollama (Attuale: $OLLAMA_PORT)" \
+                    "OPENWEBUI_PORT" "Open WebUI (Attuale: $OPENWEBUI_PORT)" \
+                    3>&1 1>&2 2>&3)
+                
+                if [ $? -ne 0 ] || [ -z "$TARGET_SRV" ]; then
+                    continue
+                fi
+
+                NEW_PORT=$(whiptail --title "Nuova Porta" --inputbox "Inserisci il nuovo numero di porta per $TARGET_SRV:" 10 50 3>&1 1>&2 2>&3)
+                if [ $? -eq 0 ] && [ -n "$NEW_PORT" ]; then
+                    sed -i "s/^${TARGET_SRV}=.*/${TARGET_SRV}=${NEW_PORT}/" "$PORT_CONFIG"
+                    whiptail --title "Aggiornato" --msgbox "Porta modificata nel file di configurazione. Ricordati di riavviare i servizi." 10 60
+                fi
+                ;;
+            "RESTART")
+                configure_and_start_services
+                ;;
+            "BACK")
+                break
+                ;;
+        esac
     done
+}
 
-    # Verifica Porte
-    echo -e "\n${YELLOW}---> Porte di Rete in Ascolto:${NC}"
-    for port in 8000 8888 9000; do
-        if ss -tulpn 2>/dev/null | grep -q ":$port " || netstat -tulpn 2>/dev/null | grep -q ":$port "; then
-            echo -e "  Porta $port: ${GREEN}IN ASCOLTO${NC}"
-        else
-            echo -e "  Porta $port: ${RED}NON ATTIVA${NC}"
-        fi
-    done
+# ------------------------------------------------------------------------------
+# DASHBOARD IN BANNER WHIPTAIL
+# ------------------------------------------------------------------------------
+show_dashboard_banner() {
+    source "$PORT_CONFIG"
+    local LOCAL_IP
+    LOCAL_IP=$(hostname -I | awk '{print $1}')
+    
+    local st_llama="Spento"
+    ss -tulpn | grep -q ":$LLAMACPP_PORT " && st_llama="In ascolto (Porta $LLAMACPP_PORT)"
+    local st_unsloth="Spento"
+    ss -tulpn | grep -q ":$UNSLOTH_PORT " && st_unsloth="In ascolto (Porta $UNSLOTH_PORT)"
+    local st_ollama="Spento"
+    ss -tulpn | grep -q ":$OLLAMA_PORT " && st_ollama="In ascolto (Porta $OLLAMA_PORT)"
+    local st_webui="Spento"
+    ss -tulpn | grep -q ":$OPENWEBUI_PORT " && st_webui="In ascolto (Porta $OPENWEBUI_PORT)"
 
-    # Verifica Driver GPU / CUDA PyTorch
-    echo -e "\n${YELLOW}---> Verifica GPU e CUDA PyTorch:${NC}"
+    local GPU_INFO="Nessuna GPU NVIDIA rilevata"
     if command -v nvidia-smi &> /dev/null; then
-        echo -e "${GREEN}Driver NVIDIA Smi:${NC}"
-        nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader | sed 's/^/  /'
+        GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader -i 0)
     fi
 
-    if [ -f "$UNSLOTH_ENV/bin/python3" ]; then
-        "$UNSLOTH_ENV/bin/python3" -c "
-import torch
-cuda_avail = torch.cuda.is_available()
-print(f'  CUDA PyTorch Disponibile: {\"${GREEN}SI${NC}\" if cuda_avail else \"${RED}NO${NC}\"}')
-if cuda_avail:
-    print(f'  GPU Riconosciuta da PyTorch: {torch.cuda.get_device_name(0)}')
-" 2>/dev/null || echo -e "  ${RED}Errore durante il test di PyTorch/CUDA${NC}"
-    else
-        echo -e "  ${RED}Virtualenv Unsloth non trovato su $UNSLOTH_ENV${NC}"
-    fi
+    local DASH_TEXT="=== HARDWARE & GPU ===\n• IP Locale : $LOCAL_IP\n• GPU        : $GPU_INFO\n\n=== STATO SERVIZI E PORTE ===\n• llama.cpp : $st_llama\n• Unsloth    : $st_unsloth\n• Ollama     : $st_ollama\n• Open WebUI: $st_webui\n\nTutti i servizi attivi operano in parallelo senza conflitti."
+
+    whiptail --title "Dashboard di Sistema - NVIDIA Manager" --msgbox "$DASH_TEXT" 20 75
 }
 
 # ------------------------------------------------------------------------------
-# OPZIONE 3: AGGIORNA COMPONENTI (ISOLATO NEI VENV)
+# BENCHMARK
 # ------------------------------------------------------------------------------
-update_components() {
-    echo -e "${BLUE}====================================================${NC}"
-    echo -e "${BLUE}               AGGIORNAMENTO COMPONENTI             ${NC}"
-    echo -e "${BLUE}====================================================${NC}"
+run_benchmark() {
+    clear
+    BENCH_BIN="$BACKEND_DIR/llama.cpp/build/bin/llama-bench"
+    [ ! -f "$BENCH_BIN" ] && BENCH_BIN="$BACKEND_DIR/llama.cpp/llama-bench"
 
-    if ! command -v git &> /dev/null; then
-        apt update || true
-        apt install -y git
-    fi
-
-    # 1. Aggiornamento Repository Git
-    if [ -d ".git" ]; then
-        echo -e "${YELLOW}---> Aggiornamento Repository Git locale...${NC}"
-        git pull origin main || echo -e "${RED}Impossibile eseguire git pull.${NC}"
-    else
-        echo -e "${YELLOW}[INFO] Scarico/Aggiorno repository ufficiale da GitHub in $TARGET_REPO_DIR...${NC}"
-        if [ -d "$TARGET_REPO_DIR/.git" ]; then
-            cd "$TARGET_REPO_DIR"
-            git pull origin main
-        else
-            rm -rf "$TARGET_REPO_DIR"
-            git clone "$REPO_URL" "$TARGET_REPO_DIR"
-            cd "$TARGET_REPO_DIR"
-        fi
-        chmod +x manager.sh
-        echo -e "${GREEN}[OK] Repository aggiornata.${NC}"
-        echo -e "${YELLOW}---> Riavvio dello script aggiornato...${NC}"
-        sleep 2
-        exec ./manager.sh
-    fi
-
-    # 2. Aggiornamento Code Runner API (nel suo VENV)
-    echo -e "${YELLOW}---> Aggiornamento dipendenze Code Runner API nel relativo VENV...${NC}"
-    if [ ! -d "$CODE_RUNNER_ENV" ]; then
-        python3 -m venv "$CODE_RUNNER_ENV"
-    fi
-    "$CODE_RUNNER_ENV/bin/pip" install --upgrade fastapi uvicorn pydantic
-
-    # 3. Aggiornamento Virtualenv Unsloth
-    if [ -d "$UNSLOTH_ENV" ]; then
-        echo -e "${YELLOW}---> Aggiornamento PyTorch + CUDA Wheels nel VENV Unsloth...${NC}"
-        "$UNSLOTH_ENV/bin/pip" install --upgrade torch torchvision --extra-index-url https://download.pytorch.org/whl/cu121
-        
-        echo -e "${YELLOW}---> Aggiornamento Jupyter Lab, Unsloth, Trl, Xformers...${NC}"
-        "$UNSLOTH_ENV/bin/pip" install --upgrade jupyterlab unsloth trl xformers
-    fi
-
-    # 4. Aggiornamento OpenCode AI via NPM
-    if command -v npm &> /dev/null; then
-        echo -e "${YELLOW}---> Aggiornamento OpenCode AI via NPM...${NC}"
-        npm install -g opencode-ai@latest 2>/dev/null || true
-    fi
-
-    # 5. Riavvio Servizi
-    echo -e "${YELLOW}---> Riavvio dei servizi systemd...${NC}"
-    systemctl daemon-reload
-    systemctl restart unsloth-studio opencode code-runner
-    echo -e "${GREEN}[OK] Aggiornamento completato con successo senza toccare il Python di sistema!${NC}"
-}
-
-# ------------------------------------------------------------------------------
-# OPZIONE 4: CONFIGURA SANDBOX
-# ------------------------------------------------------------------------------
-configure_sandbox() {
-    echo -e "${BLUE}====================================================${NC}"
-    echo -e "${BLUE}               CONFIGURAZIONE SANDBOX               ${NC}"
-    echo -e "${BLUE}====================================================${NC}"
-
-    if [ ! -f /root/.ssh/id_ed25519 ]; then
-        echo -e "${YELLOW}[1/3] Generazione chiave SSH sul Controller...${NC}"
-        ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519
-    else
-        echo -e "${GREEN}[1/3] Chiave SSH presente su /root/.ssh/id_ed25519${NC}"
-    fi
-
-    echo -ne "\n${YELLOW}Inserisci l'IP della macchina Sandbox remota: ${NC}"
-    read -r SANDBOX_IP
-
-    if [ -z "$SANDBOX_IP" ]; then
-        echo -e "${RED}IP non valido. Operazione annullata.${NC}"
+    if [ ! -f "$BENCH_BIN" ]; then
+        whiptail --title "Errore" --msgbox "llama-bench non trovato. Compila prima llama.cpp." 10 60
         return
     fi
-
-    echo -e "${YELLOW}[2/3] Invio chiave SSH a root@$SANDBOX_IP...${NC}"
-    ssh-copy-id -i /root/.ssh/id_ed25519.pub "root@$SANDBOX_IP"
-
-    echo -e "${YELLOW}[3/3] Test di esecuzione remota tramite API Code Runner (:9000)...${NC}"
-    
-    # Assicuriamo che il servizio Code Runner sia riavviato prima del test
-    systemctl restart code-runner.service 2>/dev/null || true
-    sleep 2
-
-    TEST_PAYLOAD=$(cat <<EOF
-{
-  "code": "import sys, platform; print(f'Sandbox OK! Node: {platform.node()} - Python: {sys.version}')",
-  "sandbox_ip": "$SANDBOX_IP"
-}
-EOF
-)
-
-    curl -s -X POST http://localhost:9000/execute \
-      -H "Content-Type: application/json" \
-      -d "$TEST_PAYLOAD"
-    
-    echo -e "\n${GREEN}[OK] Configurazione Sandbox completata.${NC}"
-}
-
-# ------------------------------------------------------------------------------
-# OPZIONE 5: DISINSTALLA
-# ------------------------------------------------------------------------------
-uninstall_services() {
-    echo -e "${RED}====================================================${NC}"
-    echo -e "${RED}                DISINSTALLAZIONE STACK             ${NC}"
-    echo -e "${RED}====================================================${NC}"
-    echo -ne "${YELLOW}Sei sicuro di voler rimuovere tutti i servizi systemd e le directory? (s/N): ${NC}"
-    read -r CONFIRM
-
-    if [[ "$CONFIRM" =~ ^[Ss]$ ]]; then
-        echo -e "${YELLOW}---> Arresto e disattivazione servizi systemd...${NC}"
-        for srv in unsloth-studio opencode code-runner; do
-            systemctl stop "$srv.service" 2>/dev/null || true
-            systemctl disable "$srv.service" 2>/dev/null || true
-            rm -f "/etc/systemd/system/$srv.service"
-        done
-        systemctl daemon-reload
-
-        echo -e "${YELLOW}---> Pulizia directory di lavoro e virtualenv...${NC}"
-        rm -rf "$CODE_RUNNER_DIR" "$OPENCODE_DIR" "$UNSLOTH_ENV" "$TARGET_REPO_DIR"
-
-        echo -e "${GREEN}[OK] Disinstallazione completata con successo.${NC}"
-    else
-        echo -e "${BLUE}Operazione annullata.${NC}"
-    fi
-}
-
-# ------------------------------------------------------------------------------
-# MENU INTERATTIVO TUI
-# ------------------------------------------------------------------------------
-show_menu() {
+    local MODEL_PATH
+    MODEL_PATH=$(find "$BACKEND_DIR/models" -name "*.gguf" | head -n 1)
     clear
-    echo -e "${BLUE}====================================================${NC}"
-    echo -e "${BLUE}      🦥 HOMELAB AI DEPLOYER - MANAGER MENU        ${NC}"
-    echo -e "${BLUE}====================================================${NC}"
-    echo -e " 1) ${GREEN}INSTALLA Servizi${NC}   (GPU Driver, CUDA, Unsloth, OpenCode, API)"
-    echo -e " 2) ${YELLOW}VERIFICA Stato${NC}     (Check Servizi Systemd, Porte e GPU CUDA)"
-    echo -e " 3) ${BLUE}AGGIORNA Componenti${NC} (Git pull, VENV Unsloth, VENV CodeRunner)"
-    echo -e " 4) ${YELLOW}CONFIGURA Sandbox${NC}   (Setup Chiavi SSH & Test Endpoint API)"
-    echo -e " 5) ${RED}DISINSTALLA${NC}        (Rimozione Unità Systemd e Directory)"
-    echo -e " 6) Uscita"
-    echo -e "${BLUE}====================================================${NC}"
-    echo -ne "Seleziona un'opzione [1-6]: "
+    if [ -z "$MODEL_PATH" ]; then
+        "$BENCH_BIN" -p 512,1024 -n 128
+    else
+        "$BENCH_BIN" -m "$MODEL_PATH" -p 512,1024 -n 128
+    fi
+    echo -ne "\nPremi INVIO per continuare..."
+    read -r
 }
+
+# ------------------------------------------------------------------------------
+# GESTIONE MODELLI
+# ------------------------------------------------------------------------------
+manage_models() {
+    while true; do
+        MODEL_CHOICE=$(whiptail --title "Gestione & Attivazione Modelli GPU" \
+            --menu "Scegli l'operazione sui modelli:" 18 75 5 \
+            "ACTIVATE_GGUF" "Seleziona e attiva un GGUF su llama.cpp" \
+            "OLLAMA_LIST"    "Visualizza modelli locali Ollama" \
+            "OLLAMA_PULL"    "Scarica nuovo modello con Ollama (pull)" \
+            "DOWNLOAD_GGUF" "Scarica file GGUF da HuggingFace" \
+            "BACK"          "Torna al menu principale" \
+            3>&1 1>&2 2>&3)
+            
+        if [ $? -ne 0 ]; then break; fi
+
+        case "$MODEL_CHOICE" in
+            "ACTIVATE_GGUF")
+                mkdir -p "$BACKEND_DIR/models"
+                if [ -z "$(ls -A "$BACKEND_DIR/models"/*.gguf 2>/dev/null)" ]; then
+                    whiptail --title "Attenzione" --msgbox "Nessun file GGUF trovato in $BACKEND_DIR/models.\nScaricalo prima usando l'opzione 'Scarica file GGUF da HuggingFace'." 10 60
+                    continue
+                fi
+                
+                GGUF_LIST=()
+                while IFS= read -r file; do
+                    fname=$(basename "$file")
+                    fsize=$(du -h "$file" | awk '{print $1}')
+                    GGUF_LIST+=("$fname" "Size: $fsize")
+                done < <(find "$BACKEND_DIR/models" -maxdepth 1 -name "*.gguf")
+
+                SELECTED_GGUF=$(whiptail --title "Attiva Modello su llama.cpp" --menu "Seleziona il GGUF da mettere in esecuzione:" 20 75 8 "${GGUF_LIST[@]}" 3>&1 1>&2 2>&3)
+                
+                if [ $? -ne 0 ] || [ -z "$SELECTED_GGUF" ]; then
+                    continue
+                fi
+
+                SERVICE_FILE="/etc/systemd/system/homelab-ai-backend.service"
+                if [ -f "$SERVICE_FILE" ]; then
+                    sed -i "s|-m $BACKEND_DIR/models/.*.gguf|-m $BACKEND_DIR/models/$SELECTED_GGUF|" "$SERVICE_FILE"
+                    
+                    systemctl daemon-reload
+                    if systemctl is-active --quiet homelab-ai-backend.service; then
+                        systemctl restart homelab-ai-backend.service
+                        STATUS_MSG="Modello '$SELECTED_GGUF' attivato e servizio llama.cpp riavviato con successo!"
+                    else
+                        systemctl enable homelab-ai-backend.service --now
+                        STATUS_MSG="Modello '$SELECTED_GGUF' impostato e servizio avviato per la prima volta!"
+                    fi
+                    
+                    whiptail --title "Successo" --msgbox "$STATUS_MSG" 10 60
+                else
+                    whiptail --title "Errore" --msgbox "Il servizio systemd 'homelab-ai-backend.service' non esiste." 10 60
+                fi
+                ;;
+            "OLLAMA_LIST")
+                if ! command -v ollama &> /dev/null; then
+                    whiptail --title "Errore" --msgbox "Ollama non risulta installato sul sistema." 8 45
+                else
+                    OLLAMA_DATA=$(ollama list 2>/dev/null || echo "Ollama non è in esecuzione o nessun modello trovato.")
+                    whiptail --title "Modelli Ollama Installati" --msgbox "$OLLAMA_DATA" 22 75
+                fi
+                ;;
+            "OLLAMA_PULL")
+                M_NAME=$(whiptail --title "Ollama Pull" --inputbox "Inserisci il nome del modello (es. deepseek-r1:7b, qwen2.5:7b):" 10 60 3>&1 1>&2 2>&3)
+                if [ $? -eq 0 ] && [ -n "$M_NAME" ]; then
+                    clear
+                    ollama pull "$M_NAME"
+                    echo -ne "\nPremi INVIO per continuare..."
+                    read -r
+                fi
+                ;;
+            "DOWNLOAD_GGUF")
+                URL_GGUF=$(whiptail --title "Download GGUF" --inputbox "Inserisci URL diretto del file GGUF (es. da HuggingFace):" 10 65 3>&1 1>&2 2>&3)
+                if [ $? -eq 0 ] && [ -n "$URL_GGUF" ]; then
+                    mkdir -p "$BACKEND_DIR/models"
+                    cd "$BACKEND_DIR/models"
+                    clear
+                    wget -c --show-progress "$URL_GGUF"
+                    echo -ne "\nPremi INVIO per continuare..."
+                    read -r
+                fi
+                ;;
+            "BACK")
+                break
+                ;;
+        esac
+    done
+}
+
+# ------------------------------------------------------------------------------
+# MENU PRINCIPALE TUI
+# ------------------------------------------------------------------------------
+if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    show_menu
-    read -r choice
-    case $choice in
-        1) install_services ;;
-        2) check_status ;;
-        3) update_components ;;
-        4) configure_sandbox ;;
-        5) uninstall_services ;;
-        6) echo -e "${GREEN}Uscita... Bye!${NC}"; exit 0 ;;
-        *) echo -e "${RED}Opzione non valida!${NC}" ;;
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.6.7)" \
+        --menu "\nSeleziona un'operazione:" 22 80 11 \
+        "A" "Express Auto-Deploy (Tutto in un click)" \
+        "1" "Compila llama.cpp (CMake CUDA)" \
+        "2" "Installa Open WebUI & Ollama" \
+        "3" "Configura & Avvia Servizi (Scelta Multipla Stack)" \
+        "4" "Gestione Porte & Stato Servizi Attivi" \
+        "5" "Mostra Dashboard di Sistema (Banner)" \
+        "6" "Gestione & Attivazione Modelli (GGUF/Ollama)" \
+        "7" "Esegui Benchmark GPU (llama-bench)" \
+        "8" "Aggiorna Repository & Componenti" \
+        "9" "Disinstalla / Pulizia Completa" \
+        "0" "Esci al Menu Principale" \
+        3>&1 1>&2 2>&3)
+        
+    if [ $? -ne 0 ]; then return_to_main; fi
+
+    case "$CHOICE" in
+        "A")
+            setup_xdg_fix; fix_apt_repos; setup_nvidia_stack
+            compile_llamacpp; install_unsloth_stack; install_ollama_webui
+            configure_and_start_services
+            ;;
+        "1") setup_nvidia_stack; compile_llamacpp ;;
+        "2") install_ollama_webui ;;
+        "3") configure_and_start_services ;;
+        "4") manage_ports ;;
+        "5") show_dashboard_banner ;;
+        "6") manage_models ;;
+        "7") run_benchmark ;;
+        "8") git pull origin main 2>/dev/null || true ;;
+        "9") 
+            if (whiptail --title "Conferma" --yesno "Vuoi rimuovere i servizi e ripulire lo stack?" 10 60); then
+                systemctl stop homelab-ai-backend unsloth-studio open-webui ollama 2>/dev/null || true
+                rm -f /etc/systemd/system/homelab-ai-backend.service /etc/systemd/system/unsloth-studio.service /etc/systemd/system/open-webui.service
+                systemctl daemon-reload
+                whiptail --title "Completato" --msgbox "Servizi rimossi con successo." 8 50
+            fi
+            ;;
+        "0") return_to_main ;;
     esac
-    echo -ne "\n${YELLOW}Premi INVIO per continuare...${NC}"
-    read -r
 done
