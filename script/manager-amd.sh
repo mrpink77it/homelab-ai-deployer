@@ -2,22 +2,16 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (AMD - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.2.0.0 (Advanced Multimodal & Services Integration Stack - AMD)
+# Version: V.2.0.0 (Full Featured + Advanced Services)
 # ==============================================================================
 
 set -euo pipefail
 
 trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-amd.sh si è interrotto alla riga $LINENO. Verifica di averlo avviato con privilegi elevati (sudo).\033[0m\n"' ERR
 
-# ------------------------------------------------------------------------------
-# Risoluzione Percorsi Relativi alla Nuova Struttura
-# ------------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# ------------------------------------------------------------------------------
-# Configurazione Variabili Globali
-# ------------------------------------------------------------------------------
 VERSION="2.0.0"
 LOG_FILE="/var/log/homelab-ai-amd.log"
 INSTALL_DIR="/opt/homelab-ai"
@@ -30,11 +24,9 @@ SERVICE_NAME="homelab-ai-backend"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 FRONTEND_SERVICE_FILE="/etc/systemd/system/homelab-ai-frontend.service"
 
-# File di configurazione porte persistenti
 PORT_CONFIG="/etc/homelab-ai/ports.conf"
 mkdir -p /etc/homelab-ai
 
-# Porte predefinite (se non configurate)
 if [ ! -f "$PORT_CONFIG" ]; then
     cat <<EOF > "$PORT_CONFIG"
 LLAMACPP_PORT=8080
@@ -49,9 +41,6 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# ------------------------------------------------------------------------------
-# Utility e Logging
-# ------------------------------------------------------------------------------
 log() {
     local level="$1"
     local msg="$2"
@@ -95,13 +84,8 @@ return_to_main() {
     else exit 0; fi
 }
 
-# ------------------------------------------------------------------------------
-# Installazione Stack Sistema
-# ------------------------------------------------------------------------------
 install_dependencies() {
     export DEBIAN_FRONTEND=noninteractive
-    export APT_LISTCHANGES_FRONTEND=none
-
     log_info "Verifica pacchetti base di sistema..."
     apt-get update || true
     apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" \
@@ -109,7 +93,6 @@ install_dependencies() {
         libvulkan-dev vulkan-tools python3 python3-pip python3-venv python3-dev whiptail \
         libffi-dev libssl-dev libomp-dev || true
     
-    log_info "Verifica e pulizia conflitti con pacchetti ROCm nativi..."
     apt-get remove --purge -y hipcc rocminfo "rocm-*" "libhip*" "libamdhip*" >/dev/null 2>&1 || true
     apt-get autoremove -y >/dev/null 2>&1 || true
 }
@@ -117,7 +100,6 @@ install_dependencies() {
 get_amd_gpu_profile() {
     local gpu_info
     gpu_info=$(lspci | grep -iE 'vga|3d|display' | grep -i amd || true)
-    
     local target="gfx1030" 
     local override=""
 
@@ -134,51 +116,24 @@ get_amd_gpu_profile() {
         target="gfx803"
         override="8.0.3"
     fi
-
     echo "${target}|${override}"
 }
 
-# ------------------------------------------------------------------------------
-# Auto-Riparazione Toolchain ROCm
-# ------------------------------------------------------------------------------
 ensure_hipcc_toolchain() {
     local HIPCC_BIN="/opt/rocm/bin/hipcc"
     if [[ ! -x "$HIPCC_BIN" ]]; then
-        log_warn "Compilatore hipcc non trovato. Iniezione forzata repository AMD ROCm 6.2..."
-        
         mkdir -p /etc/apt/keyrings
         wget -q -O - https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/rocm.gpg
-        
         echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.2 noble main" > /etc/apt/sources.list.d/rocm.list
         echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/amdgpu/6.2/ubuntu noble main" > /etc/apt/sources.list.d/amdgpu.list
-        
-        cat <<EOF > /etc/apt/preferences.d/99-rocm-amd
-Package: *
-Pin: origin repo.radeon.com
-Pin-Priority: 1001
-EOF
-        
-        export DEBIAN_FRONTEND=noninteractive
         apt-get update || true
-        
-        log_info "Installazione toolchain HIP/ROCm ufficiale AMD..."
-        apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" rocm-dev rocm-hip-sdk || true
-        
-        if [[ ! -x "$HIPCC_BIN" ]]; then
-            log_err "Auto-riparazione fallita. Repository non raggiungibili o pacchetti inesistenti."
-            return 1
-        fi
-        log_info "Auto-riparazione completata: hipcc installato con successo."
+        apt-get install -y rocm-dev rocm-hip-sdk || true
     fi
     return 0
 }
 
-# ------------------------------------------------------------------------------
-# Compilazione llama.cpp & Patch FP8
-# ------------------------------------------------------------------------------
 compile_llama() {
     local type="$1"
-    
     systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
     
     if [[ ! -d "${LLAMA_DIR}" ]]; then
@@ -188,22 +143,15 @@ compile_llama() {
     fi
 
     if [[ -f "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" ]]; then
-        log_info "Applicazione patch di compatibilità ROCm FP8 e fallback tipi..."
         sed -i 's/typedef __hip_fp8_e4m3 __nv_fp8_e4m3;/typedef uint8_t __nv_fp8_e4m3;/g' "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" || true
         sed -i 's/typedef __hip_fp8_e5m2 __nv_fp8_e5m2;/typedef uint8_t __nv_fp8_e5m2;/g' "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" || true
     fi
 
-    log_info "Pulizia cache di compilazione..."
     rm -rf "${LLAMA_DIR}/build"
-    rm -rf ~/.cache/ccache 2>/dev/null || true
-    hash -r
-
     local gpu_profile target override
     gpu_profile=$(get_amd_gpu_profile)
     target=$(echo "$gpu_profile" | cut -d'|' -f1)
     override=$(echo "$gpu_profile" | cut -d'|' -f2)
-
-    log_info "Avvio compilazione llama.cpp (Backend: ${type})..."
 
     case "${type}" in
         "vulkan")
@@ -211,30 +159,17 @@ compile_llama() {
             cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
             ;;
         "rocm"|"rocm_exp")
-            if ! ensure_hipcc_toolchain; then
-                return 1
-            fi
-            
+            ensure_hipcc_toolchain
             local ROCM_PREFIX="/opt/rocm"
-            local ROCM_CLANG="${ROCM_PREFIX}/llvm/bin/clang"
-            local ROCM_CLANGXX="${ROCM_PREFIX}/llvm/bin/clang++"
-            local CMAKE_ROCM_FLAGS="-DGGML_HIP=ON -DAMDGPU_TARGETS=${target} -DROCM_PATH=${ROCM_PREFIX} -DCMAKE_PREFIX_PATH=${ROCM_PREFIX}/lib/cmake:${ROCM_PREFIX}/lib/x86_64-linux-gnu/cmake -DCMAKE_C_FLAGS=-Wno-pedantic -DCMAKE_CXX_FLAGS=-Wno-pedantic"
-            
             export PATH="${ROCM_PREFIX}/bin:${ROCM_PREFIX}/llvm/bin:${PATH}"
-            export CC="${ROCM_CLANG}"
-            export CXX="${ROCM_CLANGXX}"
-
             if [[ "${type}" == "rocm_exp" && -n "${override}" ]]; then
-                log_warn "Iniezione Hack di compatibilità: HSA_OVERRIDE_GFX_VERSION=${override}"
                 export HSA_OVERRIDE_GFX_VERSION="${override}"
             fi
-            
-            cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" ${CMAKE_ROCM_FLAGS}
+            cmake -B "${LLAMA_DIR}/build" -S "${LLAMA_DIR}" -DGGML_HIP=ON -DAMDGPU_TARGETS=${target} -DROCM_PATH=${ROCM_PREFIX}
             cmake --build "${LLAMA_DIR}/build" --config Release -j"$(nproc)"
             ;;
     esac
 
-    log_info "Compilazione completata con successo."
     auto_setup_systemd_service "${type}" "${override}"
 }
 
@@ -259,7 +194,7 @@ auto_setup_systemd_service() {
 
     cat <<EOF > "${SERVICE_FILE}"
 [Unit]
-Description=Homelab AI Backend Service (llama.cpp)
+Description=Homelab AI Backend Service (llama.cpp AMD)
 After=network.target
 
 [Service]
@@ -280,37 +215,26 @@ EOF
     systemctl daemon-reload
     systemctl enable "${SERVICE_NAME}"
     systemctl restart "${SERVICE_NAME}" || true
-    log_info "Servizio ${SERVICE_NAME} configurato su porta $port e avviato."
 }
 
-# ------------------------------------------------------------------------------
-# Gestione Frontend (Open WebUI)
-# ------------------------------------------------------------------------------
 install_open_webui() {
     source "$PORT_CONFIG"
-    log_info "Installazione/Aggiornamento Open WebUI (Frontend)..."
     mkdir -p "${WEBUI_DIR}"
-    
     if ! command -v uv &> /dev/null; then
-        log_info "Installazione del gestore pacchetti 'uv' per l'ambiente Python..."
         curl -LsSf https://astral.sh/uv/install.sh | sh
-        export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
     fi
-    
     export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
     
     if [[ ! -d "${WEBUI_DIR}/venv" ]]; then
-        log_info "Creazione ambiente virtuale isolato con Python 3.11 tramite uv..."
         uv venv -p 3.11 "${WEBUI_DIR}/venv"
     fi
     
     source "${WEBUI_DIR}/venv/bin/activate"
-    log_info "Aggiornamento pip e installazione di open-webui tramite uv pip..."
     uv pip install --upgrade pip
     uv pip install open-webui
     deactivate
 
-cat <<EOF > "${FRONTEND_SERVICE_FILE}"
+    cat <<EOF > "${FRONTEND_SERVICE_FILE}"
 [Unit]
 Description=Homelab AI Frontend Service (Open WebUI)
 After=network.target ${SERVICE_NAME}.service
@@ -336,16 +260,12 @@ EOF
     systemctl daemon-reload
     systemctl enable homelab-ai-frontend
     systemctl restart homelab-ai-frontend
-    log_info "Open WebUI configurato con successo sulla porta $OPENWEBUI_PORT."
-    whiptail --title "Successo" --msgbox "Open WebUI installato e avviato correttamente sulla porta $OPENWEBUI_PORT!" 10 60
+    whiptail --title "Successo" --msgbox "Open WebUI installato sulla porta $OPENWEBUI_PORT!" 10 60
 }
 
-# ------------------------------------------------------------------------------
-# Gestione Servizi Avanzati & Moduli (OCR, Whisper, SearXNG, OpenClaw, Unsloth)
-# ------------------------------------------------------------------------------
 deploy_advanced_services_menu() {
     while true; do
-        ADV_CHOICE=$(whiptail --title "Homelab AI (v2.0) - Servizi Avanzati & Moduli" \
+        ADV_CHOICE=$(whiptail --title "Homelab AI - Servizi Avanzati & Moduli" \
             --menu "Seleziona il modulo avanzato da configurare:" 18 75 6 \
             "1" "Configura Modelli Vision & OCR (Qwen2-VL / MiniCPM-V)" \
             "2" "Configura Whisper (Speech-to-Text & Audio Intelligence)" \
@@ -364,37 +284,33 @@ deploy_advanced_services_menu() {
                 if command -v ollama &> /dev/null; then
                     ollama pull qwen2-vl:7b || true
                     ollama pull llama3.2-vision || true
-                else
-                    echo -e "${YELLOW}Ollama non trovato. Installa Ollama per utilizzare i modelli Vision/OCR.${NC}"
                 fi
                 read -rp "Premi INVIO per continuare..."
                 ;;
             2)
                 clear
                 echo -e "${GREEN}Installazione dipendenze Whisper per Audio Processing...${NC}"
-                UV_BIN="$HOME/.local/bin/uv"
+                local UV_BIN="$HOME/.local/bin/uv"
                 [ ! -f "$UV_BIN" ] && UV_BIN="/root/.local/bin/uv"
                 if command -v "$UV_BIN" &> /dev/null; then
                     "$UV_BIN" pip install openai-whisper soundfile
                 else
                     pip3 install openai-whisper soundfile
                 fi
-                echo -e "${GREEN}Whisper configurato con successo!${NC}"
                 read -rp "Premi INVIO per continuare..."
                 ;;
             3)
-                whiptail --title "SearXNG & RAG" --msgbox "Configurazione SearXNG per la ricerca web:\nAssicurati di impostare le variabili d'ambiente di SearXNG nel pannello di Open WebUI." 10 65
+                whiptail --title "SearXNG & RAG" --msgbox "Assicurati di impostare le variabili d'ambiente di SearXNG nel pannello di Open WebUI." 10 65
                 ;;
             4)
-                whiptail --title "OpenClaw" --msgbox "Preparazione installazione OpenClaw (Agente autonomo):\nClonazione e setup demone Node.js per OpenClaw in corso di predisposizione..." 10 65
+                whiptail --title "OpenClaw" --msgbox "Preparazione installazione OpenClaw (Agente autonomo in configurazione)..." 10 65
                 ;;
             5)
                 clear
-                echo -e "${GREEN}Configurazione ambiente Unsloth & Jupyter Lab per QLoRA / Vibe Coding...${NC}"
+                echo -e "${GREEN}Configurazione ambiente Unsloth & Jupyter Lab...${NC}"
                 if [ ! -d "$UNSLOTH_ENV" ]; then python3 -m venv "$UNSLOTH_ENV"; fi
                 "$UNSLOTH_ENV/bin/pip" install --upgrade pip wheel "setuptools<82"
                 "$UNSLOTH_ENV/bin/pip" install -U jupyterlab unsloth unsloth-zoo trl xformers
-                echo -e "${GREEN}Jupyter Lab e Unsloth pronti all'uso.${NC}"
                 read -rp "Premi INVIO per continuare..."
                 ;;
             6)
@@ -404,242 +320,127 @@ deploy_advanced_services_menu() {
     done
 }
 
-# ------------------------------------------------------------------------------
-# GESTIONE PORTE E STATO ATTIVO
-# ------------------------------------------------------------------------------
 manage_ports() {
     while true; do
         source "$PORT_CONFIG"
-        
         local s_llama="CHIUSA"
         ss -tulpn | grep -q ":$LLAMACPP_PORT " && s_llama="ATTIVO"
         local s_webui="CHIUSA"
         ss -tulpn | grep -q ":$OPENWEBUI_PORT " && s_webui="ATTIVO"
 
         PORT_CHOICE=$(whiptail --title "Gestione Porte & Stato Servizi AMD" \
-            --menu "Stato attuale e porte configurate:\n\n \
- 1. llama.cpp Server  : Porta $LLAMACPP_PORT [$s_llama]\n \
- 2. Open WebUI        : Porta $OPENWEBUI_PORT [$s_webui]\n" 18 75 3 \
-            "CHANGE" "Modifica una porta di ascolto" \
-            "RESTART" "Riavvia i servizi con le porte aggiornate" \
-            "BACK" "Torna al menu principale" \
-            3>&1 1>&2 2>&3)
-            
+            --menu "Porte configurate:\n 1. llama.cpp : $LLAMACPP_PORT [$s_llama]\n 2. WebUI : $OPENWEBUI_PORT [$s_webui]" 16 70 3 \
+            "CHANGE" "Modifica una porta" \
+            "RESTART" "Riavvia i servizi" \
+            "BACK" "Torna indietro" 3>&1 1>&2 2>&3)
         if [ $? -ne 0 ]; then break; fi
-
         case $PORT_CHOICE in
             "CHANGE")
-                TARGET_SRV=$(whiptail --title "Cambia Porta" --menu "Seleziona il servizio da modificare:" 12 60 2 \
-                    "LLAMACPP_PORT" "llama.cpp (Attuale: $LLAMACPP_PORT)" \
-                    "OPENWEBUI_PORT" "Open WebUI (Attuale: $OPENWEBUI_PORT)" \
-                    3>&1 1>&2 2>&3)
-                
-                if [ $? -ne 0 ] || [ -z "$TARGET_SRV" ]; then
-                    continue
-                fi
-
-                NEW_PORT=$(whiptail --title "Nuova Porta" --inputbox "Inserisci il nuovo numero di porta per $TARGET_SRV:" 10 50 3>&1 1>&2 2>&3)
-                if [ $? -eq 0 ] && [ -n "$NEW_PORT" ]; then
-                    sed -i "s/^${TARGET_SRV}=.*/${TARGET_SRV}=${NEW_PORT}/" "$PORT_CONFIG"
-                    whiptail --title "Aggiornato" --msgbox "Porta modificata nel file di configurazione. Ricordati di riavviare i servizi." 10 60
+                T_SRV=$(whiptail --title "Servizio" --menu "Seleziona:" 10 50 2 "LLAMACPP_PORT" "llama.cpp" "OPENWEBUI_PORT" "WebUI" 3>&1 1>&2 2>&3)
+                if [ $? -eq 0 ] && [ -n "$T_SRV" ]; then
+                    N_P=$(whiptail --title "Nuova Porta" --inputbox "Inserisci porta:" 8 40 3>&1 1>&2 2>&3)
+                    if [ $? -eq 0 ] && [ -n "$N_P" ]; then
+                        sed -i "s/^${T_SRV}=.*/${T_SRV}=${N_P}/" "$PORT_CONFIG"
+                    fi
                 fi
                 ;;
             "RESTART")
                 systemctl restart "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
-                whiptail --title "Riavviati" --msgbox "Servizi riavviati con le nuove porte!" 8 50
                 ;;
-            "BACK")
-                break
-                ;;
+            "BACK") break ;;
         esac
     done
 }
 
-# ------------------------------------------------------------------------------
-# DASHBOARD IN BANNER WHIPTAIL
-# ------------------------------------------------------------------------------
 show_dashboard_banner() {
     source "$PORT_CONFIG"
-    local LOCAL_IP
-    LOCAL_IP=$(hostname -I | awk '{print $1}')
-    
-    local st_llama="Spento"
-    ss -tulpn | grep -q ":$LLAMACPP_PORT " && st_llama="In ascolto (Porta $LLAMACPP_PORT)"
-    local st_webui="Spento"
-    ss -tulpn | grep -q ":$OPENWEBUI_PORT " && st_webui="In ascolto (Porta $OPENWEBUI_PORT)"
-
-    local GPU_INFO="Nessuna GPU AMD rilevata via lspci"
-    GPU_INFO=$(lspci | grep -iE 'vga|3d|display' | grep -i amd | head -n 1)
-
-    local DASH_TEXT="=== HARDWARE & GPU AMD ===\n• IP Locale : $LOCAL_IP\n• GPU       : $GPU_INFO\n\n=== STATO SERVIZI E PORTE ===\n• llama.cpp : $st_llama\n• Open WebUI: $st_webui\n\nTutti i servizi attivi operano in parallelo senza conflitti."
-
-    whiptail --title "Dashboard di Sistema - AMD Manager" --msgbox "$DASH_TEXT" 20 75
+    local IP=$(hostname -I | awk '{print $1}')
+    local GPU=$(lspci | grep -iE 'vga|3d|display' | grep -i amd | head -n 1)
+    whiptail --title "Dashboard AMD" --msgbox "IP: $IP\nGPU: $GPU\nPorta Backend: $LLAMACPP_PORT\nPorta WebUI: $OPENWEBUI_PORT" 15 70
 }
 
-# ------------------------------------------------------------------------------
-# GESTIONE, DOWNLOAD E ATTIVAZIONE MODELLI GGUF
-# ------------------------------------------------------------------------------
 manage_models() {
     while true; do
-        MODEL_CHOICE=$(whiptail --title "Gestione & Attivazione Modelli GGUF (AMD)" \
-            --menu "Scegli l'operazione sui modelli:" 15 75 3 \
-            "ACTIVATE_GGUF" "Seleziona e attiva un GGUF su llama.cpp" \
-            "DOWNLOAD_GGUF" "Scarica file GGUF da HuggingFace" \
-            "BACK"          "Torna al menu principale" \
-            3>&1 1>&2 2>&3)
-            
+        MODEL_CHOICE=$(whiptail --title "Gestione Modelli GGUF (AMD)" \
+            --menu "Scegli l'operazione:" 15 75 3 \
+            "ACTIVATE_GGUF" "Attiva GGUF su llama.cpp" \
+            "DOWNLOAD_GGUF" "Scarica GGUF da HuggingFace" \
+            "BACK" "Torna indietro" 3>&1 1>&2 2>&3)
         if [ $? -ne 0 ]; then break; fi
-
         case "$MODEL_CHOICE" in
             "ACTIVATE_GGUF")
                 mkdir -p "$MODELS_DIR"
-                if [ -z "$(ls -A "$MODELS_DIR"/*.gguf 2>/dev/null)" ]; then
-                    whiptail --title "Attenzione" --msgbox "Nessun file GGUF trovato in $MODELS_DIR.\nScaricalo prima usando l'opzione 'Scarica file GGUF da HuggingFace'." 10 60
-                    continue
-                fi
-                
                 GGUF_LIST=()
                 while IFS= read -r file; do
-                    fname=$(basename "$file")
-                    fsize=$(du -h "$file" | awk '{print $1}')
-                    GGUF_LIST+=("$fname" "Size: $fsize")
+                    GGUF_LIST+=("$(basename "$file")" "file")
                 done < <(find "$MODELS_DIR" -maxdepth 1 -name "*.gguf")
-
-                SELECTED_GGUF=$(whiptail --title "Attiva Modello su llama.cpp" --menu "Seleziona il GGUF da mettere in esecuzione:" 20 75 8 "${GGUF_LIST[@]}" 3>&1 1>&2 2>&3)
-                
-                if [ $? -ne 0 ] || [ -z "$SELECTED_GGUF" ]; then
-                    continue
-                fi
-
-                ln -sf "${MODELS_DIR}/$SELECTED_GGUF" "${MODELS_DIR}/model.gguf"
-                
-                if [ -f "$SERVICE_FILE" ]; then
-                    sed -i "s|-m \".*\"|-m \"${MODELS_DIR}/model.gguf\"|" "$SERVICE_FILE"
-                    systemctl daemon-reload
-                    systemctl restart "${SERVICE_NAME}" 2>/dev/null || true
-                    whiptail --title "Successo" --msgbox "Modello '$SELECTED_GGUF' attivato e servizio llama.cpp riavviato!" 10 60
+                if [ ${#GGUF_LIST[@]} -gt 0 ]; then
+                    SEL=$(whiptail --title "Modelli" --menu "Seleziona:" 15 60 4 "${GGUF_LIST[@]}" 3>&1 1>&2 2>&3)
+                    if [ $? -eq 0 ] && [ -n "$SEL" ]; then
+                        ln -sf "${MODELS_DIR}/$SEL" "${MODELS_DIR}/model.gguf"
+                        systemctl restart "${SERVICE_NAME}" 2>/dev/null || true
+                    fi
                 else
-                    whiptail --title "Errore" --msgbox "Il servizio systemd non esiste. Configura prima il backend." 10 60
+                    whiptail --title "Info" --msgbox "Nessun modello trovato in $MODELS_DIR" 8 40
                 fi
                 ;;
             "DOWNLOAD_GGUF")
-                URL_GGUF=$(whiptail --title "Download GGUF" --inputbox "Inserisci URL diretto del file GGUF (es. da HuggingFace):" 10 65 "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf" 3>&1 1>&2 2>&3)
-                if [ $? -eq 0 ] && [ -n "$URL_GGUF" ]; then
-                    mkdir -p "$MODELS_DIR"
-                    cd "$MODELS_DIR"
-                    clear
-                    wget -c --show-progress "$URL_GGUF"
-                    local downloaded_file
-                    downloaded_file=$(basename "$URL_GGUF" | cut -d? -f1)
-                    if [ -f "$downloaded_file" ]; then
-                        ln -sf "${MODELS_DIR}/${downloaded_file}" "${MODELS_DIR}/model.gguf"
-                    fi
-                    echo -ne "\nPremi INVIO per continuare..."
-                    read -r
+                URL=$(whiptail --title "URL" --inputbox "URL GGUF:" 8 60 "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf" 3>&1 1>&2 2>&3)
+                if [ $? -eq 0 ] && [ -n "$URL" ]; then
+                    mkdir -p "$MODELS_DIR" && cd "$MODELS_DIR" && wget -c "$URL"
                 fi
                 ;;
-            "BACK")
-                break
-                ;;
+            "BACK") break ;;
         esac
     done
 }
 
-# ------------------------------------------------------------------------------
-# Integrazione Task Repository & Uninstall
-# ------------------------------------------------------------------------------
-update_repo() {
-    log_info "Aggiornamento Repository in corso..."
-    if [[ -d "${REPO_ROOT}/.git" ]]; then
-        git -C "${REPO_ROOT}" pull origin main || true
-        
-        chmod +x "${SCRIPT_DIR}"/*.sh 2>/dev/null || true
-        [[ -f "${REPO_ROOT}/main.sh" ]] && chmod +x "${REPO_ROOT}/main.sh"
-        
-        log_info "Repository aggiornata. Riavvio del manager AMD in corso..."
-        sleep 2
-        exec "${SCRIPT_DIR}/manager-amd.sh"
-    else
-        log_warn "Repository non clonata tramite git. Aggiornamento manuale necessario."
-        read -rp "Premi Invio per continuare..."
-    fi
-}
-
-run_uninstall() {
-    if [[ -x "${SCRIPT_DIR}/uninstall.sh" ]]; then
-        clear
-        log_warn "Avvio script di disinstallazione..."
-        "${SCRIPT_DIR}/uninstall.sh"
-        exit 0
-    elif [[ -x "${SCRIPT_DIR}/purge-homelab-ai.sh" ]]; then
-        clear
-        log_warn "Avvio script di purga stack AI..."
-        "${SCRIPT_DIR}/purge-homelab-ai.sh"
-        exit 0
-    else
-        if (whiptail --title "Conferma" --yesno "Vuoi rimuovere i servizi e ripulire lo stack AMD?" 10 60); then
-            systemctl stop "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
-            rm -f "${SERVICE_FILE}" "${FRONTEND_SERVICE_FILE}"
-            systemctl daemon-reload
-            whiptail --title "Completato" --msgbox "Servizi rimossi con successo." 8 50
-        fi
-    fi
-}
-
 manage_service_menu() {
-    local action
-    action=$(whiptail --title "Gestione Servizi Homelab AI" \
-        --menu "\nSeleziona l'azione da compiere:" 15 78 4 \
-        "1" "Avvia Servizi (Backend & Frontend)" \
-        "2" "Ferma Servizi (Backend & Frontend)" \
-        "3" "Riavvia Servizi (Backend & Frontend)" \
-        "4" "Torna al Menu Principale" \
-        3>&1 1>&2 2>&3)
-    
+    local action=$(whiptail --title "Gestione Servizi" \
+        --menu "Seleziona azione:" 15 70 4 \
+        "1" "Avvia Servizi" \
+        "2" "Ferma Servizi" \
+        "3" "Riavvia Servizi" \
+        "4" "Indietro" 3>&1 1>&2 2>&3)
     case "$action" in
-        1) 
-            systemctl start "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
-            log_info "Servizi avviati." 
-            ;;
-        2) 
-            systemctl stop "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
-            log_info "Servizi fermati." 
-            ;;
-        3) 
-            systemctl restart "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
-            log_info "Servizi riavviati." 
-            ;;
-        *) ;;
+        1) systemctl start "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true ;;
+        2) systemctl stop "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true ;;
+        3) systemctl restart "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true ;;
     esac
 }
 
 select_backend() {
-    local choice
-    choice=$(whiptail --title "Selezione Backend Inferenza AMD" \
-        --menu "\nSeleziona il backend grafico per la tua GPU AMD:" 18 78 3 \
-        "1" "Vulkan (RACCOMANDATO per Navi / RDNA su OS Moderni)" \
-        "2" "ROCm Sperimentale (Auto-fix HIPCC + Patch FP8 + Hack HSA)" \
-        "3" "ROCm Ufficiale (Architetture native supportate)" \
-        3>&1 1>&2 2>&3)
-
+    local choice=$(whiptail --title "Backend AMD" \
+        --menu "Scegli il backend:" 15 70 3 \
+        "1" "Vulkan (Raccomandato)" \
+        "2" "ROCm Sperimentale" \
+        "3" "ROCm Ufficiale" 3>&1 1>&2 2>&3)
     case "$choice" in
         1) compile_llama "vulkan" ;;
         2) compile_llama "rocm_exp" ;;
         3) compile_llama "rocm" ;;
-        *) log_warn "Operazione annullata." ;;
     esac
 }
 
-# ------------------------------------------------------------------------------
-# Menu TUI Principale v2.0.0
-# ------------------------------------------------------------------------------
-main_menu() {
-    if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
+run_uninstall() {
+    if (whiptail --title "Disinstalla" --yesno "Vuoi rimuovere i servizi?" 10 50); then
+        systemctl stop "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
+        rm -f "${SERVICE_FILE}" "${FRONTEND_SERVICE_FILE}"
+        systemctl daemon-reload
+    fi
+}
 
+update_repo() {
+    if [[ -d "${REPO_ROOT}/.git" ]]; then
+        git -C "${REPO_ROOT}" pull origin main || true
+        exec "${SCRIPT_DIR}/manager-amd.sh"
+    fi
+}
+
+main_menu() {
     while true; do
-        local choice
         choice=$(whiptail --title "Homelab AI - AMD Management Console (v${VERSION})" \
-            --menu "\nAmbiente: $(detect_environment)\nScegli un'operazione:" 22 80 12 \
+            --menu "Ambiente: $(detect_environment)\nScegli un'operazione:" 22 80 12 \
             "A" "Express Auto-Deploy (Tutto in un click - Vulkan)" \
             "1" "Seleziona/Compila Backend Llama.cpp (3 Architetture)" \
             "2" "Installa / Configura Open WebUI (Frontend)" \
@@ -656,19 +457,15 @@ main_menu() {
         if [ $? -ne 0 ]; then return_to_main; fi
 
         case "$choice" in
-            "A")
-                install_dependencies
-                compile_llama "vulkan"
-                install_open_webui
-                ;;
-            "1") select_backend; read -rp "Premi Invio per continuare..." ;;
+            "A") install_dependencies; compile_llama "vulkan"; install_open_webui ;;
+            "1") select_backend; read -rp "Invio..." ;;
             "2") install_open_webui ;;
             "3") manage_models ;;
             "4") deploy_advanced_services_menu ;;
             "5") manage_service_menu ;;
             "6") manage_ports ;;
-            "7") show_dashboard_banner; read -rp "Premi Invio per continuare..." ;;
-            "8") clear; tail -n 50 "${LOG_FILE}" || true; echo -ne "\nPremi INVIO per continuare..."; read -r ;;
+            "7") show_dashboard_banner; read -rp "Invio..." ;;
+            "8") clear; tail -n 50 "${LOG_FILE}" || true; read -rp "Invio..." ;;
             "9") update_repo ;;
             "0") run_uninstall ;;
             *) return_to_main ;;
@@ -676,9 +473,6 @@ main_menu() {
     done
 }
 
-# ------------------------------------------------------------------------------
-# Avvio (Entrypoint)
-# ------------------------------------------------------------------------------
 check_root
 init_env
 install_dependencies
