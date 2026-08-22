@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.2.0.1 (Full Featured + Advanced Services + Fix UV venv)
+# Version: V.2.0.2 (Full Featured + Advanced Services + Fix UV Absolute Venv)
 # ==============================================================================
 
 set -euo pipefail
@@ -12,7 +12,7 @@ trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-nvidia.sh si è int
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-VERSION="2.0.1"
+VERSION="2.0.2"
 LOG_FILE="/var/log/homelab-ai-nvidia.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -147,12 +147,12 @@ install_open_webui() {
     mkdir -p "$WEBUI_DIR"
     cd "$WEBUI_DIR"
 
-    # CORREZIONE: Creazione esplicita dell'ambiente virtuale con uv prima dell'installazione
-    log_info "Creazione ambiente virtuale venv per Open WebUI..."
-    "$UV_BIN" venv venv --python 3.12
+    log_info "Creazione ambiente virtuale venv assoluto in ${WEBUI_DIR}/venv..."
+    "$UV_BIN" venv "${WEBUI_DIR}/venv" --python 3.12 --seed --allow-existing
 
-    log_info "Installazione Open WebUI tramite uv pip..."
-    "$UV_BIN" pip install open-webui
+    log_info "Installazione Open WebUI tramite uv pip con percorso assoluto..."
+    "${WEBUI_DIR}/venv/bin/python" -m pip install --upgrade pip
+    "$UV_BIN" pip install open-webui --python "${WEBUI_DIR}/venv/bin/python"
 
     cat <<EOF > "${FRONTEND_SERVICE_FILE}"
 [Unit]
