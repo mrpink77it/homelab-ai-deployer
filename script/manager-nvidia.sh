@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu Stable Stack)
+# Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.6.4 (Full Custom Stack + CMake Build Fix)
+# Version: V.1.6.5 (Full Custom Stack + CMake + Zstd Fix)
 # ==============================================================================
 
 set -e
@@ -68,7 +68,7 @@ setup_nvidia_stack() {
         fi
 
         echo -e "${CYAN}Installazione dipendenze di base per la compilazione...${NC}"
-        apt update -qq && apt install -y pciutils kmod build-essential cmake curl wget git lsb-release
+        apt update -qq && apt install -y pciutils kmod build-essential cmake curl wget git lsb-release zstd
 
         if [ ! -f /etc/apt/sources.list.d/cuda.list ]; then
             if [ "$OS_ID" = "ubuntu" ]; then
@@ -92,7 +92,7 @@ setup_nvidia_stack() {
         if ! apt install -y cuda pciutils kmod build-essential cmake; then
             echo -e "${YELLOW}[WARNING] Metapacchetto 'cuda' non trovato, provo con 'cuda-toolkit'...${NC}"
             if ! apt install -y cuda-toolkit pciutils kmod build-essential cmake; then
-                echo -e "${YELLOW}[WARNING] Fallimento repository NVIDIA, uso i pacchetti nativi Ubuntu (nvidia-cuda-toolkit)...${NC}"
+                echo -e "${YELLOW}[WARNING] Fallimento repository NVIDIA, uso i pacchetti nativi (nvidia-cuda-toolkit)...${NC}"
                 apt install -y nvidia-cuda-toolkit build-essential cmake
             fi
         fi
@@ -153,6 +153,12 @@ install_unsloth_stack() {
 }
 
 install_ollama_webui() {
+    # Risoluzione dipendenza zstd richiesta dall'installer ufficiale di Ollama su Debian/Ubuntu
+    if ! command -v zstd &> /dev/null; then
+        echo -e "${CYAN}Installazione di zstd (richiesto da Ollama)...${NC}"
+        apt-get update -qq && apt-get install -y zstd -qq
+    fi
+
     if ! command -v ollama &> /dev/null; then
         curl -fsSL https://ollama.com/install.sh | sh
     fi
@@ -171,7 +177,6 @@ install_ollama_webui() {
 configure_and_start_services() {
     source "$PORT_CONFIG"
     
-    # Puntiamo al binario CMake se esiste, altrimenti al fallback
     LLAMA_SERVER_BIN="$BACKEND_DIR/llama.cpp/build/bin/llama-server"
     [ ! -f "$LLAMA_SERVER_BIN" ] && LLAMA_SERVER_BIN="$BACKEND_DIR/llama.cpp/llama-server"
     
@@ -466,7 +471,7 @@ manage_models() {
 if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
 while true; do
-    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.6.4)" \
+    CHOICE=$(whiptail --title "Homelab AI Deployer - Manager NVIDIA (v1.6.5)" \
         --menu "\nSeleziona un'operazione:" 22 80 11 \
         "A" "Express Auto-Deploy (Tutto in un click)" \
         "1" "Compila llama.cpp (CMake CUDA)" \
