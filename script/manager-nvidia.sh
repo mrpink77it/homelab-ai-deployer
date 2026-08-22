@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.2.0.8 (Robust DEB822 Fix & APT Pre-flight Check)
+# Version: V.2.1.0 (Advanced Service Dashboard & Port Configuration Inspector)
 # ==============================================================================
 
 set -euo pipefail
@@ -12,7 +12,7 @@ trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-nvidia.sh si è int
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-VERSION="2.0.8"
+VERSION="2.1.0"
 LOG_FILE="/var/log/homelab-ai-nvidia.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -23,6 +23,7 @@ UNSLOTH_ENV="/root/unsloth_env"
 SERVICE_NAME="homelab-ai-backend"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 FRONTEND_SERVICE_FILE="/etc/systemd/system/homelab-ai-frontend.service"
+JUPYTER_SERVICE_FILE="/etc/systemd/system/homelab-ai-jupyter.service"
 
 PORT_CONFIG="/etc/homelab-ai/ports.conf"
 mkdir -p /etc/homelab-ai
@@ -31,6 +32,7 @@ if [ ! -f "$PORT_CONFIG" ]; then
     cat <<EOF > "$PORT_CONFIG"
 LLAMACPP_PORT=8080
 OPENWEBUI_PORT=3000
+JUPYTER_PORT=8888
 EOF
 fi
 source "$PORT_CONFIG"
@@ -89,11 +91,8 @@ install_dependencies() {
     log_info "Configurazione e abilitazione repository non-free (supporto avanzato DEB822 / sources.list)..."
     
     if grep -q "debian" /etc/os-release; then
-        # 1. Gestione formato moderno DEB822 (.sources) in /etc/apt/sources.list.d/
         for sfile in /etc/apt/sources.list.d/*.sources; do
             if [ -f "$sfile" ]; then
-                log_info "Elaborazione file sorgente DEB822: $sfile"
-                # Assicura che contrib, non-free e non-free-firmware siano presenti nella riga Components
                 if grep -q "^Components:" "$sfile"; then
                     for comp in contrib non-free non-free-firmware; do
                         if ! grep -q "$comp" "$sfile"; then
@@ -103,29 +102,21 @@ install_dependencies() {
                 fi
             fi
         done
-        
-        # 2. Gestione formato classico in /etc/apt/sources.list
         if [ -f /etc/apt/sources.list ]; then
             sed -i 's/\bmain\b/main contrib non-free non-free-firmware/g' /etc/apt/sources.list || true
         fi
-        
-        # 3. Gestione file .list tradizionali in sources.list.d
         for lfile in /etc/apt/sources.list.d/*.list; do
             [ -f "$lfile" ] && sed -i 's/\bmain\b/main contrib non-free non-free-firmware/g' "$lfile" || true
         done
-
     elif grep -q "ubuntu" /etc/os-release; then
         apt-get install -y software-properties-common -qq || true
         add-apt-repository -y restricted universe multiverse || true
     fi
 
-    log_info "Aggiornamento indici APT e installazione dipendenze di sistema..."
-    apt-get update -qq
+    log_get_update() { apt-get update -qq; }
+    log_get_update
     
-    # Verifica preventiva disponibilità pacchetto CUDA toolkit
     if ! apt-cache policy nvidia-cuda-toolkit | grep -q "Candidate: [^ ]"; then
-        log_warn "Il pacchetto nvidia-cuda-toolkit non risulta ancora agganciato dai repository attivi."
-        log_warn "Tentativo di forzatura aggiunta componenti non-free su tutti i file .sources..."
         for sfile in /etc/apt/sources.list.d/*.sources; do
             [ -f "$sfile" ] && sed -i 's/Components: *\(.*\)/Components: \1 contrib non-free non-free-firmware/' "$sfile"
         done
@@ -148,8 +139,8 @@ compile_llama_cuda() {
     fi
 
     if ! command -v nvcc &> /dev/null && [ ! -f "${CUDAToolkit_ROOT}/bin/nvcc" ]; then
-        log_err "Compilatore nvcc (CUDA Toolkit) non trovato! Assicurati di installare nvidia-cuda-toolkit."
-        whiptail --title "Errore CUDA" --msgbox "Toolkit CUDA non rilevato nel sistema. Assicurati che i repository non-free siano attivi in Debian 13." 10 60
+        log_err "Compilatore nvcc (CUDA Toolkit) non trovato!"
+        whiptail --title "Errore CUDA" --msgbox "Toolkit CUDA non rilevato nel sistema. Assicurati che i repository non-free siano attivi." 10 60
         return 1
     fi
 
@@ -212,10 +203,7 @@ install_open_webui() {
     mkdir -p "$WEBUI_DIR"
     cd "$WEBUI_DIR"
 
-    log_info "Creazione ambiente virtuale venv assoluto in ${WEBUI_DIR}/venv..."
     "$UV_BIN" venv "${WEBUI_DIR}/venv" --python 3.12 --seed --allow-existing
-
-    log_info "Installazione Open WebUI tramite uv pip con percorso assoluto..."
     "${WEBUI_DIR}/venv/bin/python" -m pip install --upgrade pip
     "$UV_BIN" pip install open-webui --python "${WEBUI_DIR}/venv/bin/python"
 
@@ -275,7 +263,7 @@ deploy_advanced_services_menu() {
                 ;;
             2)
                 clear
-                echo -e "${GREEN}Installazione dipendenze Whisper per Audio Processing...${NC}"
+                echo -e "${GREEN}Installazione dipendenze Whisper...${NC}"
                 local UV_BIN="$HOME/.local/bin/uv"
                 [ ! -f "$UV_BIN" ] && UV_BIN="/root/.local/bin/uv"
                 if command -v "$UV_BIN" &> /dev/null; then
@@ -289,7 +277,7 @@ deploy_advanced_services_menu() {
                 whiptail --title "SearXNG & RAG" --msgbox "Assicurati di impostare le variabili d'ambiente di SearXNG nel pannello di Open WebUI." 10 65
                 ;;
             4)
-                whiptail --title "OpenClaw" --msgbox "Preparazione installazione OpenClaw (Agente autonomo in configurazione)..." 10 65
+                whiptail --title "OpenClaw" --msgbox "Preparazione installazione OpenClaw..." 10 65
                 ;;
             5)
                 clear
@@ -297,6 +285,31 @@ deploy_advanced_services_menu() {
                 if [ ! -d "$UNSLOTH_ENV" ]; then python3 -m venv "$UNSLOTH_ENV"; fi
                 "$UNSLOTH_ENV/bin/pip" install --upgrade pip wheel "setuptools<82"
                 "$UNSLOTH_ENV/bin/pip" install -U jupyterlab unsloth unsloth-zoo trl xformers
+
+                # Creazione servizio systemd per Jupyter
+                cat <<EOF > "${JUPYTER_SERVICE_FILE}"
+[Unit]
+Description=Homelab AI Jupyter Lab Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root
+Environment="PATH=${UNSLOTH_ENV}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=${UNSLOTH_ENV}/bin/jupyter lab --ip=0.0.0.0 --port=${JUPYTER_PORT:-8888} --no-browser --allow-root --ServerApp.token=''
+Restart=always
+RestartSec=5
+StandardOutput=append:${LOG_FILE}
+StandardError=append:${LOG_FILE}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+                systemctl daemon-reload
+                systemctl enable homelab-ai-jupyter
+                systemctl restart homelab-ai-jupyter
+                echo -e "${GREEN}Jupyter Lab configurato e avviato sulla porta ${JUPYTER_PORT:-8888}.${NC}"
                 read -rp "Premi INVIO per continuare..."
                 ;;
             6)
@@ -306,43 +319,167 @@ deploy_advanced_services_menu() {
     done
 }
 
-manage_ports() {
+manage_ports_and_bindings() {
     while true; do
         source "$PORT_CONFIG"
-        local s_llama="CHIUSA"
-        ss -tulpn | grep -q ":$LLAMACPP_PORT " && s_llama="ATTIVO"
-        local s_webui="CHIUSA"
-        ss -tulpn | grep -q ":$OPENWEBUI_PORT " && s_webui="ATTIVO"
+        
+        SERVICE_TO_EDIT=$(whiptail --title "Gestione Porte & Variazioni Systemd" \
+            --menu "Seleziona il servizio di cui configurare porta e variazioni:" 17 75 4 \
+            "LLAMACPP_PORT" "llama.cpp Backend (Attuale: $LLAMACPP_PORT)" \
+            "OPENWEBUI_PORT" "Open WebUI Frontend (Attuale: $OPENWEBUI_PORT)" \
+            "JUPYTER_PORT" "Jupyter Lab / Unsloth (Attuale: ${JUPYTER_PORT:-8888})" \
+            "BACK" "Torna al Menu Principale" 3>&1 1>&2 2>&3)
+            
+        if [ $? -ne 0 ] || [ "$SERVICE_TO_EDIT" = "BACK" ]; then break; fi
 
-        PORT_CHOICE=$(whiptail --title "Gestione Porte & Stato Servizi NVIDIA" \
-            --menu "Porte configurate:\n 1. llama.cpp : $LLAMACPP_PORT [$s_llama]\n 2. WebUI : $OPENWEBUI_PORT [$s_webui]" 16 70 3 \
-            "CHANGE" "Modifica una porta" \
-            "RESTART" "Riavvia i servizi" \
-            "BACK" "Torna indietro" 3>&1 1>&2 2>&3)
-        if [ $? -ne 0 ]; then break; fi
-        case $PORT_CHOICE in
-            "CHANGE")
-                T_SRV=$(whiptail --title "Servizio" --menu "Seleziona:" 10 50 2 "LLAMACPP_PORT" "llama.cpp" "OPENWEBUI_PORT" "WebUI" 3>&1 1>&2 2>&3)
-                if [ $? -eq 0 ] && [ -n "$T_SRV" ]; then
-                    N_P=$(whiptail --title "Nuova Porta" --inputbox "Inserisci porta:" 8 40 3>&1 1>&2 2>&3)
-                    if [ $? -eq 0 ] && [ -n "$N_P" ]; then
-                        sed -i "s/^${T_SRV}=.*/${T_SRV}=${N_P}/" "$PORT_CONFIG"
-                    fi
+        CURRENT_VAL=$(eval echo "\$$SERVICE_TO_EDIT")
+        NEW_PORT=$(whiptail --title "Modifica Porta: $SERVICE_TO_EDIT" \
+            --inputbox "Inserisci il nuovo numero di porta per $SERVICE_TO_EDIT:" 10 50 "$CURRENT_VAL" 3>&1 1>&2 2>&3)
+            
+        if [ $? -eq 0 ] && [ -n "$NEW_PORT" ]; then
+            # Mostra anteprima delle variazioni sui file di configurazione
+            PREVIEW_MSG="Variazioni che verranno applicate:\n\n"
+            PREVIEW_MSG+="1. Aggiornamento file centrale: ${PORT_CONFIG}\n   ${SERVICE_TO_EDIT}=${CURRENT_VAL} -> ${NEW_PORT}\n\n"
+            
+            if [ "$SERVICE_TO_EDIT" = "LLAMACPP_PORT" ]; then
+                PREVIEW_MSG+="2. Modifica file di servizio Systemd: ${SERVICE_FILE}\n   Aggiornamento parametro --port ${NEW_PORT}\n"
+            elif [ "$SERVICE_TO_EDIT" = "OPENWEBUI_PORT" ]; then
+                PREVIEW_MSG+="2. Modifica file di servizio Systemd: ${FRONTEND_SERVICE_FILE}\n   Aggiornamento variabili PORT=${NEW_PORT}, WEBUI_PORT=${NEW_PORT}\n"
+            elif [ "$SERVICE_TO_EDIT" = "JUPYTER_PORT" ]; then
+                PREVIEW_MSG+="2. Modifica file di servizio Systemd: ${JUPYTER_SERVICE_FILE}\n   Aggiornamento parametro --port=${NEW_PORT}\n"
+            fi
+
+            if (whiptail --title "Conferma Variazioni Systemd" --yesno "$PREVIEW_MSG" 16 70); then
+                # Salva nel file di configurazione porte
+                sed -i "s/^${SERVICE_TO_EDIT}=.*/${SERVICE_TO_EDIT}=${NEW_PORT}/" "$PORT_CONFIG"
+                source "$PORT_CONFIG"
+
+                # Applica le modifiche direttamente ai file di servizio corrispondenti
+                if [ "$SERVICE_TO_EDIT" = "LLAMACPP_PORT" ] && [ -f "$SERVICE_FILE" ]; then
+                    sed -i "s/--port [0-9]*/--port ${NEW_PORT}/" "$SERVICE_FILE"
+                    systemctl daemon-reload
+                    systemctl restart "${SERVICE_NAME}" 2>/dev/null || true
+                elif [ "$SERVICE_TO_EDIT" = "OPENWEBUI_PORT" ] && [ -f "$FRONTEND_SERVICE_FILE" ]; then
+                    sed -i "s/Environment=\"PORT=[0-9]*\"/Environment=\"PORT=${NEW_PORT}\"/" "$FRONTEND_SERVICE_FILE"
+                    sed -i "s/Environment=\"WEBUI_PORT=[0-9]*\"/Environment=\"WEBUI_PORT=${NEW_PORT}\"/" "$FRONTEND_SERVICE_FILE"
+                    systemctl daemon-reload
+                    systemctl restart homelab-ai-frontend 2>/dev/null || true
+                elif [ "$SERVICE_TO_EDIT" = "JUPYTER_PORT" ] && [ -f "$JUPYTER_SERVICE_FILE" ]; then
+                    sed -i "s/--port=[0-9]*/--port=${NEW_PORT}/" "$JUPYTER_SERVICE_FILE"
+                    systemctl daemon-reload
+                    systemctl restart homelab-ai-jupyter 2>/dev/null || true
                 fi
-                ;;
-            "RESTART")
-                systemctl restart "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
-                ;;
-            "BACK") break ;;
-        esac
+                whiptail --title "Successo" --msgbox "Porta modificata e file di servizio aggiornati con successo!" 10 50
+            fi
+        fi
+    done
+}
+
+manage_service_dashboard() {
+    while true; do
+        source "$PORT_CONFIG"
+        local IP=$(hostname -I | awk '{print $1}')
+        [ -z "$IP" ] && IP="127.0.0.1"
+
+        # Stato dei servizi
+        check_status() {
+            systemctl is-active --quiet "$1" && echo "ATTIVO" || echo "FERMO"
+        }
+        check_enabled() {
+            systemctl is-enabled --quiet "$1" && echo "ABILITATO" || echo "DISABILITATO"
+        }
+
+        s_back_st=$(check_status "${SERVICE_NAME}")
+        s_back_en=$(check_enabled "${SERVICE_NAME}")
+        
+        s_front_st=$(check_status "homelab-ai-frontend")
+        s_front_en=$(check_enabled "homelab-ai-frontend")
+
+        s_jup_st="NON INSTALLATO"
+        s_jup_en="-"
+        if [ -f "$JUPYTER_SERVICE_FILE" ]; then
+            s_jup_st=$(check_status "homelab-ai-jupyter")
+            s_jup_en=$(check_enabled "homelab-ai-jupyter")
+        fi
+
+        MENU_TEXT="Indirizzo IP di Sistema: $IP\n\n"
+        MENU_TEXT+="[1] llama.cpp Backend\n    Stato: $s_back_st ($s_back_en) | URL: http://$IP:$LLAMACPP_PORT\n\n"
+        MENU_TEXT+="[2] Open WebUI Frontend\n    Stato: $s_front_st ($s_front_en) | URL: http://$IP:$OPENWEBUI_PORT\n\n"
+        if [ -f "$JUPYTER_SERVICE_FILE" ]; then
+            MENU_TEXT+="[3] Jupyter Lab / Unsloth\n    Stato: $s_jup_st ($s_jup_en) | URL: http://$IP:${JUPYTER_PORT:-8888}\n\n"
+        else
+            MENU_TEXT+="[3] Jupyter Lab / Unsloth (Non installato)\n\n"
+        fi
+        MENU_TEXT+="Seleziona un servizio da gestire (Avvia, Ferma, Abilita/Disabilita):"
+
+        SRV_CHOICE=$(whiptail --title "Dashboard & Controllo Servizi di Sistema" \
+            --menu "$MENU_TEXT" 21 78 5 \
+            "1" "Gestisci llama.cpp Backend" \
+            "2" "Gestisci Open WebUI Frontend" \
+            "3" "Gestisci Jupyter Lab / Unsloth" \
+            "ALL_RESTART" "Riavvia tutti i servizi attivi" \
+            "BACK" "Torna al Menu Principale" 3>&1 1>&2 2>&3)
+
+        if [ $? -ne 0 ] || [ "$SRV_CHOICE" = "BACK" ]; then break; fi
+
+        if [ "$SRV_CHOICE" = "ALL_RESTART" ]; then
+            systemctl restart "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
+            [ -f "$JUPYTER_SERVICE_FILE" ] && systemctl restart homelab-ai-jupyter 2>/dev/null || true
+            whiptail --title "Completato" --msgbox "Tutti i servizi installati sono stati riavviati." 8 50
+            continue
+        fi
+
+        TARGET_SERVICE=""
+        TARGET_NAME=""
+        if [ "$SRV_CHOICE" = "1" ]; then
+            TARGET_SERVICE="${SERVICE_NAME}"
+            TARGET_NAME="llama.cpp Backend"
+        elif [ "$SRV_CHOICE" = "2" ]; then
+            TARGET_SERVICE="homelab-ai-frontend"
+            TARGET_NAME="Open WebUI Frontend"
+        elif [ "$SRV_CHOICE" = "3" ]; then
+            if [ ! -f "$JUPYTER_SERVICE_FILE" ]; then
+                whiptail --title "Avviso" --msgbox "Il servizio Jupyter Lab non è installato. Configuralo dal menu dei servizi avanzati." 10 60
+                continue
+            fi
+            TARGET_SERVICE="homelab-ai-jupyter"
+            TARGET_NAME="Jupyter Lab"
+        fi
+
+        if [ -n "$TARGET_SERVICE" ]; then
+            ACTION=$(whiptail --title "Controllo: $TARGET_NAME" \
+                --menu "Seleziona l'azione da eseguire sul servizio:" 13 60 4 \
+                "START" "Avvia il servizio" \
+                "STOP" "Ferma il servizio" \
+                "RESTART" "Riavvia il servizio" \
+                "TOGGLE_ENABLE" "Abilita/Disabilita avvio automatico (Boot)" 3>&1 1>&2 2>&3)
+                
+            if [ $? -eq 0 ]; then
+                case "$ACTION" in
+                    "START") systemctl start "$TARGET_SERVICE" ;;
+                    "STOP") systemctl stop "$TARGET_SERVICE" ;;
+                    "RESTART") systemctl restart "$TARGET_SERVICE" ;;
+                    "TOGGLE_ENABLE")
+                        if systemctl is-enabled --quiet "$TARGET_SERVICE"; then
+                            systemctl disable "$TARGET_SERVICE"
+                            whiptail --title "Systemd" --msgbox "Avvio automatico disabilitato per $TARGET_NAME." 8 50
+                        else
+                            systemctl enable "$TARGET_SERVICE"
+                            whiptail --title "Systemd" --msgbox "Avvio automatico abilitato per $TARGET_NAME." 8 50
+                        fi
+                        ;;
+                esac
+            fi
+        fi
     done
 }
 
 show_dashboard_banner() {
     source "$PORT_CONFIG"
     local IP=$(hostname -I | awk '{print $1}')
+    [ -z "$IP" ] && IP="127.0.0.1"
     local GPU=$(lspci | grep -iE 'vga|3d|display' | grep -i nvidia | head -n 1)
-    whiptail --title "Dashboard NVIDIA" --msgbox "IP: $IP\nGPU: $GPU\nPorta Backend: $LLAMACPP_PORT\nPorta WebUI: $OPENWEBUI_PORT" 15 70
+    whiptail --title "Dashboard NVIDIA" --msgbox "IP: $IP\nGPU: $GPU\n\nURL Backend: http://$IP:$LLAMACPP_PORT\nURL WebUI: http://$IP:$OPENWEBUI_PORT" 16 75
 }
 
 manage_models() {
@@ -363,20 +500,10 @@ manage_models() {
     done
 }
 
-manage_service_menu() {
-    local act=$(whiptail --title "Servizi" --menu "Azione:" 12 50 3 \
-        "1" "Avvia Servizi" "2" "Ferma Servizi" "3" "Riavvia Servizi" 3>&1 1>&2 2>&3)
-    case "$act" in
-        1) systemctl start "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true ;;
-        2) systemctl stop "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true ;;
-        3) systemctl restart "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true ;;
-    esac
-}
-
 run_uninstall() {
     if (whiptail --title "Disinstalla" --yesno "Vuoi rimuovere i servizi?" 10 50); then
-        systemctl stop "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true
-        rm -f "${SERVICE_FILE}" "${FRONTEND_SERVICE_FILE}"
+        systemctl stop "${SERVICE_NAME}" homelab-ai-frontend homelab-ai-jupyter 2>/dev/null || true
+        rm -f "${SERVICE_FILE}" "${FRONTEND_SERVICE_FILE}" "${JUPYTER_SERVICE_FILE}"
         systemctl daemon-reload
     fi
 }
@@ -397,9 +524,9 @@ main_menu() {
             "2" "Installa Ollama & Open WebUI" \
             "3" "Compila llama.cpp (CUDA)" \
             "4" "Gestione Servizi Avanzati (OCR, Audio, Web Search, OpenClaw, Unsloth)" \
-            "5" "Gestione Servizi di Sistema (Avvia/Ferma/Riavvia)" \
+            "5" "Gestione & Controllo Servizi Attivi (Stato, IP, HTTP, Avvio/Ferma)" \
             "6" "Scarica / Gestisci Modelli GGUF" \
-            "7" "Gestione Porte & Stato Servizi Attivi" \
+            "7" "Configurazione Avanzata Porte & Variazioni Systemd" \
             "8" "Mostra Dashboard di Sistema" \
             "9" "Visualizza Log di Sistema" \
             "10" "Aggiorna Repository" \
@@ -414,9 +541,9 @@ main_menu() {
             "2") install_open_webui ;;
             "3") compile_llama_cuda ;;
             "4") deploy_advanced_services_menu ;;
-            "5") manage_service_menu ;;
+            "5") manage_service_dashboard ;;
             "6") manage_models ;;
-            "7") manage_ports ;;
+            "7") manage_ports_and_bindings ;;
             "8") show_dashboard_banner; read -rp "Invio..." ;;
             "9") clear; tail -n 50 "${LOG_FILE}" || true; read -rp "Invio..." ;;
             "10") update_repo ;;
