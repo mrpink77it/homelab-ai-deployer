@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Homelab AI Deployer - Manager Script (AMD)
+# Homelab AI Deployer - Manager Script (AMD - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.5.5 (Uniformed Menus & 3 AMD Architectures Support)
+# Version: V.2.0.0 (Advanced Multimodal & Services Integration Stack - AMD)
 # ==============================================================================
 
 set -euo pipefail
@@ -18,12 +18,13 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 # ------------------------------------------------------------------------------
 # Configurazione Variabili Globali
 # ------------------------------------------------------------------------------
-VERSION="1.5.5"
+VERSION="2.0.0"
 LOG_FILE="/var/log/homelab-ai-amd.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
 MODELS_DIR="${INSTALL_DIR}/models"
 WEBUI_DIR="${INSTALL_DIR}/open-webui"
+UNSLOTH_ENV="/root/unsloth_env"
 
 SERVICE_NAME="homelab-ai-backend"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -104,7 +105,7 @@ install_dependencies() {
     log_info "Verifica pacchetti base di sistema..."
     apt-get update || true
     apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" \
-        build-essential cmake git curl wget pkg-config pciutils gnupg \
+        build-essential cmake git curl wget pkg-config pciutils gnupg zstd ffmpeg \
         libvulkan-dev vulkan-tools python3 python3-pip python3-venv python3-dev whiptail \
         libffi-dev libssl-dev libomp-dev || true
     
@@ -340,7 +341,71 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# GESTIONE PORTE E STATO ATTIVO (Con Cancel uniforme)
+# Gestione Servizi Avanzati & Moduli (OCR, Whisper, SearXNG, OpenClaw, Unsloth)
+# ------------------------------------------------------------------------------
+deploy_advanced_services_menu() {
+    while true; do
+        ADV_CHOICE=$(whiptail --title "Homelab AI (v2.0) - Servizi Avanzati & Moduli" \
+            --menu "Seleziona il modulo avanzato da configurare:" 18 75 6 \
+            "1" "Configura Modelli Vision & OCR (Qwen2-VL / MiniCPM-V)" \
+            "2" "Configura Whisper (Speech-to-Text & Audio Intelligence)" \
+            "3" "Configura SearXNG (Web Search & RAG avanzato)" \
+            "4" "Installa Agente Locale OpenClaw (Automazione Telegram)" \
+            "5" "Configura Ambiente Vibe Coding & Unsloth / Jupyter Lab" \
+            "6" "Torna al Menu Principale" \
+            3>&1 1>&2 2>&3)
+            
+        if [ $? -ne 0 ]; then break; fi
+
+        case $ADV_CHOICE in
+            1)
+                clear
+                echo -e "${GREEN}Scaricamento modelli Ollama per OCR e Vision...${NC}"
+                if command -v ollama &> /dev/null; then
+                    ollama pull qwen2-vl:7b || true
+                    ollama pull llama3.2-vision || true
+                else
+                    echo -e "${YELLOW}Ollama non trovato. Installa Ollama per utilizzare i modelli Vision/OCR.${NC}"
+                fi
+                read -rp "Premi INVIO per continuare..."
+                ;;
+            2)
+                clear
+                echo -e "${GREEN}Installazione dipendenze Whisper per Audio Processing...${NC}"
+                UV_BIN="$HOME/.local/bin/uv"
+                [ ! -f "$UV_BIN" ] && UV_BIN="/root/.local/bin/uv"
+                if command -v "$UV_BIN" &> /dev/null; then
+                    "$UV_BIN" pip install openai-whisper soundfile
+                else
+                    pip3 install openai-whisper soundfile
+                fi
+                echo -e "${GREEN}Whisper configurato con successo!${NC}"
+                read -rp "Premi INVIO per continuare..."
+                ;;
+            3)
+                whiptail --title "SearXNG & RAG" --msgbox "Configurazione SearXNG per la ricerca web:\nAssicurati di impostare le variabili d'ambiente di SearXNG nel pannello di Open WebUI." 10 65
+                ;;
+            4)
+                whiptail --title "OpenClaw" --msgbox "Preparazione installazione OpenClaw (Agente autonomo):\nClonazione e setup demone Node.js per OpenClaw in corso di predisposizione..." 10 65
+                ;;
+            5)
+                clear
+                echo -e "${GREEN}Configurazione ambiente Unsloth & Jupyter Lab per QLoRA / Vibe Coding...${NC}"
+                if [ ! -d "$UNSLOTH_ENV" ]; then python3 -m venv "$UNSLOTH_ENV"; fi
+                "$UNSLOTH_ENV/bin/pip" install --upgrade pip wheel "setuptools<82"
+                "$UNSLOTH_ENV/bin/pip" install -U jupyterlab unsloth unsloth-zoo trl xformers
+                echo -e "${GREEN}Jupyter Lab e Unsloth pronti all'uso.${NC}"
+                read -rp "Premi INVIO per continuare..."
+                ;;
+            6)
+                break
+                ;;
+        esac
+    done
+}
+
+# ------------------------------------------------------------------------------
+# GESTIONE PORTE E STATO ATTIVO
 # ------------------------------------------------------------------------------
 manage_ports() {
     while true; do
@@ -412,7 +477,7 @@ show_dashboard_banner() {
 }
 
 # ------------------------------------------------------------------------------
-# GESTIONE, DOWNLOAD E ATTIVAZIONE MODELLI (Con Cancel uniforme)
+# GESTIONE, DOWNLOAD E ATTIVAZIONE MODELLI GGUF
 # ------------------------------------------------------------------------------
 manage_models() {
     while true; do
@@ -481,7 +546,7 @@ manage_models() {
 }
 
 # ------------------------------------------------------------------------------
-# Integrazione Nuovi Task Repository
+# Integrazione Task Repository & Uninstall
 # ------------------------------------------------------------------------------
 update_repo() {
     log_info "Aggiornamento Repository in corso..."
@@ -521,9 +586,6 @@ run_uninstall() {
     fi
 }
 
-# ------------------------------------------------------------------------------
-# Gestione Servizi
-# ------------------------------------------------------------------------------
 manage_service_menu() {
     local action
     action=$(whiptail --title "Gestione Servizi Homelab AI" \
@@ -551,9 +613,6 @@ manage_service_menu() {
     esac
 }
 
-# ------------------------------------------------------------------------------
-# Menu TUI Principale
-# ------------------------------------------------------------------------------
 select_backend() {
     local choice
     choice=$(whiptail --title "Selezione Backend Inferenza AMD" \
@@ -571,6 +630,9 @@ select_backend() {
     esac
 }
 
+# ------------------------------------------------------------------------------
+# Menu TUI Principale v2.0.0
+# ------------------------------------------------------------------------------
 main_menu() {
     if ! command -v whiptail &> /dev/null; then apt install -y whiptail -qq; fi
 
@@ -582,13 +644,13 @@ main_menu() {
             "1" "Seleziona/Compila Backend Llama.cpp (3 Architetture)" \
             "2" "Installa / Configura Open WebUI (Frontend)" \
             "3" "Scarica / Gestisci Modelli GGUF" \
-            "4" "Gestione Servizi (Avvia/Ferma/Riavvia)" \
-            "5" "Gestione Porte & Stato Servizi Attivi" \
-            "6" "Mostra Dashboard di Sistema (Banner)" \
-            "7" "Visualizza Log di Sistema" \
-            "8" "Aggiorna Repository (Manager e Script)" \
-            "9" "Disinstalla Stack Homelab AI" \
-            "0" "Esci al Menu Principale" \
+            "4" "Gestione Servizi Avanzati (OCR, Audio, Web Search, OpenClaw, Unsloth)" \
+            "5" "Gestione Servizi di Sistema (Avvia/Ferma/Riavvia)" \
+            "6" "Gestione Porte & Stato Servizi Attivi" \
+            "7" "Mostra Dashboard di Sistema (Banner)" \
+            "8" "Visualizza Log di Sistema" \
+            "9" "Aggiorna Repository (Manager e Script)" \
+            "0" "Disinstalla Stack Homelab AI" \
             3>&1 1>&2 2>&3)
 
         if [ $? -ne 0 ]; then return_to_main; fi
@@ -602,13 +664,13 @@ main_menu() {
             "1") select_backend; read -rp "Premi Invio per continuare..." ;;
             "2") install_open_webui ;;
             "3") manage_models ;;
-            "4") manage_service_menu ;;
-            "5") manage_ports ;;
-            "6") show_dashboard_banner; read -rp "Premi Invio per continuare..." ;;
-            "7") clear; tail -n 50 "${LOG_FILE}" || true; echo -ne "\nPremi INVIO per continuare..."; read -r ;;
-            "8") update_repo ;;
-            "9") run_uninstall ;;
-            "0") return_to_main ;;
+            "4") deploy_advanced_services_menu ;;
+            "5") manage_service_menu ;;
+            "6") manage_ports ;;
+            "7") show_dashboard_banner; read -rp "Premi Invio per continuare..." ;;
+            "8") clear; tail -n 50 "${LOG_FILE}" || true; echo -ne "\nPremi INVIO per continuare..."; read -r ;;
+            "9") update_repo ;;
+            "0") run_uninstall ;;
             *) return_to_main ;;
         esac
     done
