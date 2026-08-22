@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: manager-amd.sh
-# Versione: 1.0.0
+# Versione: 1.0.1
 # Descrizione: Gestore deployment, frontend, servizi systemd e ciclo AI per GPU AMD
 # Ambienti: Bare-Metal & Proxmox LXC (Debian 13 / Ubuntu 24.04 LTS)
 # ==============================================================================
@@ -11,9 +11,15 @@ set -euo pipefail
 trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-amd.sh si è interrotto alla riga $LINENO. Verifica di averlo avviato con privilegi elevati (sudo).\033[0m\n"' ERR
 
 # ------------------------------------------------------------------------------
+# Risoluzione Percorsi Relativi alla Nuova Struttura
+# ------------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# ------------------------------------------------------------------------------
 # Configurazione Variabili Globali
 # ------------------------------------------------------------------------------
-VERSION="1.0.0"
+VERSION="1.0.1"
 LOG_FILE="/var/log/homelab-ai-amd.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -158,7 +164,6 @@ compile_llama() {
         git -C "${LLAMA_DIR}" pull
     fi
 
-    # Iniezione patch di compatibilità ROCm 6.2 / fallback tipi FP8 per architetture come gfx1030
     if [[ -f "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" ]]; then
         log_info "Applicazione patch di compatibilità ROCm FP8 e fallback tipi..."
         sed -i 's/typedef __hip_fp8_e4m3 __nv_fp8_e4m3;/typedef uint8_t __nv_fp8_e4m3;/g' "${LLAMA_DIR}/ggml/src/ggml-cuda/vendors/hip.h" || true
@@ -261,14 +266,12 @@ install_open_webui() {
     log_info "Installazione/Aggiornamento Open WebUI (Frontend)..."
     mkdir -p "${WEBUI_DIR}"
     
-    # Integrazione UV per isolamento Python 3.11
     if ! command -v uv &> /dev/null; then
         log_info "Installazione del gestore pacchetti 'uv' per l'ambiente Python..."
         curl -LsSf https://astral.sh/uv/install.sh | sh
         export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
     fi
     
-    # Assicura che uv sia nel PATH anche se già installato
     export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
     
     if [[ ! -d "${WEBUI_DIR}/venv" ]]; then
@@ -332,6 +335,45 @@ download_model() {
 }
 
 # ------------------------------------------------------------------------------
+# Integrazione Nuovi Task Repository
+# ------------------------------------------------------------------------------
+update_repo() {
+    log_info "Aggiornamento Repository in corso..."
+    if [[ -d "${REPO_ROOT}/.git" ]]; then
+        git -C "${REPO_ROOT}" pull origin main || true
+        
+        # Applica i permessi corretti dopo il pull rispettando la nuova struttura
+        chmod +x "${SCRIPT_DIR}"/*.sh 2>/dev/null || true
+        [[ -f "${REPO_ROOT}/main.sh" ]] && chmod +x "${REPO_ROOT}/main.sh"
+        
+        log_info "Repository aggiornata. Riavvio del manager AMD in corso..."
+        sleep 2
+        exec "${SCRIPT_DIR}/manager-amd.sh"
+    else
+        log_warn "Repository non clonata tramite git. Aggiornamento manuale necessario."
+        read -rp "Premi Invio per continuare..."
+    fi
+}
+
+run_uninstall() {
+    # Cerca prima l'uninstall, in fallback cerca purge-homelab
+    if [[ -x "${SCRIPT_DIR}/uninstall.sh" ]]; then
+        clear
+        log_warn "Avvio script di disinstallazione..."
+        "${SCRIPT_DIR}/uninstall.sh"
+        exit 0
+    elif [[ -x "${SCRIPT_DIR}/purge-homelab-ai.sh" ]]; then
+        clear
+        log_warn "Avvio script di purga stack AI..."
+        "${SCRIPT_DIR}/purge-homelab-ai.sh"
+        exit 0
+    else
+        log_err "Nessuno script di disinstallazione trovato nella cartella ${SCRIPT_DIR}."
+        read -rp "Premi Invio per continuare..."
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # Gestione Servizi
 # ------------------------------------------------------------------------------
 manage_service_menu() {
@@ -362,7 +404,7 @@ manage_service_menu() {
 }
 
 # ------------------------------------------------------------------------------
-# Menu TUI
+# Menu TUI Principale
 # ------------------------------------------------------------------------------
 select_backend() {
     local choice
@@ -385,14 +427,16 @@ main_menu() {
     while true; do
         local choice
         choice=$(whiptail --title "Homelab AI - AMD Management Console (v${VERSION})" \
-            --menu "\nAmbiente: $(detect_environment)\nScegli un'operazione:" 18 78 7 \
+            --menu "\nAmbiente: $(detect_environment)\nScegli un'operazione:" 20 78 9 \
             "1" "Seleziona/Compila Backend Llama.cpp (Auto GPU + Patch FP8)" \
             "2" "Installa / Configura Open WebUI (Frontend)" \
             "3" "Scarica / Gestisci Modelli GGUF" \
             "4" "Gestione Servizi (Avvia/Ferma/Riavvia)" \
             "5" "Stato Servizi (Backend & Frontend)" \
             "6" "Visualizza Log di Sistema" \
-            "7" "Esci" \
+            "7" "Aggiorna Repository (Manager e Script)" \
+            "8" "Disinstalla Stack Homelab AI" \
+            "9" "Esci" \
             3>&1 1>&2 2>&3)
 
         case "$choice" in
@@ -402,7 +446,9 @@ main_menu() {
             4) manage_service_menu ;;
             5) systemctl status "${SERVICE_NAME}" homelab-ai-frontend 2>/dev/null || true; read -rp "Premi Invio per continuare..." ;;
             6) tail -n 50 "${LOG_FILE}" || true; read -rp "Premi Invio per continuare..." ;;
-            7) break ;;
+            7) update_repo ;;
+            8) run_uninstall ;;
+            9) break ;;
             *) break ;;
         esac
     done
