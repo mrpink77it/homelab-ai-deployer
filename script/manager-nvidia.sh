@@ -2,7 +2,7 @@
 # ==============================================================================
 # Homelab AI Deployer - Manager Script (NVIDIA - Ubuntu/Debian Stable Stack)
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.2.1.0 (Advanced Service Dashboard & Port Configuration Inspector)
+# Version: V.2.1.1 (Advanced Service Dashboard, Ports & NVIDIA/CUDA Auto-Sync)
 # ==============================================================================
 
 set -euo pipefail
@@ -12,7 +12,7 @@ trap 'echo -e "\n\033[1;31m[ERRORE FATALE] Lo script manager-nvidia.sh si è int
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-VERSION="2.1.0"
+VERSION="2.1.1"
 LOG_FILE="/var/log/homelab-ai-nvidia.log"
 INSTALL_DIR="/opt/homelab-ai"
 LLAMA_DIR="${INSTALL_DIR}/llama.cpp"
@@ -86,8 +86,99 @@ return_to_main() {
     else exit 0; fi
 }
 
+install_nvidia_drivers_and_cuda() {
+    log_info "Avvio procedura di verifica e installazione stack NVIDIA/CUDA..."
+    
+    # 1. Installazione dipendenze richieste
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y g++ freeglut3-dev build-essential libx11-dev libxmu-dev libxi-dev \
+        libglu1-mesa-dev libfreeimage-dev libglfw3-dev wget htop btop nvtop glances \
+        git pciutils cmake curl libcurl4-openssl-dev -qq
+
+    local ENV_TYPE=$(detect_environment)
+    local HOST_DRIVER_VER=""
+
+    # Legge la versione del driver caricato in kernel dall'host (fondamentale per LXC)
+    if [ -f /proc/driver/nvidia/version ]; then
+        HOST_DRIVER_VER=$(awk '/NVRM version:/ {print $8}' /proc/driver/nvidia/version)
+    fi
+
+    # 2. Gestione Driver (LXC vs Baremetal)
+    if [[ "$ENV_TYPE" == *"LXC"* ]]; then
+        if [ -z "$HOST_DRIVER_VER" ]; then
+            log_err "LXC rilevato, ma nessun modulo NVIDIA esposto dall'host in /proc/driver/nvidia/version."
+            whiptail --title "Errore GPU" --msgbox "Verifica di aver configurato il passthrough su Proxmox." 10 60
+            return 1
+        fi
+
+        local USER_DRIVER_VER=""
+        if command -v nvidia-smi &> /dev/null; then
+            USER_DRIVER_VER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n 1)
+        fi
+
+        if [ "$HOST_DRIVER_VER" != "$USER_DRIVER_VER" ]; then
+            log_warn "Disallineamento o assenza driver LXC (Host: $HOST_DRIVER_VER | LXC: ${USER_DRIVER_VER:-N/D})"
+            echo -e "${YELLOW}Download e installazione del driver NVIDIA ${HOST_DRIVER_VER} (--no-kernel-modules)...${NC}"
+            
+            cd /tmp
+            rm -f NVIDIA-Linux-*.run
+            wget -q --show-progress "https://us.download.nvidia.com/XFree86/Linux-x86_64/${HOST_DRIVER_VER}/NVIDIA-Linux-x86_64-${HOST_DRIVER_VER}.run"
+            chmod +x NVIDIA-Linux-x86_64-${HOST_DRIVER_VER}.run
+            # Installazione non interattiva senza moduli kernel
+            ./NVIDIA-Linux-x86_64-${HOST_DRIVER_VER}.run --silent --no-kernel-modules
+            cd - > /dev/null
+        else
+            log_info "Driver NVIDIA LXC già installato e allineato all'host Proxmox ($USER_DRIVER_VER)."
+        fi
+    else
+        # Gestione BAREMETAL
+        if ! command -v nvidia-smi &> /dev/null; then
+            log_warn "Driver NVIDIA non trovato su sistema Bare-Metal."
+            local BARE_DRIVER=$(whiptail --title "Installazione Driver NVIDIA" \
+                --inputbox "Inserisci la versione del driver da installare (es. 550.90.07):" 10 60 "550.90.07" 3>&1 1>&2 2>&3)
+            
+            if [ $? -eq 0 ] && [ -n "$BARE_DRIVER" ]; then
+                cd /tmp
+                rm -f NVIDIA-Linux-*.run
+                wget -q --show-progress "https://us.download.nvidia.com/XFree86/Linux-x86_64/${BARE_DRIVER}/NVIDIA-Linux-x86_64-${BARE_DRIVER}.run"
+                chmod +x NVIDIA-Linux-x86_64-${BARE_DRIVER}.run
+                # Su baremetal installa normalmente con compilazione moduli kernel
+                ./NVIDIA-Linux-x86_64-${BARE_DRIVER}.run --silent
+                cd - > /dev/null
+            fi
+        else
+            log_info "Driver NVIDIA già installato ($(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n 1))."
+        fi
+    fi
+
+    # 3. Gestione CUDA 13.2 per Debian 13
+    if ! command -v /usr/local/cuda-13.2/bin/nvcc &> /dev/null; then
+        log_info "Installazione di CUDA Toolkit 13.2..."
+        cd /tmp
+        wget -q --show-progress "https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/cuda-keyring_1.1-1_all.deb"
+        dpkg -i cuda-keyring_1.1-1_all.deb
+        apt-get update -qq
+        apt-get -y install cuda-toolkit-13-2 -qq
+        cd - > /dev/null
+        
+        if [ -f "$HOME/.bashrc" ]; then
+            cp "$HOME/.bashrc" "$HOME/.bashrc-backup-cuda"
+            if ! grep -q "/usr/local/cuda-13.2/bin" "$HOME/.bashrc"; then
+                echo -e "\nexport PATH=/usr/local/cuda-13.2/bin\${PATH:+:\${PATH}}" >> "$HOME/.bashrc"
+            fi
+        fi
+        export PATH=/usr/local/cuda-13.2/bin${PATH:+:${PATH}}
+        log_info "CUDA 13.2 installato correttamente."
+    else
+        log_info "CUDA Toolkit 13.2 risulta già installato."
+        export PATH=/usr/local/cuda-13.2/bin${PATH:+:${PATH}}
+    fi
+}
+
 install_dependencies() {
     export DEBIAN_FRONTEND=noninteractive
+    install_nvidia_drivers_and_cuda
+    
     log_info "Configurazione e abilitazione repository non-free (supporto avanzato DEB822 / sources.list)..."
     
     if grep -q "debian" /etc/os-release; then
@@ -113,17 +204,8 @@ install_dependencies() {
         add-apt-repository -y restricted universe multiverse || true
     fi
 
-    log_get_update() { apt-get update -qq; }
-    log_get_update
-    
-    if ! apt-cache policy nvidia-cuda-toolkit | grep -q "Candidate: [^ ]"; then
-        for sfile in /etc/apt/sources.list.d/*.sources; do
-            [ -f "$sfile" ] && sed -i 's/Components: *\(.*\)/Components: \1 contrib non-free non-free-firmware/' "$sfile"
-        done
-        apt-get update -qq
-    fi
-
-    apt-get install -y curl wget git build-essential cmake zstd ffmpeg python3-pip python3-dev pciutils nvidia-cuda-toolkit whiptail -qq
+    apt-get update -qq
+    apt-get install -y zstd ffmpeg python3-pip python3-dev whiptail -qq
     log_info "Dipendenze di sistema installate con successo."
 }
 
@@ -131,7 +213,10 @@ compile_llama_cuda() {
     systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
     log_info "Verifica e configurazione percorsi CUDA..."
     
-    if [ -d "/usr/local/cuda" ]; then
+    if [ -d "/usr/local/cuda-13.2" ]; then
+        export CUDAToolkit_ROOT="/usr/local/cuda-13.2"
+        export PATH="$PATH:/usr/local/cuda-13.2/bin"
+    elif [ -d "/usr/local/cuda" ]; then
         export CUDAToolkit_ROOT="/usr/local/cuda"
         export PATH="$PATH:/usr/local/cuda/bin"
     elif [ -d "/usr" ] && [ -f "/usr/bin/nvcc" ]; then
@@ -140,7 +225,7 @@ compile_llama_cuda() {
 
     if ! command -v nvcc &> /dev/null && [ ! -f "${CUDAToolkit_ROOT}/bin/nvcc" ]; then
         log_err "Compilatore nvcc (CUDA Toolkit) non trovato!"
-        whiptail --title "Errore CUDA" --msgbox "Toolkit CUDA non rilevato nel sistema. Assicurati che i repository non-free siano attivi." 10 60
+        whiptail --title "Errore CUDA" --msgbox "Toolkit CUDA non rilevato nel sistema. Esegui prima l'installazione delle dipendenze (Opzione 1)." 10 60
         return 1
     fi
 
@@ -157,7 +242,7 @@ compile_llama_cuda() {
         -DGGML_CUDA=ON \
         -DGGML_BUILD_TESTS=OFF \
         -DGGML_NO_LLAMA_UI=ON \
-        -DCUDAToolkit_ROOT="${CUDAToolkit_ROOT:-/usr/local/cuda}"
+        -DCUDAToolkit_ROOT="${CUDAToolkit_ROOT}"
 
     cmake --build "${LLAMA_DIR}/build" --config Release -j$(nproc)
     
@@ -286,7 +371,6 @@ deploy_advanced_services_menu() {
                 "$UNSLOTH_ENV/bin/pip" install --upgrade pip wheel "setuptools<82"
                 "$UNSLOTH_ENV/bin/pip" install -U jupyterlab unsloth unsloth-zoo trl xformers
 
-                # Creazione servizio systemd per Jupyter
                 cat <<EOF > "${JUPYTER_SERVICE_FILE}"
 [Unit]
 Description=Homelab AI Jupyter Lab Service
@@ -337,7 +421,6 @@ manage_ports_and_bindings() {
             --inputbox "Inserisci il nuovo numero di porta per $SERVICE_TO_EDIT:" 10 50 "$CURRENT_VAL" 3>&1 1>&2 2>&3)
             
         if [ $? -eq 0 ] && [ -n "$NEW_PORT" ]; then
-            # Mostra anteprima delle variazioni sui file di configurazione
             PREVIEW_MSG="Variazioni che verranno applicate:\n\n"
             PREVIEW_MSG+="1. Aggiornamento file centrale: ${PORT_CONFIG}\n   ${SERVICE_TO_EDIT}=${CURRENT_VAL} -> ${NEW_PORT}\n\n"
             
@@ -350,11 +433,9 @@ manage_ports_and_bindings() {
             fi
 
             if (whiptail --title "Conferma Variazioni Systemd" --yesno "$PREVIEW_MSG" 16 70); then
-                # Salva nel file di configurazione porte
                 sed -i "s/^${SERVICE_TO_EDIT}=.*/${SERVICE_TO_EDIT}=${NEW_PORT}/" "$PORT_CONFIG"
                 source "$PORT_CONFIG"
 
-                # Applica le modifiche direttamente ai file di servizio corrispondenti
                 if [ "$SERVICE_TO_EDIT" = "LLAMACPP_PORT" ] && [ -f "$SERVICE_FILE" ]; then
                     sed -i "s/--port [0-9]*/--port ${NEW_PORT}/" "$SERVICE_FILE"
                     systemctl daemon-reload
@@ -381,7 +462,6 @@ manage_service_dashboard() {
         local IP=$(hostname -I | awk '{print $1}')
         [ -z "$IP" ] && IP="127.0.0.1"
 
-        # Stato dei servizi
         check_status() {
             systemctl is-active --quiet "$1" && echo "ATTIVO" || echo "FERMO"
         }
@@ -478,8 +558,13 @@ show_dashboard_banner() {
     source "$PORT_CONFIG"
     local IP=$(hostname -I | awk '{print $1}')
     [ -z "$IP" ] && IP="127.0.0.1"
-    local GPU=$(lspci | grep -iE 'vga|3d|display' | grep -i nvidia | head -n 1)
-    whiptail --title "Dashboard NVIDIA" --msgbox "IP: $IP\nGPU: $GPU\n\nURL Backend: http://$IP:$LLAMACPP_PORT\nURL WebUI: http://$IP:$OPENWEBUI_PORT" 16 75
+    local GPU=""
+    if command -v nvidia-smi &> /dev/null; then
+        GPU=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader | head -n 1)
+    else
+        GPU=$(lspci | grep -iE 'vga|3d|display' | grep -i nvidia | head -n 1 || echo "Nessuna GPU NVIDIA rilevata")
+    fi
+    whiptail --title "Dashboard NVIDIA" --msgbox "IP: $IP\nGPU & Driver: $GPU\n\nURL Backend: http://$IP:$LLAMACPP_PORT\nURL WebUI: http://$IP:$OPENWEBUI_PORT" 16 75
 }
 
 manage_models() {
@@ -520,7 +605,7 @@ main_menu() {
         choice=$(whiptail --title "Homelab AI - NVIDIA Management Console (v${VERSION})" \
             --menu "Ambiente: $(detect_environment)\nScegli un'operazione:" 22 80 11 \
             "A" "Express Auto-Deploy (Tutto in un click)" \
-            "1" "Installa Dipendenze di Sistema" \
+            "1" "Installa Dipendenze, NVIDIA Driver & CUDA" \
             "2" "Installa Ollama & Open WebUI" \
             "3" "Compila llama.cpp (CUDA)" \
             "4" "Gestione Servizi Avanzati (OCR, Audio, Web Search, OpenClaw, Unsloth)" \
@@ -537,15 +622,15 @@ main_menu() {
 
         case "$choice" in
             "A") install_dependencies; compile_llama_cuda; install_open_webui ;;
-            "1") install_dependencies; read -rp "Invio..." ;;
+            "1") install_dependencies; read -rp "Premi INVIO per continuare..." ;;
             "2") install_open_webui ;;
             "3") compile_llama_cuda ;;
             "4") deploy_advanced_services_menu ;;
             "5") manage_service_dashboard ;;
             "6") manage_models ;;
             "7") manage_ports_and_bindings ;;
-            "8") show_dashboard_banner; read -rp "Invio..." ;;
-            "9") clear; tail -n 50 "${LOG_FILE}" || true; read -rp "Invio..." ;;
+            "8") show_dashboard_banner; read -rp "Premi INVIO per continuare..." ;;
+            "9") clear; tail -n 50 "${LOG_FILE}" || true; read -rp "Premi INVIO per continuare..." ;;
             "10") update_repo ;;
             "0") run_uninstall ;;
             *) return_to_main ;;
