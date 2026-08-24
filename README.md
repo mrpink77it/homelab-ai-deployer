@@ -1,4 +1,4 @@
-# Homelab AI Deployer
+# Homelab AI Deployer DEV
 
 ![Status](https://img.shields.io/badge/Status-Work_in_Progress-orange)
 ![Language](https://img.shields.io/badge/Language-Bash-4EAA25)
@@ -50,7 +50,7 @@ Esegue manager.sh                   Esegue manager-amd.sh                  Esegu
 Copia ed incolla questo comando per eseguire l'installazione. Eseguire come root (`su`) o super user (`sudo`):
 
 ```bash
-wget -q https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/install.sh && chmod +x install.sh && ./install.sh
+wget -q [https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/install.sh ](https://github.com/mrpink77it/homelab-ai-deployer/blob/dev/install.sh) && chmod +x install.sh && ./install.sh
 ```
 
 ---
