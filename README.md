@@ -59,7 +59,7 @@ wget -q https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/in
 
 In base all'hardware rilevato da `main.sh`, verrà avviata l'interfaccia di gestione (TUI basata su `whiptail`) specifica per il tuo sistema. Tutti i manager offrono un'interfaccia uniforme ma applicano configurazioni specifiche sotto il cofano.
 
-### 🟢 Menu NVIDIA (`manager.sh`)
+### 🟢 Menu NVIDIA (`manager-nvidia.sh`)
 * **`1) INSTALLA Servizi`**: Installazione completa dei driver proprietari, CUDA Toolkit, e deploy nativo di Unsloth, OpenCode AI, e frontend AI.
 * **`2) VERIFICA Stato & Dashboard`**: Monitoraggio dei servizi `systemd` in tempo reale e convalida dell'accelerazione hardware CUDA via PyTorch.
 * **`3) GESTIONE Modelli`**: Interfaccia per il download automatizzato dei modelli GGUF/Safetensors dai repository HuggingFace.
