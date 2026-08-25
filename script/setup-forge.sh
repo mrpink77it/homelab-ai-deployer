@@ -41,19 +41,20 @@ chown -R forge:forge "$FORGE_DIR" /home/forge
 echo "[4/6] Clonazione repository Forge..."
 su -s /bin/bash forge -c "git clone https://github.com/lllyasviel/stable-diffusion-webui-forge.git \"$FORGE_DIR\""
 
-echo "[5/6] Creazione venv, pre-installazione pacchetti stabili e requisiti Forge..."
+echo "[5/6] Creazione venv, pre-installazione e requisiti Forge..."
 su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --python 3.10.14 venv"
 
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m ensurepip --upgrade"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --upgrade pip"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'setuptools<70' wheel ftfy regex tqdm"
 
-# Blocco versioni stabili anti-conflitto (NumPy 1.x e OpenCV)
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'numpy<2' 'opencv-python==4.11.0.86'"
+# Installazione CLIP e requisiti ufficiali Forge
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
-
-# Installazione dei requisiti basati sul file corretto di Forge
 su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install -r requirements_versions.txt"
+
+# BLINDOCHIRURGICO FINALE: Forziamo NumPy 1.x e bitsandbytes compatibile post-installazione requisiti
+echo "[5.5/6] Applicazione fix definitivo NumPy 1.26.4 e bitsandbytes..."
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'numpy<2' 'bitsandbytes==0.43.1' --force-reinstall"
 
 echo "[6/6] Configurazione systemd e avvio del monitoraggio in tempo reale..."
 cat <<EOF > "$SERVICE_FILE"
@@ -79,7 +80,7 @@ systemctl daemon-reload
 systemctl enable --now homelab-ai-forge
 
 echo "------------------------------------------------------------------------"
-echo "ATTENZIONE: Verranno scaricati i componenti PyTorch e i Modelli Base."
+echo "ATTENZIONE: Forge si sta avviando con l'ambiente protetto."
 echo "Visualizzazione dei log in tempo reale (premi Ctrl+C per uscire dal log)..."
 echo "------------------------------------------------------------------------"
 
