@@ -85,17 +85,25 @@ su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pi
 su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install --disable-pip-version-check -q -r requirements_versions.txt"
 stop_spinner "[5/7] Creazione venv e download dei requisiti Forge..."
 
-start_spinner "[5.5/7] Applicazione fix definitivo (NumPy, Triton e Joblib)..."
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip uninstall --disable-pip-version-check -y numpy opencv-python"
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q 'numpy==1.26.4' 'opencv-python-headless' triton joblib"
-stop_spinner "[5.5/7] Applicazione fix definitivo (NumPy, Triton e Joblib)..."
+start_spinner "[5.5/7] Applicazione fix definitivo (NumPy 1.26.4, Triton e Joblib)..."
+# OpenCV non viene più rimosso per soddisfare le dipendenze di facexlib
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q 'numpy==1.26.4' triton joblib"
+stop_spinner "[5.5/7] Applicazione fix definitivo (NumPy 1.26.4, Triton e Joblib)..."
 
-start_spinner "[6/7] Download Modelli (~20GB totali). L'operazione richiederà diversi minuti..."
-# Usiamo i mirror stabili di HuggingFace. L'uso dei prefissi 01, 02 e 03 imposta Juggernaut come modello di default 
-su -s /bin/bash forge -c "curl -L -s -o \"$MODELS_DIR/01-Juggernaut-XL-v9.safetensors\" \"https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/main/Juggernaut-XL_v9_RunDiffusion.safetensors\""
-su -s /bin/bash forge -c "curl -L -s -o \"$MODELS_DIR/02-RealVisXL-Lightning.safetensors\" \"https://huggingface.co/SG161222/RealVisXL_V4.0_Lightning/resolve/main/RealVisXL_V4.0_Lightning.safetensors\""
-su -s /bin/bash forge -c "curl -L -s -o \"$MODELS_DIR/03-Animagine-XL-3.1.safetensors\" \"https://huggingface.co/cagliostrolab/animagine-xl-3.1/resolve/main/animagine-xl-3.1.safetensors\""
-stop_spinner "[6/7] Download Modelli SDXL (Juggernaut, RealVisXL, Animagine)..."
+# Blocco 6 senza spinner per mostrare le barre di avanzamento di curl nativamente
+echo -e "\033[36m[6/7] Download Modelli (~20GB totali). L'operazione richiederà diversi minuti...\033[0m"
+mkdir -p "$MODELS_DIR"
+chown forge:forge "$MODELS_DIR"
+
+echo " -> 1/3: Scaricando Juggernaut XL..."
+su -s /bin/bash forge -c "curl -L -# -o \"$MODELS_DIR/01-Juggernaut-XL-v9.safetensors\" \"https://civitai.com/api/download/models/357609\""
+
+echo " -> 2/3: Scaricando RealVisXL Lightning..."
+su -s /bin/bash forge -c "curl -L -# -o \"$MODELS_DIR/02-RealVisXL-Lightning.safetensors\" \"https://huggingface.co/SG161222/RealVisXL_V4.0_Lightning/resolve/main/RealVisXL_V4.0_Lightning.safetensors\""
+
+echo " -> 3/3: Scaricando Animagine XL 3.1..."
+su -s /bin/bash forge -c "curl -L -# -o \"$MODELS_DIR/03-Animagine-XL-3.1.safetensors\" \"https://huggingface.co/cagliostrolab/animagine-xl-3.1/resolve/main/animagine-xl-3.1.safetensors\""
+echo -e "\033[32m[6/7] Download Modelli completato!\033[0m"
 
 start_spinner "[7/7] Configurazione systemd e abilitazione servizio..."
 cat << EOF > "$SERVICE_FILE"
