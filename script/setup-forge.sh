@@ -67,7 +67,7 @@ chown -R forge:forge "$FORGE_DIR"
 su -s /bin/bash forge -c "git clone \"$FORGE_REPO\" \"$FORGE_DIR\""
 
 echo "[5/7] Generazione ambiente Python 3.10 isolato tramite uv..."
-su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv -p 3.10.14 venv"
+su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --seed -p 3.10.14 venv"
 
 echo "[6/7] Generazione del servizio systemd..."
 cat <<EOF > "$SERVICE_FILE"
