@@ -20,45 +20,54 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "[1/7] PULIZIA PROFONDA: Rimozione servizi e file precedenti..."
-# 1. Ferma e disabilita il servizio se esiste
+echo "[1/7] PULIZIA PROFONDA: Rimozione servizi, file e utente precedenti..."
 if systemctl is-active --quiet homelab-ai-forge 2>/dev/null; then
     echo "  -> Arresto del servizio attivo..."
     systemctl stop homelab-ai-forge
 fi
+
 if systemctl is-enabled --quiet homelab-ai-forge 2>/dev/null; then
     echo "  -> Disabilitazione del servizio..."
     systemctl disable homelab-ai-forge
 fi
 
-# 2. Rimuove il file systemd
 if [ -f "$SERVICE_FILE" ]; then
     echo "  -> Rimozione file unit systemd..."
     rm -f "$SERVICE_FILE"
     systemctl daemon-reload
 fi
 
-# 3. Rimuove l'intera cartella (Elimina VENV, Repo e Modelli)
 if [ -d "$FORGE_DIR" ]; then
-    echo "  -> Rimozione distruttiva della directory $FORGE_DIR (inclusi i modelli)..."
+    echo "  -> Rimozione distruttiva della directory $FORGE_DIR..."
     rm -rf "$FORGE_DIR"
+fi
+
+# Nuova logica: Rimozione sicura dell'utente forge e della sua home
+if id -u forge > /dev/null 2>&1; then
+    echo "  -> Chiusura processi residui e rimozione utente 'forge'..."
+    killall -9 -u forge 2>/dev/null || true
+    userdel -r forge 2>/dev/null || true
 fi
 
 echo "[2/7] Aggiornamento sistema e installazione dipendenze..."
 apt-get update -y
-apt-get install -y wget git python3 python3-venv python3-pip libgl1 libglib2.0-0 bc curl
+apt-get install -y wget git python3 python3-venv python3-pip libgl1 libglib2.0-0 bc curl psmisc
 
-echo "[3/7] Clonazione pulita repository Forge in $FORGE_DIR..."
+echo "[3/7] Installazione 'uv' (Gestore Python ultra-veloce)..."
+curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
+
+echo "[4/7] Creazione utente di sistema 'forge' e clonazione repository..."
+# L'utente viene sempre ricreato da zero grazie alla pulizia al passo 1
+useradd -r -m -s /bin/false forge
+chown -R forge:forge /home/forge
+
 git clone "$FORGE_REPO" "$FORGE_DIR"
-
-if ! id -u forge > /dev/null 2>&1; then
-    echo "[4/7] Creazione utente di sistema 'forge'..."
-    useradd -r -s /bin/false forge
-fi
-
 chown -R forge:forge "$FORGE_DIR"
 
-echo "[5/7] Generazione del servizio systemd..."
+echo "[5/7] Generazione ambiente Python 3.10 isolato tramite uv..."
+su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv -p 3.10.14 venv"
+
+echo "[6/7] Generazione del servizio systemd..."
 cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=Stable Diffusion WebUI Forge (Homelab AI)
@@ -68,6 +77,7 @@ After=network.target
 Type=simple
 User=forge
 WorkingDirectory=$FORGE_DIR
+Environment="PYTHON=$FORGE_DIR/venv/bin/python"
 ExecStart=/bin/bash $FORGE_DIR/webui.sh --api --listen --port 7860
 Restart=on-failure
 RestartSec=10
@@ -79,15 +89,15 @@ EOF
 systemctl daemon-reload
 systemctl enable --now homelab-ai-forge
 
-echo "[6/7] Avvio monitoraggio dell'installazione pulita..."
-echo "ATTENZIONE: Primo avvio. Verranno scaricati svariati GB (PyTorch, modelli)."
+echo "[7/7] Avvio monitoraggio dell'installazione pulita..."
+echo "ATTENZIONE: Verranno scaricati i componenti Pytorch e i Modelli Base."
 echo "Visualizzazione dei log in tempo reale in corso..."
 echo "------------------------------------------------------------------------"
 
 journalctl -u homelab-ai-forge -f -n 20 &
 LOG_PID=$!
 
-TIMEOUT=1800 # Timeout di 30 minuti
+TIMEOUT=1800
 ELAPSED=0
 SLEEP_INTERVAL=5
 
@@ -114,6 +124,6 @@ while true; do
 done
 
 echo "========================================================================"
-echo "Installazione Pultia completata e validata!"
+echo "Installazione Completata e Validata!"
 echo "Endpoint API disponibile per Open WebUI: http://127.0.0.1:7860"
 echo "========================================================================"
