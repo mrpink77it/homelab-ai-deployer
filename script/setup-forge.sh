@@ -66,12 +66,18 @@ chown -R forge:forge "$FORGE_DIR"
 # Forziamo l'utente forge a clonare per aggirare i limiti di root in LXC unprivileged
 su -s /bin/bash forge -c "git clone \"$FORGE_REPO\" \"$FORGE_DIR\""
 
-echo "[5/7] Generazione ambiente Python 3.10 isolato tramite uv..."
-# Generiamo il venv con seed per avere pip e setuptools
+echo "[5/7] Generazione ambiente Python 3.10 isolato e pre-configurazione CLIP..."
+# 1. Generiamo il venv con seed per avere pip e setuptools
 su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --seed -p 3.10.14 venv"
 
-# Downgrade di setuptools nell'ambiente principale
+# 2. Downgrade di setuptools nell'ambiente principale
 su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install 'setuptools<70'"
+
+# 3. Pre-installazione delle dipendenze di CLIP per evitare che Forge le gestisca male
+su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install ftfy regex tqdm"
+
+# 4. Pre-installazione chirurgica di CLIP senza build isolation e senza dipendenze
+su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
 
 echo "[6/7] Generazione del servizio systemd..."
 cat <<EOF > "$SERVICE_FILE"
@@ -84,7 +90,6 @@ Type=simple
 User=forge
 WorkingDirectory=$FORGE_DIR
 Environment="PYTHON=$FORGE_DIR/venv/bin/python"
-# FIX DEFINITIVO: Spegne l'isolamento di pip per forzare l'uso di setuptools<70
 Environment="PIP_NO_BUILD_ISOLATION=1"
 ExecStart=/bin/bash $FORGE_DIR/webui.sh --api --listen --port 7860
 Restart=on-failure
