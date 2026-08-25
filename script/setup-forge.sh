@@ -50,7 +50,6 @@ fi
 
 echo "[2/7] Aggiornamento sistema e installazione dipendenze..."
 apt-get update -y
-# Aggiunto google-perftools per l'ottimizzazione TCMalloc su Debian 13
 apt-get install -y wget git python3 python3-venv python3-pip libgl1 libglib2.0-0 bc curl psmisc google-perftools
 
 echo "[3/7] Installazione 'uv' (Gestore Python ultra-veloce)..."
@@ -68,8 +67,11 @@ chown -R forge:forge "$FORGE_DIR"
 su -s /bin/bash forge -c "git clone \"$FORGE_REPO\" \"$FORGE_DIR\""
 
 echo "[5/7] Generazione ambiente Python 3.10 isolato tramite uv..."
-# Aggiunto --seed per garantire la presenza di pip, setuptools e wheel nel venv
+# Generiamo il venv con seed per avere pip e setuptools
 su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --seed -p 3.10.14 venv"
+
+# FIX: Downgrade di setuptools per permettere la compilazione di OpenAI CLIP (pkg_resources)
+su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install 'setuptools<70'"
 
 echo "[6/7] Generazione del servizio systemd..."
 cat <<EOF > "$SERVICE_FILE"
@@ -82,7 +84,6 @@ Type=simple
 User=forge
 WorkingDirectory=$FORGE_DIR
 Environment="PYTHON=$FORGE_DIR/venv/bin/python"
-# TCMalloc viene precaricato automaticamente dal sistema se installato
 ExecStart=/bin/bash $FORGE_DIR/webui.sh --api --listen --port 7860
 Restart=on-failure
 RestartSec=10
