@@ -10,6 +10,7 @@ API_URL="http://127.0.0.1:7860/sdapi/v1/sd-models"
 MODELS_DIR="$FORGE_DIR/models/Stable-diffusion"
 LOG_PID=""
 SPINNER_PID=""
+
 # Funzione per pulire i processi in background se l'utente preme Ctrl+C
 cleanup() {
     if [ -n "$SPINNER_PID" ]; then
@@ -21,6 +22,7 @@ cleanup() {
     tput cnorm 2>/dev/null || true # Ripristina il cursore
 }
 trap cleanup EXIT INT TERM
+
 # --- FUNZIONI UX (SPINNER ANIMATO) --
 start_spinner() {
     local msg="$1"
@@ -36,6 +38,7 @@ start_spinner() {
     ) &
     SPINNER_PID=$!
 }
+
 stop_spinner() {
     local msg="$1"
     if [ -n "$SPINNER_PID" ]; then
@@ -47,6 +50,7 @@ stop_spinner() {
     tput cnorm 2>/dev/null || true # Mostra il cursore
 }
 # ------------------------------------
+
 start_spinner "[1/7] Pulizia totale installazione precedente..."
 systemctl stop homelab-ai-forge 2>/dev/null || true
 systemctl disable homelab-ai-forge 2>/dev/null || true
@@ -54,10 +58,12 @@ rm -f "$SERVICE_FILE"
 rm -rf "$FORGE_DIR"
 systemctl daemon-reload
 stop_spinner "[1/7] Pulizia totale installazione precedente..."
+
 start_spinner "[2/7] Installazione dipendenze di sistema su Debian 13..."
 apt-get update -y > /dev/null 2>&1
 apt-get install -y wget git libgl1 libglib2.0-0 bc curl psmisc google-perftools python3-full > /dev/null 2>&1
 stop_spinner "[2/7] Installazione dipendenze di sistema su Debian 13..."
+
 start_spinner "[3/7] Installazione di 'uv' e preparazione utente..."
 curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh > /dev/null 2>&1
 if ! id -u forge > /dev/null 2>&1; then
@@ -66,29 +72,33 @@ fi
 mkdir -p "$FORGE_DIR"
 chown -R forge:forge "$FORGE_DIR" /home/forge
 stop_spinner "[3/7] Installazione di 'uv' e preparazione utente..."
+
 start_spinner "[4/7] Clonazione repository Forge..."
-su -s /bin/bash forge -c "git clone -q https://github.com/lllyasviel/stable-diffusion-webui-forge.git \"$FORGE_DIR\"
+su -s /bin/bash forge -c "git clone -q https://github.com/lllyasviel/stable-diffusion-webui-forge.git \"$FORGE_DIR\""
 stop_spinner "[4/7] Clonazione repository Forge..."
+
 start_spinner "[5/7] Creazione venv e download dei requisiti Forge (può richiedere minuti)..."
 su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --python 3.10.14 venv > /dev/null 2>&1"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m ensurepip --upgrade > /dev/null 2>&1"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check --upgrade pip -q"
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q 'setuptools<70' w
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q --no-build-isolat
-su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install --disable-pip-version-check -q -r requirements_versi
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q 'setuptools<70' wheel"
+su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install --disable-pip-version-check -q -r requirements_versions.txt"
 stop_spinner "[5/7] Creazione venv e download dei requisiti Forge..."
+
 start_spinner "[5.5/7] Applicazione fix definitivo (NumPy, Triton e Joblib)..."
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip uninstall --disable-pip-version-check -y numpy opencv-py
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q 'numpy==1.26.4' '
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip uninstall --disable-pip-version-check -y numpy opencv-python"
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q 'numpy==1.26.4' 'opencv-python-headless' triton joblib"
 stop_spinner "[5.5/7] Applicazione fix definitivo (NumPy, Triton e Joblib)..."
+
 start_spinner "[6/7] Download Modelli (~20GB totali). L'operazione richiederà diversi minuti..."
 # Usiamo i mirror stabili di HuggingFace. L'uso dei prefissi 01, 02 e 03 imposta Juggernaut come modello di default 
-su -s /bin/bash forge -c "curl -L -s -o \"$MODELS_DIR/01-Juggernaut-XL-v9.safetensors\" \"https://huggingface.co/Run
-su -s /bin/bash forge -c "curl -L -s -o \"$MODELS_DIR/02-DreamShaper-XL-Turbo.safetensors\" \"https://huggingface.co
-su -s /bin/bash forge -c "curl -L -s -o \"$MODELS_DIR/03-Pony-Diffusion-V6-XL.safetensors\" \"https://huggingface.co
-stop_spinner "[6/7] Download Modelli SDXL (Juggernaut, DreamShaper, Pony)..."
+su -s /bin/bash forge -c "curl -L -s -o \"$MODELS_DIR/01-Juggernaut-XL-v9.safetensors\" \"https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/main/Juggernaut-XL_v9_RunDiffusion.safetensors\""
+su -s /bin/bash forge -c "curl -L -s -o \"$MODELS_DIR/02-RealVisXL-Lightning.safetensors\" \"https://huggingface.co/SG161222/RealVisXL_V4.0_Lightning/resolve/main/RealVisXL_V4.0_Lightning.safetensors\""
+su -s /bin/bash forge -c "curl -L -s -o \"$MODELS_DIR/03-Animagine-XL-3.1.safetensors\" \"https://huggingface.co/cagliostrolab/animagine-xl-3.1/resolve/main/animagine-xl-3.1.safetensors\""
+stop_spinner "[6/7] Download Modelli SDXL (Juggernaut, RealVisXL, Animagine)..."
+
 start_spinner "[7/7] Configurazione systemd e abilitazione servizio..."
-cat <<EOF > "$SERVICE_FILE"
+cat << EOF > "$SERVICE_FILE"
 [Unit]
 Description=Stable Diffusion WebUI Forge (Homelab AI)
 After=network.target
@@ -107,6 +117,7 @@ EOF
 systemctl daemon-reload
 systemctl enable --now homelab-ai-forge > /dev/null 2>&1
 stop_spinner "[7/7] Configurazione systemd e abilitazione servizio..."
+
 echo ""
 echo "------------------------------------------------------------------------"
 echo -e "\033[33mATTENZIONE: Forge si sta avviando con l'ambiente blindato.\033[0m"
@@ -117,6 +128,7 @@ LOG_PID=$!
 TIMEOUT=1800
 ELAPSED=0
 SLEEP_INTERVAL=5
+
 while true; do
     if systemctl is-failed --quiet homelab-ai-forge; then
         echo -e "\n\n\033[31m[ERRORE CRITICO] Il servizio homelab-ai-forge è andato in crash!\033[0m"
@@ -134,6 +146,7 @@ while true; do
         exit 1
     fi
 done
+
 # Uccidiamo il log follower per stampare il footer pulito
 kill "$LOG_PID" 2>/dev/null || true
 LOG_PID=""
