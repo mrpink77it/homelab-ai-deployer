@@ -3,7 +3,6 @@
 # Script: setup-forge.sh
 # Repo: homelab-ai-deployer
 # Descrizione: Installazione automatizzata bare-metal di SD WebUI Forge su Debian
-# Autore: Fabio Troiano | EmerNet S.r.l.
 # ==============================================================================
 
 # Verifica privilegi di root
@@ -37,10 +36,9 @@ git clone https://github.com/lllyasviel/stable-diffusion-webui-forge.git /opt/sd
 chown -R forge:forge /opt/sd-forge
 echo "[4/7] Clonazione repository Forge... [Completato]"
 
-echo "[5/7] Creazione venv e download dei requisiti Forge..."
-sudo -u forge python3 -m venv /opt/sd-forge/venv
+echo "[5/7] Creazione venv (Forzato a Python 3.10 tramite uv) e requisiti..."
+sudo -u forge /usr/local/bin/uv venv --python 3.10 /opt/sd-forge/venv
 sudo -u forge /opt/sd-forge/venv/bin/pip install -U pip setuptools -q
-# L'installazione base lascia fare a Forge la prima volta, noi prepariamo il terreno
 echo "[5/7] Creazione venv e download dei requisiti Forge... [Completato]"
 
 echo "[5.5/7] Applicazione fix definitivo (NumPy, Triton e Joblib)..."
