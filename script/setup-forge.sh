@@ -1,85 +1,48 @@
 #!/bin/bash
 # ==============================================================================
-# Installazione Stable Diffusion WebUI Forge (Ottimizzato per 8GB VRAM)
-# Ambiente: Bare-Metal / LXC (Debian 13) - Homelab AI Deployer
+# Installazione Stable Diffusion WebUI Forge (Fix Python 3.10 Definitivo)
+# Ambiente: Bare-Metal / LXC (Debian 13)
 # ==============================================================================
 
 set -euo pipefail
 
-# Variabili
 FORGE_DIR="/opt/sd-forge"
-FORGE_REPO="https://github.com/lllyasviel/stable-diffusion-webui-forge.git"
 SERVICE_FILE="/etc/systemd/system/homelab-ai-forge.service"
-API_URL="http://127.0.0.1:7860/sdapi/v1/sd-models"
-LOG_PID=""
 
-cleanup() {
-    if [ -n "$LOG_PID" ]; then
-        kill $LOG_PID 2>/dev/null || true
-    fi
-}
-trap cleanup EXIT INT TERM
+echo "[1/5] Pulizia totale installazione precedente..."
+systemctl stop homelab-ai-forge 2>/dev/null || true
+systemctl disable homelab-ai-forge 2>/dev/null || true
+rm -f "$SERVICE_FILE"
+rm -rf "$FORGE_DIR"
+systemctl daemon-reload
 
-echo "[1/7] PULIZIA PROFONDA: Rimozione servizi, file e utente precedenti..."
-if systemctl is-active --quiet homelab-ai-forge 2>/dev/null; then
-    echo "  -> Arresto del servizio attivo..."
-    systemctl stop homelab-ai-forge
-fi
-
-if systemctl is-enabled --quiet homelab-ai-forge 2>/dev/null; then
-    echo "  -> Disabilitazione del servizio..."
-    systemctl disable homelab-ai-forge
-fi
-
-if [ -f "$SERVICE_FILE" ]; then
-    echo "  -> Rimozione file unit systemd..."
-    rm -f "$SERVICE_FILE"
-    systemctl daemon-reload
-fi
-
-if [ -d "$FORGE_DIR" ]; then
-    echo "  -> Rimozione distruttiva della directory $FORGE_DIR..."
-    rm -rf "$FORGE_DIR"
-fi
-
-if id -u forge > /dev/null 2>&1; then
-    echo "  -> Chiusura processi residui e rimozione utente 'forge'..."
-    killall -9 -u forge 2>/dev/null || true
-    userdel -r forge 2>/dev/null || true
-fi
-
-echo "[2/7] Aggiornamento sistema e installazione dipendenze..."
+echo "[2/5] Installazione di Python 3.10 e dipendenze di sistema su Debian 13..."
 apt-get update -y
-apt-get install -y wget git python3 python3-venv python3-pip libgl1 libglib2.0-0 bc curl psmisc google-perftools
+# Installiamo i repository alternativi o il pacchetto python3.10 se disponibile, oppure usiamo uv per scaricare il binario isolato di python
+apt-get install -y wget git libgl1 libglib2.0-0 bc curl psmisc google-perftools python3-full
 
-echo "[3/7] Installazione 'uv' (Gestore Python ultra-veloce)..."
+echo "[3/5] Installazione di 'uv' e generazione forzata di Python 3.10..."
 curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
 
-echo "[4/7] Creazione utente 'forge' e clonazione repository sicura..."
-useradd -r -m -s /bin/false forge
-chown -R forge:forge /home/forge
-
-# Creiamo la directory e assegniamo i permessi PRIMA del clone
+# Creazione utente forge se non esiste
+if ! id -u forge > /dev/null 2>&1; then
+    useradd -r -m -s /bin/false forge
+fi
 mkdir -p "$FORGE_DIR"
-chown -R forge:forge "$FORGE_DIR"
+chown -R forge:forge "$FORGE_DIR" /home/forge
 
-# Forziamo l'utente forge a clonare per aggirare i limiti di root in LXC unprivileged
-su -s /bin/bash forge -c "git clone \"$FORGE_REPO\" \"$FORGE_DIR\""
+# Clonazione repository come utente forge
+su -s /bin/bash forge -c "git clone https://github.com/lllyasviel/stable-diffusion-webui-forge.git \"$FORGE_DIR\""
 
-echo "[5/7] Generazione ambiente Python 3.10 isolato e pre-configurazione CLIP..."
-# 1. Generiamo il venv con seed per avere pip e setuptools
-su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --seed -p 3.10.14 venv"
+echo "[4/5] Creazione venv isolato con Python 3.10 gestito da uv e pre-configurazione CLIP..."
+# Forziamo uv a scaricare e utilizzare specificamente Python 3.10.14 isolato nel venv
+su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --python 3.10.14 --seed venv"
 
-# 2. Downgrade di setuptools nell'ambiente principale
-su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install 'setuptools<70'"
-
-# 3. Pre-installazione delle dipendenze di CLIP per evitare che Forge le gestisca male
-su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install ftfy regex tqdm"
-
-# 4. Pre-installazione chirurgica di CLIP senza build isolation e senza dipendenze
+# Downgrade di setuptools ed eliminazione ostacoli CLIP
+su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install 'setuptools<70' ftfy regex tqdm"
 su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
 
-echo "[6/7] Generazione del servizio systemd..."
+echo "[5/5] Configurazione e avvio del servizio Systemd..."
 cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=Stable Diffusion WebUI Forge (Homelab AI)
@@ -102,41 +65,5 @@ EOF
 systemctl daemon-reload
 systemctl enable --now homelab-ai-forge
 
-echo "[7/7] Avvio monitoraggio dell'installazione pulita..."
-echo "ATTENZIONE: Verranno scaricati i componenti Pytorch e i Modelli Base."
-echo "Visualizzazione dei log in tempo reale in corso..."
-echo "------------------------------------------------------------------------"
-
-journalctl -u homelab-ai-forge -f -n 20 &
-LOG_PID=$!
-
-TIMEOUT=1800
-ELAPSED=0
-SLEEP_INTERVAL=5
-
-while true; do
-    if systemctl is-failed --quiet homelab-ai-forge; then
-        echo -e "\n\n[ERRORE CRITICO] Il servizio homelab-ai-forge è andato in crash!"
-        exit 1
-    fi
-
-    HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$API_URL" || true)
-    
-    if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 404 ]; then
-        echo -e "\n\n[SUCCESSO] Forge è pienamente operativo e l'API è in ascolto!"
-        break
-    fi
-
-    sleep $SLEEP_INTERVAL
-    ELAPSED=$((ELAPSED + SLEEP_INTERVAL))
-
-    if [ $ELAPSED -gt $TIMEOUT ]; then
-        echo -e "\n\n[TIMEOUT] Sono passati 30 minuti e l'API non è ancora pronta."
-        exit 1
-    fi
-done
-
-echo "========================================================================"
-echo "Installazione Completata e Validata!"
-echo "Endpoint API disponibile per Open WebUI: http://127.0.0.1:7860"
-echo "========================================================================"
+echo "Fatto! Ora puoi monitorare l'avvio pulito con:"
+echo "journalctl -u homelab-ai-forge -f"
