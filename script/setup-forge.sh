@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # Installazione Completa e Definitiva Stable Diffusion WebUI Forge
-# Ambiente: Bare-Metal / LXC (Debian 13)
+# Ambiente: Bare-Metal / LXC (Debian 13) - Fix Triton & NumPy
 # ==============================================================================
 
 set -euo pipefail
@@ -41,7 +41,7 @@ chown -R forge:forge "$FORGE_DIR" /home/forge
 echo "[4/6] Clonazione repository Forge..."
 su -s /bin/bash forge -c "git clone https://github.com/lllyasviel/stable-diffusion-webui-forge.git \"$FORGE_DIR\""
 
-echo "[5/6] Creazione venv, pre-installazione e requisiti Forge protetti..."
+echo "[5/6] Creazione venv, pre-installazione e requisiti Forge..."
 su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --python 3.10.14 venv"
 
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m ensurepip --upgrade"
@@ -52,10 +52,11 @@ su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'setuptools<
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
 su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install -r requirements_versions.txt"
 
-# BLINDO DEFINITIVO: Installazione pulita di NumPy 1.26.4, OpenCV Headless e bitsandbytes stabile
-echo "[5.5/6] Applicazione fix definitivo NumPy 1.26.4, OpenCV e bitsandbytes..."
+# BLINDO DEFINITIVO: Installiamo la versione 0.45.3 di bitsandbytes (che fixa Triton) 
+# ma forziamo NumPy 1.26.4 (che fixa skimage) nello stesso comando.
+echo "[5.5/6] Applicazione fix chirurgico per Triton, bitsandbytes e NumPy..."
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip uninstall -y numpy opencv-python opencv-python-headless bitsandbytes 2>/dev/null || true"
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --no-build-isolation --no-deps 'numpy==1.26.4' 'opencv-python-headless==4.9.0.80' 'bitsandbytes==0.43.1'"
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'numpy==1.26.4' 'opencv-python-headless==4.9.0.80' 'bitsandbytes==0.45.3'"
 
 echo "[6/6] Configurazione systemd con skip-install e avvio del monitoraggio..."
 cat <<EOF > "$SERVICE_FILE"
