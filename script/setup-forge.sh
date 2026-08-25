@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # Installazione Completa e Definitiva Stable Diffusion WebUI Forge
-# Ambiente: Bare-Metal / LXC (Debian 13) - Fix Triton, NumPy, Joblib e UI Ultra-Clean
+# Ambiente: Bare-Metal / LXC (Debian 13) - UI Animata e Ultra-Clean
 # ==============================================================================
 
 set -euo pipefail
@@ -10,54 +10,91 @@ FORGE_DIR="/opt/sd-forge"
 SERVICE_FILE="/etc/systemd/system/homelab-ai-forge.service"
 API_URL="http://127.0.0.1:7860/sdapi/v1/sd-models"
 LOG_PID=""
+SPINNER_PID=""
 
+# Funzione per pulire i processi in background se l'utente preme Ctrl+C
 cleanup() {
-    if [ -n "$LOG_PID" ]; then
-        kill $LOG_PID 2>/dev/null || true
+    if [ -n "$SPINNER_PID" ]; then
+        kill "$SPINNER_PID" 2>/dev/null || true
     fi
+    if [ -n "$LOG_PID" ]; then
+        kill "$LOG_PID" 2>/dev/null || true
+    fi
+    tput cnorm 2>/dev/null || true # Ripristina il cursore
 }
 trap cleanup EXIT INT TERM
 
-echo "[1/6] Pulizia totale installazione precedente..."
+# --- FUNZIONI UX (SPINNER ANIMATO) ---
+start_spinner() {
+    local msg="$1"
+    tput civis 2>/dev/null || true # Nasconde il cursore
+    (
+        spin_chars='\|/-'
+        while true; do
+            for (( i=0; i<${#spin_chars}; i++ )); do
+                sleep 0.15
+                # Stampa il messaggio sovrascrivendo la linea corrente (\r)
+                echo -en "\r\033[K${msg} \033[36m[${spin_chars:$i:1}]\033[0m"
+            done
+        done
+    ) &
+    SPINNER_PID=$!
+}
+
+stop_spinner() {
+    local msg="$1"
+    if [ -n "$SPINNER_PID" ]; then
+        kill "$SPINNER_PID" 2>/dev/null || true
+        wait "$SPINNER_PID" 2>/dev/null || true
+        SPINNER_PID=""
+    fi
+    # Messaggio di completamento verde
+    echo -en "\r\033[K${msg} \033[32m[Completato]\033[0m\n"
+    tput cnorm 2>/dev/null || true # Mostra il cursore
+}
+# -------------------------------------
+
+start_spinner "[1/6] Pulizia totale installazione precedente..."
 systemctl stop homelab-ai-forge 2>/dev/null || true
 systemctl disable homelab-ai-forge 2>/dev/null || true
 rm -f "$SERVICE_FILE"
 rm -rf "$FORGE_DIR"
 systemctl daemon-reload
+stop_spinner "[1/6] Pulizia totale installazione precedente..."
 
-echo "[2/6] Installazione dipendenze di sistema su Debian 13..."
-apt-get update -y > /dev/null
-apt-get install -y wget git libgl1 libglib2.0-0 bc curl psmisc google-perftools python3-full > /dev/null
+start_spinner "[2/6] Installazione dipendenze di sistema su Debian 13..."
+apt-get update -y > /dev/null 2>&1
+apt-get install -y wget git libgl1 libglib2.0-0 bc curl psmisc google-perftools python3-full > /dev/null 2>&1
+stop_spinner "[2/6] Installazione dipendenze di sistema su Debian 13..."
 
-echo "[3/6] Installazione di 'uv' e preparazione utente..."
+start_spinner "[3/6] Installazione di 'uv' e preparazione utente..."
 curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh > /dev/null 2>&1
-
 if ! id -u forge > /dev/null 2>&1; then
     useradd -r -m -s /bin/false forge
 fi
 mkdir -p "$FORGE_DIR"
 chown -R forge:forge "$FORGE_DIR" /home/forge
+stop_spinner "[3/6] Installazione di 'uv' e preparazione utente..."
 
-echo "[4/6] Clonazione repository Forge..."
+start_spinner "[4/6] Clonazione repository Forge..."
 su -s /bin/bash forge -c "git clone -q https://github.com/lllyasviel/stable-diffusion-webui-forge.git \"$FORGE_DIR\""
+stop_spinner "[4/6] Clonazione repository Forge..."
 
-echo "[5/6] Creazione venv e pre-installazione requisiti Forge..."
-# Redirezionamento totale per nascondere i messaggi di uv
+start_spinner "[5/6] Creazione venv e download massivo dei requisiti Forge (può richiedere minuti)..."
 su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --python 3.10.14 venv > /dev/null 2>&1"
-
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m ensurepip --upgrade > /dev/null 2>&1"
-# Aggiunto --disable-pip-version-check ovunque per evitare il warning di pip
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check --upgrade pip -q"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q 'setuptools<70' wheel ftfy regex tqdm"
-
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
 su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install --disable-pip-version-check -q -r requirements_versions.txt"
+stop_spinner "[5/6] Creazione venv e download massivo dei requisiti Forge..."
 
-echo "[5.5/6] Applicazione fix definitivo (NumPy, Triton e Joblib)..."
+start_spinner "[5.5/6] Applicazione fix definitivo (NumPy, Triton e Joblib)..."
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip uninstall --disable-pip-version-check -y numpy opencv-python opencv-python-headless bitsandbytes joblib > /dev/null 2>&1 || true"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q 'numpy==1.26.4' 'opencv-python-headless==4.9.0.80' 'bitsandbytes==0.45.3' 'joblib'"
+stop_spinner "[5.5/6] Applicazione fix definitivo (NumPy, Triton e Joblib)..."
 
-echo "[6/6] Configurazione systemd con skip-install e avvio del monitoraggio..."
+start_spinner "[6/6] Configurazione systemd e abilitazione servizio..."
 cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=Stable Diffusion WebUI Forge (Homelab AI)
@@ -79,12 +116,15 @@ EOF
 
 systemctl daemon-reload
 systemctl enable --now homelab-ai-forge > /dev/null 2>&1
+stop_spinner "[6/6] Configurazione systemd e abilitazione servizio..."
 
+echo ""
 echo "------------------------------------------------------------------------"
-echo "ATTENZIONE: Forge si sta avviando con l'ambiente blindato."
+echo -e "\033[33mATTENZIONE: Forge si sta avviando con l'ambiente blindato.\033[0m"
 echo "Visualizzazione dei log in tempo reale (premi Ctrl+C per uscire dal log)..."
 echo "------------------------------------------------------------------------"
 
+# Mostriamo il log in tempo reale, in modo che l'utente veda l'effettivo avvio di Forge
 journalctl -u homelab-ai-forge -f -n 20 &
 LOG_PID=$!
 
@@ -94,14 +134,14 @@ SLEEP_INTERVAL=5
 
 while true; do
     if systemctl is-failed --quiet homelab-ai-forge; then
-        echo -e "\n\n[ERRORE CRITICO] Il servizio homelab-ai-forge è andato in crash!"
+        echo -e "\n\n\033[31m[ERRORE CRITICO] Il servizio homelab-ai-forge è andato in crash!\033[0m"
         exit 1
     fi
 
     HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$API_URL" || true)
     
     if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 404 ]; then
-        echo -e "\n\n[SUCCESSO] Forge è pienamente operativo e l'API è in ascolto!"
+        echo -e "\n\n\033[32m[SUCCESSO] Forge è pienamente operativo e l'API è in ascolto!\033[0m"
         break
     fi
 
@@ -109,12 +149,24 @@ while true; do
     ELAPSED=$((ELAPSED + SLEEP_INTERVAL))
 
     if [ $ELAPSED -gt $TIMEOUT ]; then
-        echo -e "\n\n[TIMEOUT] Sono passati 30 minuti e l'API non è ancora pronta."
+        echo -e "\n\n\033[31m[TIMEOUT] Sono passati 30 minuti e l'API non è ancora pronta.\033[0m"
         exit 1
     fi
 done
 
+# Uccidiamo il log follower per stampare il footer pulito
+kill "$LOG_PID" 2>/dev/null || true
+LOG_PID=""
+
+# Estrapoliamo l'indirizzo IP della macchina sulla rete locale
+MACHINE_IP=$(hostname -I | awk '{print $1}')
+
+echo ""
 echo "========================================================================"
-echo "Installazione Completata e Validata con successo!"
-echo "Endpoint API disponibile per Open WebUI: http://127.0.0.1:7860"
+echo -e "\033[32mInstallazione Completata e Validata con successo!\033[0m"
+echo "Interfaccia Web ed endpoint API disponibili agli indirizzi:"
+echo -e " - Locale: \033[36mhttp://127.0.0.1:7860\033[0m"
+if [ -n "$MACHINE_IP" ]; then
+    echo -e " - Rete:   \033[36mhttp://${MACHINE_IP}:7860\033[0m"
+fi
 echo "========================================================================"
