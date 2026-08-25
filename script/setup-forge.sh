@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# Installazione Stable Diffusion WebUI Forge (Fix Path Assoluti)
+# Installazione Stable Diffusion WebUI Forge (Fix Wheel Definitivo)
 # Ambiente: Bare-Metal / LXC (Debian 13)
 # ==============================================================================
 
@@ -40,15 +40,14 @@ chown -R forge:forge "$FORGE_DIR" /home/forge
 
 su -s /bin/bash forge -c "git clone https://github.com/lllyasviel/stable-diffusion-webui-forge.git \"$FORGE_DIR\""
 
-echo "[4/5] Creazione venv con Python 3.10, bootstrap e pre-configurazione CLIP (Percorsi Assoluti)..."
-# Creazione venv
+echo "[4/5] Creazione venv con Python 3.10 e pre-configurazione CLIP (con wheel)..."
 su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --python 3.10.14 venv"
 
-# Utilizziamo sempre percorsi assoluti per evitare qualsiasi errore di interpretazione della shell
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m ensurepip --upgrade"
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/pip install --upgrade pip"
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/pip install 'setuptools<70' ftfy regex tqdm"
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/pip install --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --upgrade pip"
+# AGGIUNTO 'wheel' QUI SOTTO:
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'setuptools<70' wheel ftfy regex tqdm"
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
 
 echo "[5/5] Configurazione systemd e avvio del monitoraggio in tempo reale..."
 cat <<EOF > "$SERVICE_FILE"
