@@ -41,7 +41,7 @@ chown -R forge:forge "$FORGE_DIR" /home/forge
 echo "[4/6] Clonazione repository Forge..."
 su -s /bin/bash forge -c "git clone https://github.com/lllyasviel/stable-diffusion-webui-forge.git \"$FORGE_DIR\""
 
-echo "[5/6] Creazione venv, pre-installazione e requisiti Forge..."
+echo "[5/6] Creazione venv, pre-installazione e requisiti Forge protetti..."
 su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --python 3.10.14 venv"
 
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m ensurepip --upgrade"
@@ -52,16 +52,12 @@ su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'setuptools<
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
 su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install -r requirements_versions.txt"
 
-# CORREZIONE INTERNA: Sostituiamo il controllo automatico di bitsandbytes nel codice sorgente di Forge
-echo "[5.2/6] Modifica configurazione interna bitsandbytes in Forge..."
-find "$FORGE_DIR" -name "*.py" -type f -exec sed -i 's/bitsandbytes==0.45.3/bitsandbytes==0.43.1/g' {} + 2>/dev/null || true
+# BLINDO DEFINITIVO: Installazione pulita di NumPy 1.26.4, OpenCV Headless e bitsandbytes stabile
+echo "[5.5/6] Applicazione fix definitivo NumPy 1.26.4, OpenCV e bitsandbytes..."
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip uninstall -y numpy opencv-python opencv-python-headless bitsandbytes 2>/dev/null || true"
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --no-build-isolation --no-deps 'numpy==1.26.4' 'opencv-python-headless==4.9.0.80' 'bitsandbytes==0.43.1'"
 
-# BLINDO FINALE: Forziamo NumPy 1.26.4 e bitsandbytes 0.43.1 senza toccare le dipendenze (--no-deps)
-echo "[5.5/6] Applicazione fix definitivo NumPy 1.26.4 e bitsandbytes..."
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip uninstall -y numpy"
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --no-deps 'numpy==1.26.4' 'bitsandbytes==0.43.1'"
-
-echo "[6/6] Configurazione systemd e avvio del monitoraggio in tempo reale..."
+echo "[6/6] Configurazione systemd con skip-install e avvio del monitoraggio..."
 cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=Stable Diffusion WebUI Forge (Homelab AI)
@@ -73,7 +69,7 @@ User=forge
 WorkingDirectory=$FORGE_DIR
 Environment="PYTHON=$FORGE_DIR/venv/bin/python"
 Environment="PIP_NO_BUILD_ISOLATION=1"
-ExecStart=/bin/bash $FORGE_DIR/webui.sh --api --listen --port 7860
+ExecStart=/bin/bash $FORGE_DIR/webui.sh --api --listen --port 7860 --skip-install
 Restart=on-failure
 RestartSec=10
 
@@ -85,7 +81,7 @@ systemctl daemon-reload
 systemctl enable --now homelab-ai-forge
 
 echo "------------------------------------------------------------------------"
-echo "ATTENZIONE: Forge si sta avviando con l'ambiente protetto."
+echo "ATTENZIONE: Forge si sta avviando con l'ambiente blindato."
 echo "Visualizzazione dei log in tempo reale (premi Ctrl+C per uscire dal log)..."
 echo "------------------------------------------------------------------------"
 
