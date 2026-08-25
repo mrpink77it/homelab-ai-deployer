@@ -52,9 +52,14 @@ su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'setuptools<
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
 su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install -r requirements_versions.txt"
 
-# BLINDOCHIRURGICO FINALE: Forziamo NumPy 1.x e bitsandbytes compatibile post-installazione requisiti
+# CORREZIONE INTERNA: Sostituiamo il controllo automatico di bitsandbytes nel codice sorgente di Forge
+echo "[5.2/6] Modifica configurazione interna bitsandbytes in Forge..."
+find "$FORGE_DIR" -name "*.py" -type f -exec sed -i 's/bitsandbytes==0.45.3/bitsandbytes==0.43.1/g' {} + 2>/dev/null || true
+
+# BLINDO FINALE: Forziamo NumPy 1.26.4 e bitsandbytes 0.43.1 senza toccare le dipendenze (--no-deps)
 echo "[5.5/6] Applicazione fix definitivo NumPy 1.26.4 e bitsandbytes..."
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'numpy<2' 'bitsandbytes==0.43.1' --force-reinstall"
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip uninstall -y numpy"
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --no-deps 'numpy==1.26.4' 'bitsandbytes==0.43.1'"
 
 echo "[6/6] Configurazione systemd e avvio del monitoraggio in tempo reale..."
 cat <<EOF > "$SERVICE_FILE"
