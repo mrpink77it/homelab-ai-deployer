@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # Installazione Stable Diffusion WebUI Forge (Ottimizzato per 8GB VRAM)
-# Ambiente: Bare-Metal / LXC (Debian/Ubuntu)
+# Ambiente: Bare-Metal / LXC (Debian/Ubuntu) - Fix LXC Unprivileged
 # ==============================================================================
 
 set -euo pipefail
@@ -42,7 +42,6 @@ if [ -d "$FORGE_DIR" ]; then
     rm -rf "$FORGE_DIR"
 fi
 
-# Nuova logica: Rimozione sicura dell'utente forge e della sua home
 if id -u forge > /dev/null 2>&1; then
     echo "  -> Chiusura processi residui e rimozione utente 'forge'..."
     killall -9 -u forge 2>/dev/null || true
@@ -56,13 +55,16 @@ apt-get install -y wget git python3 python3-venv python3-pip libgl1 libglib2.0-0
 echo "[3/7] Installazione 'uv' (Gestore Python ultra-veloce)..."
 curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
 
-echo "[4/7] Creazione utente di sistema 'forge' e clonazione repository..."
-# L'utente viene sempre ricreato da zero grazie alla pulizia al passo 1
+echo "[4/7] Creazione utente 'forge' e clonazione repository sicura..."
 useradd -r -m -s /bin/false forge
 chown -R forge:forge /home/forge
 
-git clone "$FORGE_REPO" "$FORGE_DIR"
+# Creiamo la directory e assegniamo i permessi PRIMA del clone
+mkdir -p "$FORGE_DIR"
 chown -R forge:forge "$FORGE_DIR"
+
+# Forziamo l'utente forge a clonare per aggirare i limiti di root in LXC unprivileged
+su -s /bin/bash forge -c "git clone \"$FORGE_REPO\" \"$FORGE_DIR\""
 
 echo "[5/7] Generazione ambiente Python 3.10 isolato tramite uv..."
 su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv -p 3.10.14 venv"
