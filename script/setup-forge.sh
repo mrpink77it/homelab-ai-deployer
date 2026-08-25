@@ -41,17 +41,21 @@ chown -R forge:forge "$FORGE_DIR" /home/forge
 echo "[4/6] Clonazione repository Forge..."
 su -s /bin/bash forge -c "git clone https://github.com/lllyasviel/stable-diffusion-webui-forge.git \"$FORGE_DIR\""
 
-echo "[5/6] Creazione venv, ambienti Python e pre-installazione pacchetti stabili..."
+echo "[5/6] Creazione venv, pre-installazione pacchetti stabili e requisiti Forge..."
 su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --python 3.10.14 venv"
 
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m ensurepip --upgrade"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --upgrade pip"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'setuptools<70' wheel ftfy regex tqdm"
-# Installazione pacchetti stabili e blocco versioni NumPy/OpenCV anti-conflitto
+
+# Blocco versioni stabili anti-conflitto (NumPy 1.x e OpenCV)
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'numpy<2' 'opencv-python==4.11.0.86'"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
 
-echo "[6/6] Configurazione systemd con skip-install e avvio del monitoraggio..."
+# Installazione dei requisiti ufficiali di Forge (FastAPI, ecc.)
+su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install -r requirements.txt -r requirements_versions.txt"
+
+echo "[6/6] Configurazione systemd e avvio del monitoraggio in tempo reale..."
 cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=Stable Diffusion WebUI Forge (Homelab AI)
@@ -63,8 +67,7 @@ User=forge
 WorkingDirectory=$FORGE_DIR
 Environment="PYTHON=$FORGE_DIR/venv/bin/python"
 Environment="PIP_NO_BUILD_ISOLATION=1"
-Environment="SD_WEBUI_REQS_FILE="
-ExecStart=/bin/bash $FORGE_DIR/webui.sh --api --listen --port 7860 --skip-install
+ExecStart=/bin/bash $FORGE_DIR/webui.sh --api --listen --port 7860
 Restart=on-failure
 RestartSec=10
 
