@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# Installazione Stable Diffusion WebUI Forge (Fix Wheel Definitivo)
+# Installazione Completa e Definitiva Stable Diffusion WebUI Forge
 # Ambiente: Bare-Metal / LXC (Debian 13)
 # ==============================================================================
 
@@ -18,18 +18,18 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "[1/5] Pulizia totale installazione precedente..."
+echo "[1/6] Pulizia totale installazione precedente..."
 systemctl stop homelab-ai-forge 2>/dev/null || true
 systemctl disable homelab-ai-forge 2>/dev/null || true
 rm -f "$SERVICE_FILE"
 rm -rf "$FORGE_DIR"
 systemctl daemon-reload
 
-echo "[2/5] Installazione dipendenze di sistema su Debian 13..."
+echo "[2/6] Installazione dipendenze di sistema su Debian 13..."
 apt-get update -y
 apt-get install -y wget git libgl1 libglib2.0-0 bc curl psmisc google-perftools python3-full
 
-echo "[3/5] Installazione di 'uv' e preparazione utente..."
+echo "[3/6] Installazione di 'uv' e preparazione utente..."
 curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
 
 if ! id -u forge > /dev/null 2>&1; then
@@ -38,18 +38,20 @@ fi
 mkdir -p "$FORGE_DIR"
 chown -R forge:forge "$FORGE_DIR" /home/forge
 
+echo "[4/6] Clonazione repository Forge..."
 su -s /bin/bash forge -c "git clone https://github.com/lllyasviel/stable-diffusion-webui-forge.git \"$FORGE_DIR\""
 
-echo "[4/5] Creazione venv con Python 3.10 e pre-configurazione CLIP (con wheel)..."
+echo "[5/6] Creazione venv, ambienti Python e pre-installazione pacchetti stabili..."
 su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --python 3.10.14 venv"
 
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m ensurepip --upgrade"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --upgrade pip"
-# AGGIUNTO 'wheel' QUI SOTTO:
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'setuptools<70' wheel ftfy regex tqdm"
+# Installazione pacchetti stabili e blocco versioni NumPy/OpenCV anti-conflitto
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'numpy<2' 'opencv-python==4.11.0.86'"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
 
-echo "[5/5] Configurazione systemd e avvio del monitoraggio in tempo reale..."
+echo "[6/6] Configurazione systemd con skip-install e avvio del monitoraggio..."
 cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=Stable Diffusion WebUI Forge (Homelab AI)
@@ -61,7 +63,8 @@ User=forge
 WorkingDirectory=$FORGE_DIR
 Environment="PYTHON=$FORGE_DIR/venv/bin/python"
 Environment="PIP_NO_BUILD_ISOLATION=1"
-ExecStart=/bin/bash $FORGE_DIR/webui.sh --api --listen --port 7860
+Environment="SD_WEBUI_REQS_FILE="
+ExecStart=/bin/bash $FORGE_DIR/webui.sh --api --listen --port 7860 --skip-install
 Restart=on-failure
 RestartSec=10
 
