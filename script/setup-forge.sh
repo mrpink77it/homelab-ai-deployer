@@ -52,8 +52,8 @@ su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'setuptools<
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'numpy<2' 'opencv-python==4.11.0.86'"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
 
-# Installazione dei requisiti ufficiali di Forge (FastAPI, ecc.)
-su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install -r requirements.txt -r requirements_versions.txt"
+# Installazione dei requisiti basati sul file corretto di Forge
+su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install -r requirements_versions.txt"
 
 echo "[6/6] Configurazione systemd e avvio del monitoraggio in tempo reale..."
 cat <<EOF > "$SERVICE_FILE"
