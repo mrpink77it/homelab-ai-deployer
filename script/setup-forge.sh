@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # Installazione Completa e Definitiva Stable Diffusion WebUI Forge
-# Ambiente: Bare-Metal / LXC (Debian 13) - Fix Triton & NumPy
+# Ambiente: Bare-Metal / LXC (Debian 13) - Fix Triton, NumPy, Joblib e UI Ultra-Clean
 # ==============================================================================
 
 set -euo pipefail
@@ -26,11 +26,11 @@ rm -rf "$FORGE_DIR"
 systemctl daemon-reload
 
 echo "[2/6] Installazione dipendenze di sistema su Debian 13..."
-apt-get update -y
-apt-get install -y wget git libgl1 libglib2.0-0 bc curl psmisc google-perftools python3-full
+apt-get update -y > /dev/null
+apt-get install -y wget git libgl1 libglib2.0-0 bc curl psmisc google-perftools python3-full > /dev/null
 
 echo "[3/6] Installazione di 'uv' e preparazione utente..."
-curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
+curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh > /dev/null 2>&1
 
 if ! id -u forge > /dev/null 2>&1; then
     useradd -r -m -s /bin/false forge
@@ -39,24 +39,23 @@ mkdir -p "$FORGE_DIR"
 chown -R forge:forge "$FORGE_DIR" /home/forge
 
 echo "[4/6] Clonazione repository Forge..."
-su -s /bin/bash forge -c "git clone https://github.com/lllyasviel/stable-diffusion-webui-forge.git \"$FORGE_DIR\""
+su -s /bin/bash forge -c "git clone -q https://github.com/lllyasviel/stable-diffusion-webui-forge.git \"$FORGE_DIR\""
 
-echo "[5/6] Creazione venv, pre-installazione e requisiti Forge..."
-su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --python 3.10.14 venv"
+echo "[5/6] Creazione venv e pre-installazione requisiti Forge..."
+# Redirezionamento totale per nascondere i messaggi di uv
+su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --python 3.10.14 venv > /dev/null 2>&1"
 
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m ensurepip --upgrade"
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --upgrade pip"
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'setuptools<70' wheel ftfy regex tqdm"
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m ensurepip --upgrade > /dev/null 2>&1"
+# Aggiunto --disable-pip-version-check ovunque per evitare il warning di pip
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check --upgrade pip -q"
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q 'setuptools<70' wheel ftfy regex tqdm"
 
-# Installazione CLIP e requisiti ufficiali Forge
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
-su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install -r requirements_versions.txt"
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
+su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install --disable-pip-version-check -q -r requirements_versions.txt"
 
-# BLINDO DEFINITIVO: Installiamo la versione 0.45.3 di bitsandbytes (che fixa Triton) 
-# ma forziamo NumPy 1.26.4 (che fixa skimage) nello stesso comando.
-echo "[5.5/6] Applicazione fix chirurgico per Triton, bitsandbytes e NumPy..."
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip uninstall -y numpy opencv-python opencv-python-headless bitsandbytes 2>/dev/null || true"
-su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install 'numpy==1.26.4' 'opencv-python-headless==4.9.0.80' 'bitsandbytes==0.45.3'"
+echo "[5.5/6] Applicazione fix definitivo (NumPy, Triton e Joblib)..."
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip uninstall --disable-pip-version-check -y numpy opencv-python opencv-python-headless bitsandbytes joblib > /dev/null 2>&1 || true"
+su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q 'numpy==1.26.4' 'opencv-python-headless==4.9.0.80' 'bitsandbytes==0.45.3' 'joblib'"
 
 echo "[6/6] Configurazione systemd con skip-install e avvio del monitoraggio..."
 cat <<EOF > "$SERVICE_FILE"
@@ -79,7 +78,7 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now homelab-ai-forge
+systemctl enable --now homelab-ai-forge > /dev/null 2>&1
 
 echo "------------------------------------------------------------------------"
 echo "ATTENZIONE: Forge si sta avviando con l'ambiente blindato."
