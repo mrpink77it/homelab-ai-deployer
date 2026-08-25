@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # Installazione Completa e Definitiva Stable Diffusion WebUI Forge
-# Ambiente: Bare-Metal / LXC (Debian 13) - UI Animata e Ultra-Clean
+# Ambiente: Bare-Metal / LXC (Debian 13) - UI Mista (Spinner + ProgressBar)
 # ==============================================================================
 
 set -euo pipefail
@@ -9,6 +9,7 @@ set -euo pipefail
 FORGE_DIR="/opt/sd-forge"
 SERVICE_FILE="/etc/systemd/system/homelab-ai-forge.service"
 API_URL="http://127.0.0.1:7860/sdapi/v1/sd-models"
+MODELS_DIR="$FORGE_DIR/models/Stable-diffusion"
 LOG_PID=""
 SPINNER_PID=""
 
@@ -33,7 +34,6 @@ start_spinner() {
         while true; do
             for (( i=0; i<${#spin_chars}; i++ )); do
                 sleep 0.15
-                # Stampa il messaggio sovrascrivendo la linea corrente (\r)
                 echo -en "\r\033[K${msg} \033[36m[${spin_chars:$i:1}]\033[0m"
             done
         done
@@ -48,53 +48,67 @@ stop_spinner() {
         wait "$SPINNER_PID" 2>/dev/null || true
         SPINNER_PID=""
     fi
-    # Messaggio di completamento verde
     echo -en "\r\033[K${msg} \033[32m[Completato]\033[0m\n"
     tput cnorm 2>/dev/null || true # Mostra il cursore
 }
 # -------------------------------------
 
-start_spinner "[1/6] Pulizia totale installazione precedente..."
+start_spinner "[1/7] Pulizia totale installazione precedente..."
 systemctl stop homelab-ai-forge 2>/dev/null || true
 systemctl disable homelab-ai-forge 2>/dev/null || true
 rm -f "$SERVICE_FILE"
 rm -rf "$FORGE_DIR"
 systemctl daemon-reload
-stop_spinner "[1/6] Pulizia totale installazione precedente..."
+stop_spinner "[1/7] Pulizia totale installazione precedente..."
 
-start_spinner "[2/6] Installazione dipendenze di sistema su Debian 13..."
+start_spinner "[2/7] Installazione dipendenze di sistema su Debian 13..."
 apt-get update -y > /dev/null 2>&1
 apt-get install -y wget git libgl1 libglib2.0-0 bc curl psmisc google-perftools python3-full > /dev/null 2>&1
-stop_spinner "[2/6] Installazione dipendenze di sistema su Debian 13..."
+stop_spinner "[2/7] Installazione dipendenze di sistema su Debian 13..."
 
-start_spinner "[3/6] Installazione di 'uv' e preparazione utente..."
+start_spinner "[3/7] Installazione di 'uv' e preparazione utente..."
 curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh > /dev/null 2>&1
 if ! id -u forge > /dev/null 2>&1; then
     useradd -r -m -s /bin/false forge
 fi
 mkdir -p "$FORGE_DIR"
 chown -R forge:forge "$FORGE_DIR" /home/forge
-stop_spinner "[3/6] Installazione di 'uv' e preparazione utente..."
+stop_spinner "[3/7] Installazione di 'uv' e preparazione utente..."
 
-start_spinner "[4/6] Clonazione repository Forge..."
+start_spinner "[4/7] Clonazione repository Forge..."
 su -s /bin/bash forge -c "git clone -q https://github.com/lllyasviel/stable-diffusion-webui-forge.git \"$FORGE_DIR\""
-stop_spinner "[4/6] Clonazione repository Forge..."
+stop_spinner "[4/7] Clonazione repository Forge..."
 
-start_spinner "[5/6] Creazione venv e download massivo dei requisiti Forge (può richiedere minuti)..."
+start_spinner "[5/7] Creazione venv e download dei requisiti Forge (può richiedere minuti)..."
 su -s /bin/bash forge -c "cd $FORGE_DIR && uv venv --python 3.10.14 venv > /dev/null 2>&1"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m ensurepip --upgrade > /dev/null 2>&1"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check --upgrade pip -q"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q 'setuptools<70' wheel ftfy regex tqdm"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q --no-build-isolation --no-deps https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
 su -s /bin/bash forge -c "cd $FORGE_DIR && venv/bin/pip install --disable-pip-version-check -q -r requirements_versions.txt"
-stop_spinner "[5/6] Creazione venv e download massivo dei requisiti Forge..."
+stop_spinner "[5/7] Creazione venv e download dei requisiti Forge..."
 
-start_spinner "[5.5/6] Applicazione fix definitivo (NumPy, Triton e Joblib)..."
+start_spinner "[5.5/7] Applicazione fix definitivo (NumPy, Triton e Joblib)..."
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip uninstall --disable-pip-version-check -y numpy opencv-python opencv-python-headless bitsandbytes joblib > /dev/null 2>&1 || true"
 su -s /bin/bash forge -c "$FORGE_DIR/venv/bin/python -m pip install --disable-pip-version-check -q 'numpy==1.26.4' 'opencv-python-headless==4.9.0.80' 'bitsandbytes==0.45.3' 'joblib'"
-stop_spinner "[5.5/6] Applicazione fix definitivo (NumPy, Triton e Joblib)..."
+stop_spinner "[5.5/7] Applicazione fix definitivo (NumPy, Triton e Joblib)..."
 
-start_spinner "[6/6] Configurazione systemd e abilitazione servizio..."
+# --- BLOCCO DOWNLOAD MODELLI CON BARRA DI PROGRESSO (NO SPINNER) ---
+echo -e "\033[36m[6/7] Download Modelli SDXL (~20GB totali)...\033[0m"
+
+echo " -> 1/3: Scaricando Juggernaut XL (Default):"
+su -s /bin/bash forge -c "curl -L -# -o \"$MODELS_DIR/01-Juggernaut-XL-v9.safetensors\" \"https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/main/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors\""
+
+echo " -> 2/3: Scaricando DreamShaper XL:"
+su -s /bin/bash forge -c "curl -L -# -o \"$MODELS_DIR/02-DreamShaper-XL-Turbo.safetensors\" \"https://huggingface.co/Lykon/dreamshaper-xl-1-0/resolve/main/DreamShaperXL_Turbo_v2_1.safetensors\""
+
+echo " -> 3/3: Scaricando Pony Diffusion V6 XL:"
+su -s /bin/bash forge -c "curl -L -# -o \"$MODELS_DIR/03-Pony-Diffusion-V6-XL.safetensors\" \"https://huggingface.co/KBlueLeaf/Pony-Diffusion-V6-XL/resolve/main/ponyDiffusionV6XL_v6StartWithThisOne.safetensors\""
+
+echo -e "[6/7] Download Modelli SDXL \033[32m[Completato]\033[0m"
+# -------------------------------------------------------------------
+
+start_spinner "[7/7] Configurazione systemd e abilitazione servizio..."
 cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=Stable Diffusion WebUI Forge (Homelab AI)
@@ -116,7 +130,7 @@ EOF
 
 systemctl daemon-reload
 systemctl enable --now homelab-ai-forge > /dev/null 2>&1
-stop_spinner "[6/6] Configurazione systemd e abilitazione servizio..."
+stop_spinner "[7/7] Configurazione systemd e abilitazione servizio..."
 
 echo ""
 echo "------------------------------------------------------------------------"
@@ -124,7 +138,6 @@ echo -e "\033[33mATTENZIONE: Forge si sta avviando con l'ambiente blindato.\033[
 echo "Visualizzazione dei log in tempo reale (premi Ctrl+C per uscire dal log)..."
 echo "------------------------------------------------------------------------"
 
-# Mostriamo il log in tempo reale, in modo che l'utente veda l'effettivo avvio di Forge
 journalctl -u homelab-ai-forge -f -n 20 &
 LOG_PID=$!
 
@@ -154,11 +167,9 @@ while true; do
     fi
 done
 
-# Uccidiamo il log follower per stampare il footer pulito
 kill "$LOG_PID" 2>/dev/null || true
 LOG_PID=""
 
-# Estrapoliamo l'indirizzo IP della macchina sulla rete locale
 MACHINE_IP=$(hostname -I | awk '{print $1}')
 
 echo ""
