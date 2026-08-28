@@ -1,0 +1,18 @@
+[Unit]
+Description=Homelab AI - VibeVoice Server OpenAI API (http://host:3001/v1)
+After=network.target
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/homelab-ai/vibevoice-realtime-openai-api
+ExecStart=/opt/homelab-ai/VibeVoice/.venv/bin/python /opt/homelab-ai/vibevoice-realtime-openai-api/vibevoice_realtime_openai_api.py --port 3001
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/homelab-ai-vibevoice-api.log
+StandardError=append:/var/log/homelab-ai-vibevoice-api-error.log
+
+Environment="CFG_SCALE=1.25"
+Environment="OPTIMIZE_FOR_SPEED=1"
+
+[Install]
+WantedBy=multi-user.target
