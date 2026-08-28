@@ -1,0 +1,24 @@
+[Unit]
+Description=Homelab AI Frontend Service (Open WebUI)
+After=network.target homelab-ai-backend.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/homelab-ai/open-webui
+Environment="HOST=0.0.0.0"
+Environment="PORT=8081"
+Environment="WEBUI_PORT=8081"
+Environment="OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1"
+ExecStart=/opt/homelab-ai/open-webui/venv/bin/open-webui serve
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/homelab-ai-nvidia.log
+StandardError=append:/var/log/homelab-ai-nvidia.log
+
+[Install]
+WantedBy=multi-user.target
+
+
+
+
