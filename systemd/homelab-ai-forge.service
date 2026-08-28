@@ -1,0 +1,14 @@
+[Unit]
+Description=Stable Diffusion WebUI Forge (Homelab AI)
+After=network.target
+[Service]
+Type=simple
+User=forge
+WorkingDirectory=/opt/sd-forge
+Environment="PYTHON=/opt/sd-forge/venv/bin/python"
+Environment="PIP_NO_BUILD_ISOLATION=1"
+ExecStart=/bin/bash /opt/sd-forge/webui.sh --api --listen --port 7860 --skip-install
+Restart=on-failure
+RestartSec=10
+[Install]
+WantedBy=multi-user.target
