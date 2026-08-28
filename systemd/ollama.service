@@ -1,0 +1,22 @@
+[Unit]
+Description=Ollama Service
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ollama serve
+User=ollama
+Group=ollama
+Restart=always
+RestartSec=3
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="OLLAMA_HOST=0.0.0.0:11434"
+
+# --- OTTIMIZZAZIONI VRAM E RISORSE ---
+# Unload del modello dalla VRAM dopo 1 minuto di inattività (per liberare la GPU a Forge)
+Environment="OLLAMA_KEEP_ALIVE=1m"
+
+# Limita a 1 sola richiesta parallela per evitare picchi di VRAM improvvisi su 8GB
+Environment="OLLAMA_NUM_PARALLEL=1"
+
+[Install]
+WantedBy=multi-user.target
