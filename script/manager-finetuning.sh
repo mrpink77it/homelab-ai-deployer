@@ -2,6 +2,7 @@
 # ==============================================================================
 # manager-finetuning.sh - Homelab AI Deployer
 # Ambiente: Baremetal/LXC, Debian 13 / Ubuntu 24, NVIDIA CUDA
+# Versione: 1.1
 # ==============================================================================
 set -e
 
@@ -80,7 +81,8 @@ fase_1_dipendenze() {
 }
 
 fase_2_ai_stack() {
-    local cmd='
+    # PARTE 1: Compilazione (gestita con la UI a scomparsa)
+    local cmd_compile='
         curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
         mkdir -p '"$BACKEND_DIR"'/{unsloth,models,llama.cpp}
         
@@ -88,9 +90,20 @@ fase_2_ai_stack() {
             git clone https://github.com/ggerganov/llama.cpp.git '"$BACKEND_DIR"'/llama.cpp
         fi
         cd '"$BACKEND_DIR"'/llama.cpp && make clean && make GGML_CUDA=1 CXXFLAGS="-Wno-stringop-overread" -j$(nproc)
-        
-        bash '"$BASE_DIR"'/tools/8gbModelCUDA.sh
-        
+    '
+    run_with_ui "2.A Compilazione Llama.cpp & Unsloth" "$cmd_compile"
+    
+    # PARTE 2: Esecuzione DIRETTA dello script dei modelli (mostra nativamente wget)
+    clear
+    echo -e "\033[36m======================================================================\033[0m"
+    echo -e "\033[1;37m 2.B DOWNLOAD MODELLI AI (8gbModelCUDA.sh) \033[0m"
+    echo -e "\033[36m======================================================================\033[0m"
+    bash "$BASE_DIR/tools/8gbModelCUDA.sh"
+    echo -e "\n\033[32m[OK]\033[0m Download modelli completato."
+    sleep 1.5
+
+    # PARTE 3: Creazione servizio (torna alla UI a scomparsa)
+    local cmd_service='
         cat <<EOF > /etc/systemd/system/llama-server.service
 [Unit]
 Description=Llama.cpp API Server (Qwen2.5-Coder)
@@ -110,7 +123,7 @@ EOF
         systemctl enable --now llama-server
         sleep 5
     '
-    run_with_ui "2. Unsloth & Llama.cpp" "$cmd"
+    run_with_ui "2.C Configurazione Servizio llama-server" "$cmd_service"
     
     clear
     echo "=== CONTROLLO SERVIZI AI ==="
@@ -260,7 +273,7 @@ purge_all() {
 while true; do
     clear
     echo -e "\033[36m==================================================\033[0m"
-    echo -e "\033[1;37m        HOMELAB AI DEPLOYER - FINETUNING          \033[0m"
+    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.1)        \033[0m"
     echo -e "\033[36m==================================================\033[0m"
     [ -n "$TUNING_STATUS" ] && echo -e " Stato: $TUNING_STATUS\n"
     
