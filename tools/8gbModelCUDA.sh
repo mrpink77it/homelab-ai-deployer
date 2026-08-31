@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Creazione cartelle organizzate
-mkdir -p IA_Locale/{1_LLM_Text,2_Vision_Models,3_Embeddings,4_Audio_STT_TTS}
+mkdir -p models/{1_LLM_Text,2_Vision_Models,3_Embeddings,4_Audio_STT_TTS}
 
 echo "Inizio il download dei modelli LLM (Testo)..."
-cd IA_Locale/1_LLM_Text
+cd models/1_LLM_Text
 wget -c --show-progress -O Qwen3.5-9B-Q4_K_M.gguf "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf"
 wget -c --show-progress -O Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf "https://huggingface.co/unsloth/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
 wget -c --show-progress -O Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf "https://huggingface.co/unsloth/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
@@ -13,7 +13,7 @@ wget -c --show-progress -O Phi-4-mini-instruct-Q4_K_M.gguf "https://huggingface.
 cd ../..
 
 echo "Inizio il download dei modelli Vision..."
-cd IA_Locale/2_Vision_Models
+cd models/2_Vision_Models
 # Qwen2.5-VL
 wget -c --show-progress -O Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf "https://huggingface.co/unsloth/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"
 # LLaVA 1.5 + Proiettore Visivo
@@ -25,13 +25,13 @@ wget -c --show-progress -O moondream2-mmproj-f16.gguf "https://huggingface.co/vi
 cd ../..
 
 echo "Inizio il download dei modelli Embeddings..."
-cd IA_Locale/3_Embeddings
+cd models/3_Embeddings
 wget -c --show-progress -O nomic-embed-text-v1.5.Q4_K_M.gguf "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf"
 wget -c --show-progress -O bge-m3-q4_k_m.gguf "https://huggingface.co/milaboratory/bge-m3-gguf/resolve/main/bge-m3-q4_k_m.gguf"
 cd ../..
 
 echo "Inizio il download dei modelli Audio (STT & TTS)..."
-cd IA_Locale/4_Audio_STT_TTS
+cd models/4_Audio_STT_TTS
 # Whisper (per Whisper.cpp)
 wget -c --show-progress -O ggml-large-v3-turbo.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
 wget -c --show-progress -O ggml-small.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
@@ -42,4 +42,4 @@ wget -c --show-progress -O it_IT-paola-medium.onnx "https://huggingface.co/rhass
 wget -c --show-progress -O it_IT-paola-medium.onnx.json "https://huggingface.co/rhasspy/piper-voices/resolve/main/it/it_IT/paola/medium/it_IT-paola-medium.onnx.json"
 cd ../..
 
-echo "🎉 Download di tutti i modelli completato con successo in ./IA_Locale/"
+echo "🎉 Download di tutti i modelli completato con successo in ./models/"
