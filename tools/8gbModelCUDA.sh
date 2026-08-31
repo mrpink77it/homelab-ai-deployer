@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Creazione cartelle organizzate
+cd /opt/homelab-ai/backend/
 mkdir -p models/{1_LLM_Text,2_Vision_Models,3_Embeddings,4_Audio_STT_TTS}
 
 echo "Inizio il download dei modelli LLM (Testo)..."
