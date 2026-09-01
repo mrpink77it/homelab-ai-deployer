@@ -2,7 +2,7 @@
 # ==============================================================================
 # manager-finetuning.sh - Homelab AI Deployer
 # Ambiente: Baremetal/LXC, Debian 13 / Ubuntu 24
-# Versione: 1.8.2 (Driver .run Silent + ggml-org/llama.cpp Ufficiale + CUDA 13.2)
+# Versione: 1.8.3 (Export automatico runtime CUDA & nvcc + ggml-org/llama.cpp)
 # ==============================================================================
 set -e
 
@@ -98,7 +98,7 @@ fase_1_dipendenze() {
     apt update -y
     apt install -y cuda-toolkit-13-2
 
-    # 5. Configurazione PATH
+    # 5. Configurazione PATH ed Export immediato per la sessione dello script
     if ! grep -q "cuda-13.2/bin" ~/.bashrc; then
         cp ~/.bashrc ~/.bashrc-backup
         echo 'export PATH=/usr/local/cuda-13.2/bin${PATH:+:${PATH}}' >> ~/.bashrc
@@ -106,6 +106,10 @@ fase_1_dipendenze() {
     
     echo "export PATH=/usr/local/cuda-13.2/bin\${PATH:+:\${PATH}}" > /etc/profile.d/cuda.sh
     chmod +x /etc/profile.d/cuda.sh
+
+    # APPLICAZIONE IMMEDIATA DELLE VARIABILI NELLO SCRIPT
+    export PATH="/usr/local/cuda-13.2/bin:/usr/local/cuda/bin:$PATH"
+    export CUDACXX="/usr/local/cuda/bin/nvcc"
 
     echo -e "\n\033[32m[OK] Fase 1 completata con successo!\033[0m"
     read -p "Premi Invio per continuare..."
@@ -117,10 +121,13 @@ fase_2_ai_stack() {
     echo -e " \033[1;37mFASE 2: Compilazione Llama.cpp (ggml-org) & Setup Modelli\033[0m"
     echo -e "\033[36m======================================================================\033[0m"
 
+    # Assicura che le variabili CUDA siano attive anche se avviata singolarmente
+    export PATH="/usr/local/cuda-13.2/bin:/usr/local/cuda/bin:$PATH"
+    export CUDACXX="/usr/local/cuda/bin/nvcc"
+
     curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
     mkdir -p "$BACKEND_DIR"/{unsloth,models,llama.cpp}
     
-    # Aggiornato al repository ufficiale ggml-org/llama.cpp
     if [ ! -d "$BACKEND_DIR/llama.cpp/.git" ]; then
         git clone https://github.com/ggml-org/llama.cpp.git "$BACKEND_DIR/llama.cpp"
     else
@@ -130,7 +137,7 @@ fase_2_ai_stack() {
     
     cd "$BACKEND_DIR/llama.cpp"
     rm -rf build
-    cmake -B build -DGGML_CUDA=ON
+    cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
     cmake --build build --config Release -j$(nproc)
 
     if [ -f "$BASE_DIR/tools/8gbModelCUDA.sh" ]; then
@@ -248,7 +255,7 @@ purge_all() {
 while true; do
     clear
     echo -e "\033[36m==================================================\033[0m"
-    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.8.2)      \033[0m"
+    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.8.3)      \033[0m"
     echo -e "\033[36m==================================================\033[0m"
     echo -e " Ambiente rilevato: \033[33m$VIRT_TYPE\033[0m"
     echo -e " Cartella Driver:   \033[33m$DRIVERS_DIR\033[0m"
