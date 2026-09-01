@@ -2,7 +2,7 @@
 # ==============================================================================
 # manager-finetuning.sh - Homelab AI Deployer
 # Ambiente: Baremetal/LXC, Debian 13 / Ubuntu 24
-# Versione: 1.8.4 (UV venv --clear non-interattivo + ggml-org/llama.cpp)
+# Versione: 1.8.6 (Locale UTF-8 & Timezone Europe/Rome automatici)
 # ==============================================================================
 set -e
 
@@ -34,22 +34,41 @@ confirm_action() {
     esac
 }
 
+configure_system_locale_tz() {
+    echo -e "\n\033[32m[+] Configurazione automatica Timezone (Europe/Rome) e Locales UTF-8...\033[0m"
+    export DEBIAN_FRONTEND=noninteractive
+
+    # 1. Impostazione Timezone
+    ln -snf /usr/share/zoneinfo/Europe/Rome /etc/localtime
+    echo "Europe/Rome" > /etc/timezone
+    dpkg-reconfigure -f noninteractive tzdata 2>/dev/null || true
+
+    # 2. Installazione e generazione Locales UTF-8
+    apt-get update -y && apt-get install -y locales
+    sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen
+    sed -i '/it_IT.UTF-8/s/^# //g' /etc/locale.gen
+    locale-gen
+    update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+
+    export LANG=en_US.UTF-8
+    export LC_ALL=en_US.UTF-8
+}
+
 # ------------------------------------------------------------------------------
 # FASI DI INSTALLAZIONE
 # ------------------------------------------------------------------------------
 fase_1_dipendenze() {
     clear
     echo -e "\033[36m======================================================================\033[0m"
-    echo -e " \033[1;37mFASE 1: Dipendenze, Driver NVIDIA (.run Silent) & CUDA 13.2\033[0m"
+    echo -e " \033[1;37mFASE 1: Timezone, Locales, Driver NVIDIA (.run Silent) & CUDA 13.2\033[0m"
     echo -e "\033[36m======================================================================\033[0m"
     
-    # 1. Installazione pacchetti di sistema e monitoraggio
+    # Configurazione preliminare Timezone e Locale UTF-8
+    configure_system_locale_tz
+
     echo -e "\n\033[32m[+] Aggiornamento e installazione pacchetti base...\033[0m"
-    export DEBIAN_FRONTEND=noninteractive
-    apt update -y
     apt install -y g++ freeglut3-dev build-essential libx11-dev libxmu-dev libxi-dev libglu1-mesa-dev libfreeimage-dev libglfw3-dev wget htop btop nvtop glances git pciutils cmake curl libcurl4-openssl-dev mc
 
-    # 2. Rilevamento versione driver e download automatico da NVIDIA
     local driver_version=""
     if [ "$VIRT_TYPE" == "lxc" ]; then
         if [ -f /proc/driver/nvidia/version ]; then
@@ -76,7 +95,6 @@ fase_1_dipendenze() {
 
     chmod +x "$run_path"
 
-    # 3. Esecuzione installer driver in modalità SILENT (senza domande)
     if [ "$VIRT_TYPE" == "lxc" ]; then
         echo -e "\n\033[32m[+] Installazione driver in modalità LXC (Silent & No-Kernel-Modules)...\033[0m"
         sh "$run_path" --silent --no-kernel-modules --accept-license --no-questions || true
@@ -85,7 +103,6 @@ fase_1_dipendenze() {
         sh "$run_path" --silent --dkms --accept-license --no-questions || true
     fi
 
-    # 4. Installazione CUDA Toolkit 13.2 da repository ufficiale
     echo -e "\n\033[32m[+] Configurazione repository e installazione CUDA Toolkit 13.2...\033[0m"
     local repo_distro="debian13"
     if [ "$OS_ID" == "ubuntu" ]; then
@@ -98,7 +115,6 @@ fase_1_dipendenze() {
     apt update -y
     apt install -y cuda-toolkit-13-2
 
-    # 5. Configurazione PATH ed Export immediato per la sessione dello script
     if ! grep -q "cuda-13.2/bin" ~/.bashrc; then
         cp ~/.bashrc ~/.bashrc-backup
         echo 'export PATH=/usr/local/cuda-13.2/bin${PATH:+:${PATH}}' >> ~/.bashrc
@@ -175,8 +191,6 @@ fase_3_opencode() {
 
     mkdir -p /opt/homelab-ai/opencode
     cd /opt/homelab-ai/opencode
-    
-    # Aggiunto --clear per evitare il prompt interattivo se la venv esiste già
     uv venv --clear venv
 
     cat <<EOF > /etc/systemd/system/opencode.service
@@ -205,35 +219,83 @@ EOF
 }
 
 fase_4_dashboard() {
+    clear
+    tput civis
+    trap 'tput cnorm' EXIT
+
     while true; do
-        clear
-        echo -e "\033[36m=== DASHBOARD HARDWARE E SENSORI AI ===\033[0m"
-        echo -e "\033[33mComandi: [x] Esporta CSV | [b] Benchmark | [q] Esci\033[0m"
-        echo "--------------------------------------------------------"
+        printf "\033[H"
+
+        local uptime_str=$(uptime -p)
+        local load_avg=$(uptime | awk -F'load average:' '{print $2}')
+        local mem_info=$(free -m | awk 'NR==2{printf "RAM: %s MB / %s MB (%.1f%%)", $3, $2, $3*100/$2}')
+        local disk_info=$(df -h / | awk 'NR==2{printf "Disk /: %s / %s (%s)", $3, $2, $5}')
+
+        local gpu_name="N/A" gpu_temp="N/A" gpu_util="N/A" gpu_mem_used="N/A" gpu_mem_total="N/A" gpu_power="N/A" gpu_fan="N/A"
         if command -v nvidia-smi &> /dev/null; then
-            nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total --format=csv,noheader | awk -F', ' '{print "GPU: "$1" | Temp: "$2"C | Uso: "$3" | VRAM: "$4"/"$5}'
-        else
-            echo "NVIDIA-SMI non disponibile o errore librerie."
+            gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo "N/A")
+            gpu_temp=$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader 2>/dev/null || echo "0")
+            gpu_util=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader 2>/dev/null || echo "0")
+            gpu_mem_used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null || echo "0")
+            gpu_mem_total=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null || echo "0")
+            gpu_power=$(nvidia-smi --query-gpu=power.draw --format=csv,noheader 2>/dev/null || echo "0 W")
+            gpu_fan=$(nvidia-smi --query-gpu=fan.speed --format=csv,noheader 2>/dev/null || echo "0%")
         fi
-        echo "--------------------------------------------------------"
-        systemctl is-active --quiet llama-server && echo -e "llama.cpp: \033[32mATTIVO\033[0m (Porta 8080)" || echo -e "llama.cpp: \033[31mOFFLINE\033[0m"
-        systemctl is-active --quiet opencode && echo -e "OpenCode:  \033[32mATTIVO\033[0m" || echo -e "OpenCode:  \033[31mOFFLINE\033[0m"
-        echo "--------------------------------------------------------"
-        
-        read -t 1 -n 1 -s key
-        if [[ "${key,,}" == "q" ]]; then break;
+
+        local llama_status="\033[31m[OFFLINE]\033[0m"
+        if systemctl is-active --quiet llama-server; then
+            llama_status="\033[32m[ATTIVO]\033[0m (Porta 8080)"
+        fi
+
+        local opencode_status="\033[31m[OFFLINE]\033[0m"
+        if systemctl is-active --quiet opencode; then
+            opencode_status="\033[32m[ATTIVO]\033[0m"
+        fi
+
+        echo -e "\033[1;36m╔════════════════════════════════════════════════════════════════════════════╗\033[0m"
+        echo -e "\033[1;36m║\033[1;33m               HOMELAB AI - ADVANCED HARDWARE & AI MONITOR                  \033[1;36m║\033[0m"
+        echo -e "\033[1;36m╠════════════════════════════════════════════════════════════════════════════╣\033[0m"
+        echo -e "\033[1;36m║\033[0m \033[1mUptime:   \033[0m $uptime_str"
+        echo -e "\033[1;36m║\033[0m \033[1mLoad Avg: \033[0m $load_avg"
+        echo -e "\033[1;36m║\033[0m \033[1mSystem:   \033[0m $mem_info | $disk_info"
+        echo -e "\033[1;36m╠────────────────────────────────────────────────────────────────────────────╣\033[0m"
+        echo -e "\033[1;36m║\033[1;35m [ 🎮 NVIDIA GPU TELEMETRY & SENSORS ]                                      \033[1;36m║\033[0m"
+        echo -e "\033[1;36m║\033[0m Model: \033[1;37m$gpu_name\033[0m"
+        echo -e "\033[1;36m║\033[0m Temp:  \033[1;31m${gpu_temp}°C\033[0m  | Fan Speed: \033[36m${gpu_fan}\033[0m | Power Draw: \033[33m${gpu_power}\033[0m"
+        echo -e "\033[1;36m║\033[0m Core:  \033[1;32m${gpu_util}\033[0m    | VRAM Used: \033[1;32m${gpu_mem_used} / ${gpu_mem_total}\033[0m"
+        echo -e "\033[1;36m╠────────────────────────────────────────────────────────────────────────────╣\033[0m"
+        echo -e "\033[1;36m║\033[1;35m [ 🤖 AI STACK SERVICES ]                                                    \033[1;36m║\033[0m"
+        echo -e "\033[1;36m║\033[0m llama.cpp Server : $llama_status"
+        echo -e "\033[1;36m║\033[0m OpenCode Assistant : $opencode_status"
+        echo -e "\033[1;36m╠════════════════════════════════════════════════════════════════════════════╣\033[0m"
+        echo -e "\033[1;36m║\033[1;33m COMMANDS: \033[0m[x] CSV Export  [b] AI Benchmark  [r] Refresh  [q] Exit      \033[1;36m║\033[0m"
+        echo -e "\033[1;36m╚════════════════════════════════════════════════════════════════════════════╝\033[0m"
+        echo -n -e "\033[1mSeleziona comando:\033[0m "
+
+        read -t 2 -n 1 -s key
+        if [[ "${key,,}" == "q" ]]; then
+            tput cnorm
+            break
         elif [[ "${key,,}" == "x" ]]; then
+            tput cnorm
             local csv_file="$HOME/ai_telemetry_$TIMESTAMP.csv"
-            nvidia-smi --query-gpu=timestamp,name,temperature.gpu,utilization.gpu,memory.used --format=csv >> "$csv_file" 2>/dev/null || echo "Errore export."
-            echo -e "\033[32mEsportato log in $csv_file\033[0m"
-            sleep 1
+            nvidia-smi --query-gpu=timestamp,name,temperature.gpu,utilization.gpu,memory.used,power.draw --format=csv >> "$csv_file" 2>/dev/null || echo "Errore export."
+            echo -e "\n\033[32m[OK] Esportato log telemetria in $csv_file\033[0m"
+            read -p "Premi un tasto per tornare alla dashboard..."
+            tput civis
         elif [[ "${key,,}" == "b" ]]; then
+            tput cnorm
             clear
-            echo -e "\033[36mEsecuzione Benchmark Qwen2.5-Coder...\033[0m"
-            "$BACKEND_DIR"/llama.cpp/build/bin/llama-cli -m "$BACKEND_DIR"/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -p "Scrivi una classe Python." -n 256 -c 512 -ngl 99
+            echo -e "\033[36m======================================================================\033[0m"
+            echo -e " \033[1;37mBENCHMARK QWEN2.5-CODER IN CORSO...\033[0m"
+            echo -e "\033[36m======================================================================\033[0m"
+            "$BACKEND_DIR"/llama.cpp/build/bin/llama-cli -m "$BACKEND_DIR"/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -p "Scrivi una classe Python per la gestione di un inventario." -n 256 -c 512 -ngl 99
+            echo -e "\n\033[32m[OK] Benchmark completato!\033[0m"
             read -n 1 -s -p "Premi un tasto per tornare alla dashboard..."
+            tput civis
         fi
     done
+    tput cnorm
 }
 
 purge_all() {
@@ -255,7 +317,7 @@ purge_all() {
 while true; do
     clear
     echo -e "\033[36m==================================================\033[0m"
-    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.8.4)      \033[0m"
+    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.8.6)      \033[0m"
     echo -e "\033[36m==================================================\033[0m"
     echo -e " Ambiente rilevato: \033[33m$VIRT_TYPE\033[0m"
     echo -e " Cartella Driver:   \033[33m$DRIVERS_DIR\033[0m"
