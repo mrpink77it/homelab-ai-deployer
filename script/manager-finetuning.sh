@@ -2,7 +2,7 @@
 # ==============================================================================
 # manager-finetuning.sh - Homelab AI Deployer
 # Ambiente: Baremetal/LXC, Debian 13 / Ubuntu 24
-# Versione: 1.8.1 (Driver .run Silent + Auto-Download + CUDA 13.2)
+# Versione: 1.8.2 (Driver .run Silent + ggml-org/llama.cpp Ufficiale + CUDA 13.2)
 # ==============================================================================
 set -e
 
@@ -114,15 +114,20 @@ fase_1_dipendenze() {
 fase_2_ai_stack() {
     clear
     echo -e "\033[36m======================================================================\033[0m"
-    echo -e " \033[1;37mFASE 2: Compilazione Llama.cpp & Setup Modelli\033[0m"
+    echo -e " \033[1;37mFASE 2: Compilazione Llama.cpp (ggml-org) & Setup Modelli\033[0m"
     echo -e "\033[36m======================================================================\033[0m"
 
     curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
     mkdir -p "$BACKEND_DIR"/{unsloth,models,llama.cpp}
     
+    # Aggiornato al repository ufficiale ggml-org/llama.cpp
     if [ ! -d "$BACKEND_DIR/llama.cpp/.git" ]; then
-        git clone https://github.com/ggerganov/llama.cpp.git "$BACKEND_DIR/llama.cpp"
+        git clone https://github.com/ggml-org/llama.cpp.git "$BACKEND_DIR/llama.cpp"
+    else
+        echo -e "\n\033[32m[+] Repository llama.cpp già presente, aggiorno...\033[0m"
+        cd "$BACKEND_DIR/llama.cpp" && git pull origin master || true
     fi
+    
     cd "$BACKEND_DIR/llama.cpp"
     rm -rf build
     cmake -B build -DGGML_CUDA=ON
@@ -243,14 +248,14 @@ purge_all() {
 while true; do
     clear
     echo -e "\033[36m==================================================\033[0m"
-    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.8.1)      \033[0m"
+    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.8.2)      \033[0m"
     echo -e "\033[36m==================================================\033[0m"
     echo -e " Ambiente rilevato: \033[33m$VIRT_TYPE\033[0m"
     echo -e " Cartella Driver:   \033[33m$DRIVERS_DIR\033[0m"
     echo " ------------------------------------------------"
     echo -e " \033[32mA.\033[0m Autodeploy Completo (Fasi 1-4)"
     echo " 1. Installa Dipendenze, Auto-Download Driver & CUDA 13.2"
-    echo " 2. Compila Llama.cpp & Modelli"
+    echo " 2. Compila Llama.cpp (ggml-org) & Modelli"
     echo " 3. Setup OpenCode"
     echo " 4. Dashboard Sensori e Benchmark"
     echo " 5. Esci"
