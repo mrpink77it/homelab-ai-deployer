@@ -2,7 +2,7 @@
 # ==============================================================================
 # manager-finetuning.sh - Homelab AI Deployer
 # Ambiente: Baremetal/LXC, Debian 13 / Ubuntu 24, NVIDIA CUDA
-# Versione: 1.1
+# Versione: 1.2 (Fix CMake Build per llama.cpp)
 # ==============================================================================
 set -e
 
@@ -81,7 +81,7 @@ fase_1_dipendenze() {
 }
 
 fase_2_ai_stack() {
-    # PARTE 1: Compilazione (gestita con la UI a scomparsa)
+    # PARTE 1: Compilazione con CMake (gestita con la UI a scomparsa)
     local cmd_compile='
         curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
         mkdir -p '"$BACKEND_DIR"'/{unsloth,models,llama.cpp}
@@ -89,11 +89,14 @@ fase_2_ai_stack() {
         if [ ! -d "'"$BACKEND_DIR"'/llama.cpp/.git" ]; then
             git clone https://github.com/ggerganov/llama.cpp.git '"$BACKEND_DIR"'/llama.cpp
         fi
-        cd '"$BACKEND_DIR"'/llama.cpp && make clean && make GGML_CUDA=1 CXXFLAGS="-Wno-stringop-overread" -j$(nproc)
+        cd '"$BACKEND_DIR"'/llama.cpp
+        rm -rf build
+        cmake -B build -DGGML_CUDA=ON
+        cmake --build build --config Release -j$(nproc)
     '
-    run_with_ui "2.A Compilazione Llama.cpp & Unsloth" "$cmd_compile"
+    run_with_ui "2.A Compilazione Llama.cpp (CMake) & Unsloth" "$cmd_compile"
     
-    # PARTE 2: Esecuzione DIRETTA dello script dei modelli (mostra nativamente wget)
+    # PARTE 2: Esecuzione DIRETTA dello script dei modelli
     clear
     echo -e "\033[36m======================================================================\033[0m"
     echo -e "\033[1;37m 2.B DOWNLOAD MODELLI AI (8gbModelCUDA.sh) \033[0m"
@@ -102,7 +105,7 @@ fase_2_ai_stack() {
     echo -e "\n\033[32m[OK]\033[0m Download modelli completato."
     sleep 1.5
 
-    # PARTE 3: Creazione servizio (torna alla UI a scomparsa)
+    # PARTE 3: Creazione servizio (percorsi aggiornati a build/bin/)
     local cmd_service='
         cat <<EOF > /etc/systemd/system/llama-server.service
 [Unit]
@@ -113,7 +116,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory='"$BACKEND_DIR"'/llama.cpp
-ExecStart='"$BACKEND_DIR"'/llama.cpp/llama-server -m '"$BACKEND_DIR"'/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -c 4096 --port 8080 -ngl 99
+ExecStart='"$BACKEND_DIR"'/llama.cpp/build/bin/llama-server -m '"$BACKEND_DIR"'/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -c 4096 --port 8080 -ngl 99
 Restart=always
 
 [Install]
@@ -191,7 +194,8 @@ fase_4_dashboard() {
             clear
             echo -e "\033[36mEsecuzione Benchmark Qwen2.5-Coder...\033[0m"
             local bench_log="$HOME/benchmark_${TIMESTAMP}.txt"
-            "$BACKEND_DIR"/llama.cpp/llama-cli -m "$BACKEND_DIR"/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -p "Scrivi una classe Python per gestire un database SQLite." -n 256 -c 512 -ngl 99 | tee "$bench_log"
+            # Path aggiornato a build/bin/llama-cli
+            "$BACKEND_DIR"/llama.cpp/build/bin/llama-cli -m "$BACKEND_DIR"/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -p "Scrivi una classe Python per gestire un database SQLite." -n 256 -c 512 -ngl 99 | tee "$bench_log"
             echo -e "\n\033[32mBenchmark salvato in $bench_log\033[0m"
             read -n 1 -s -p "Premi un tasto per tornare alla dashboard..."
         fi
@@ -221,6 +225,7 @@ fase_t_tuning() {
     fi
 
     echo -e "\n\033[32mAggiornamento servizio systemd in corso...\033[0m"
+    # Path aggiornato a build/bin/llama-server
     cat <<EOF > /etc/systemd/system/llama-server.service
 [Unit]
 Description=Llama.cpp API Server (Qwen2.5-Coder)
@@ -230,7 +235,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$BACKEND_DIR/llama.cpp
-ExecStart=$BACKEND_DIR/llama.cpp/llama-server -m $BACKEND_DIR/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -c $CTX -b $BATCH -ngl $NGL -t $THREADS -fa --port 8080
+ExecStart=$BACKEND_DIR/llama.cpp/build/bin/llama-server -m $BACKEND_DIR/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -c $CTX -b $BATCH -ngl $NGL -t $THREADS -fa --port 8080
 Restart=always
 
 [Install]
@@ -241,7 +246,8 @@ EOF
     systemctl restart llama-server
 
     echo -e "\n\033[36mEsecuzione Benchmark Breve per validazione...\033[0m"
-    "$BACKEND_DIR"/llama.cpp/llama-cli -m "$BACKEND_DIR"/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -p "Definisci un array." -n 32 -c "$CTX" -b "$BATCH" -ngl "$NGL" -t "$THREADS" -fa > /tmp/bench_tuning.txt 2>&1
+    # Path aggiornato a build/bin/llama-cli
+    "$BACKEND_DIR"/llama.cpp/build/bin/llama-cli -m "$BACKEND_DIR"/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -p "Definisci un array." -n 32 -c "$CTX" -b "$BATCH" -ngl "$NGL" -t "$THREADS" -fa > /tmp/bench_tuning.txt 2>&1
     grep -E "llama_print_timings" -A 5 /tmp/bench_tuning.txt || echo "Test completato con successo."
     
     TUNING_STATUS="\033[32m[STACK OTTIMIZZATO]\033[0m"
@@ -250,8 +256,8 @@ EOF
 
 purge_ai() {
     local cmd="
-        systemctl disable --now llama-server opencode 2>/dev/null || true
-        rm -f /etc/systemd/system/llama-server.service /etc/systemd/system/opencode.service
+        systemctl disable --now llama-server opencode unsloth 2>/dev/null || true
+        rm -f /etc/systemd/system/llama-server.service /etc/systemd/system/opencode.service /etc/systemd/system/unsloth.service
         systemctl daemon-reload
         rm -rf /opt/homelab-ai
     "
@@ -273,7 +279,7 @@ purge_all() {
 while true; do
     clear
     echo -e "\033[36m==================================================\033[0m"
-    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.1)        \033[0m"
+    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.2)        \033[0m"
     echo -e "\033[36m==================================================\033[0m"
     [ -n "$TUNING_STATUS" ] && echo -e " Stato: $TUNING_STATUS\n"
     
