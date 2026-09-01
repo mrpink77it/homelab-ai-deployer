@@ -2,7 +2,7 @@
 # ==============================================================================
 # manager-finetuning.sh - Homelab AI Deployer
 # Ambiente: Baremetal/LXC, Debian 13 / Ubuntu 24
-# Versione: 1.8 (Auto-Download Driver .run Ufficiale + CUDA 13.2)
+# Versione: 1.8.1 (Driver .run Silent + Auto-Download + CUDA 13.2)
 # ==============================================================================
 set -e
 
@@ -35,12 +35,12 @@ confirm_action() {
 }
 
 # ------------------------------------------------------------------------------
-# FASI DI INSTALLAZIONE (Esecuzione pulita e lineare)
+# FASI DI INSTALLAZIONE
 # ------------------------------------------------------------------------------
 fase_1_dipendenze() {
     clear
     echo -e "\033[36m======================================================================\033[0m"
-    echo -e " \033[1;37mFASE 1: Dipendenze, Driver NVIDIA (.run) & CUDA 13.2\033[0m"
+    echo -e " \033[1;37mFASE 1: Dipendenze, Driver NVIDIA (.run Silent) & CUDA 13.2\033[0m"
     echo -e "\033[36m======================================================================\033[0m"
     
     # 1. Installazione pacchetti di sistema e monitoraggio
@@ -58,7 +58,6 @@ fase_1_dipendenze() {
         fi
     fi
     
-    # Fallback su versione stabile se LXC non espone il file o se sei su Baremetal
     if [ -z "$driver_version" ]; then
         driver_version="550.54.14"
         echo -e "\033[33m[!] Versione driver di fallback impostata:\033[0m v$driver_version"
@@ -77,13 +76,13 @@ fase_1_dipendenze() {
 
     chmod +x "$run_path"
 
-    # 3. Esecuzione installer driver
+    # 3. Esecuzione installer driver in modalità SILENT (senza domande)
     if [ "$VIRT_TYPE" == "lxc" ]; then
-        echo -e "\n\033[32m[+] Installazione driver in modalità LXC (--no-kernel-modules)...\033[0m"
-        sh "$run_path" --no-kernel-modules --accept-license --no-questions || true
+        echo -e "\n\033[32m[+] Installazione driver in modalità LXC (Silent & No-Kernel-Modules)...\033[0m"
+        sh "$run_path" --silent --no-kernel-modules --accept-license --no-questions || true
     else
-        echo -e "\n\033[32m[+] Installazione driver in modalità Baremetal (--dkms)...\033[0m"
-        sh "$run_path" --dkms --accept-license --no-questions || true
+        echo -e "\n\033[32m[+] Installazione driver in modalità Baremetal (Silent & DKMS)...\033[0m"
+        sh "$run_path" --silent --dkms --accept-license --no-questions || true
     fi
 
     # 4. Installazione CUDA Toolkit 13.2 da repository ufficiale
@@ -135,7 +134,6 @@ fase_2_ai_stack() {
         echo "Script 8gbModelCUDA.sh non trovato (saltato download modelli)."
     fi
 
-    # Configurazione demone systemd per llama-server
     cat <<EOF > /etc/systemd/system/llama-server.service
 [Unit]
 Description=Llama.cpp API Server (Qwen2.5-Coder)
@@ -245,7 +243,7 @@ purge_all() {
 while true; do
     clear
     echo -e "\033[36m==================================================\033[0m"
-    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.8)        \033[0m"
+    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.8.1)      \033[0m"
     echo -e "\033[36m==================================================\033[0m"
     echo -e " Ambiente rilevato: \033[33m$VIRT_TYPE\033[0m"
     echo -e " Cartella Driver:   \033[33m$DRIVERS_DIR\033[0m"
