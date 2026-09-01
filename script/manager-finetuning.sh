@@ -2,20 +2,22 @@
 # ==============================================================================
 # manager-finetuning.sh - Homelab AI Deployer
 # Ambiente: Baremetal/LXC, Debian 13 / Ubuntu 24
-# Versione: 1.8.6 (Locale UTF-8 & Timezone Europe/Rome automatici)
+# Versione: 1.9.0 (Dashboard Moderna, API Guide, Unsloth Reintegrated & Bugfix)
 # ==============================================================================
 set -e
 
 BASE_DIR="/opt/homelab-ai-deployer"
+TOOLS_DIR="$BASE_DIR/tools"
 DRIVERS_DIR="$BASE_DIR/drivers"
 BACKEND_DIR="/opt/homelab-ai/backend"
 LOG_DIR="$BASE_DIR/logs"
-mkdir -p "$LOG_DIR" "$DRIVERS_DIR"
+mkdir -p "$LOG_DIR" "$DRIVERS_DIR" "$TOOLS_DIR" "$BACKEND_DIR"
+
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_EXT="$LOG_DIR/install_ext_$TIMESTAMP.log"
 LOG_ERR="$LOG_DIR/install_err_$TIMESTAMP.log"
-
 touch "$LOG_EXT" "$LOG_ERR"
+
 source /etc/os-release
 OS_ID=$ID
 OS_VER=$VERSION_ID
@@ -38,12 +40,10 @@ configure_system_locale_tz() {
     echo -e "\n\033[32m[+] Configurazione automatica Timezone (Europe/Rome) e Locales UTF-8...\033[0m"
     export DEBIAN_FRONTEND=noninteractive
 
-    # 1. Impostazione Timezone
     ln -snf /usr/share/zoneinfo/Europe/Rome /etc/localtime
     echo "Europe/Rome" > /etc/timezone
     dpkg-reconfigure -f noninteractive tzdata 2>/dev/null || true
 
-    # 2. Installazione e generazione Locales UTF-8
     apt-get update -y && apt-get install -y locales
     sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen
     sed -i '/it_IT.UTF-8/s/^# //g' /etc/locale.gen
@@ -63,7 +63,6 @@ fase_1_dipendenze() {
     echo -e " \033[1;37mFASE 1: Timezone, Locales, Driver NVIDIA (.run Silent) & CUDA 13.2\033[0m"
     echo -e "\033[36m======================================================================\033[0m"
     
-    # Configurazione preliminare Timezone e Locale UTF-8
     configure_system_locale_tz
 
     echo -e "\n\033[32m[+] Aggiornamento e installazione pacchetti base...\033[0m"
@@ -96,14 +95,11 @@ fase_1_dipendenze() {
     chmod +x "$run_path"
 
     if [ "$VIRT_TYPE" == "lxc" ]; then
-        echo -e "\n\033[32m[+] Installazione driver in modalità LXC (Silent & No-Kernel-Modules)...\033[0m"
         sh "$run_path" --silent --no-kernel-modules --accept-license --no-questions || true
     else
-        echo -e "\n\033[32m[+] Installazione driver in modalità Baremetal (Silent & DKMS)...\033[0m"
         sh "$run_path" --silent --dkms --accept-license --no-questions || true
     fi
 
-    echo -e "\n\033[32m[+] Configurazione repository e installazione CUDA Toolkit 13.2...\033[0m"
     local repo_distro="debian13"
     if [ "$OS_ID" == "ubuntu" ]; then
         repo_distro="ubuntu2404"
@@ -116,7 +112,6 @@ fase_1_dipendenze() {
     apt install -y cuda-toolkit-13-2
 
     if ! grep -q "cuda-13.2/bin" ~/.bashrc; then
-        cp ~/.bashrc ~/.bashrc-backup
         echo 'export PATH=/usr/local/cuda-13.2/bin${PATH:+:${PATH}}' >> ~/.bashrc
     fi
     
@@ -145,7 +140,6 @@ fase_2_ai_stack() {
     if [ ! -d "$BACKEND_DIR/llama.cpp/.git" ]; then
         git clone https://github.com/ggml-org/llama.cpp.git "$BACKEND_DIR/llama.cpp"
     else
-        echo -e "\n\033[32m[+] Repository llama.cpp già presente, aggiorno...\033[0m"
         cd "$BACKEND_DIR/llama.cpp" && git pull origin master || true
     fi
     
@@ -154,10 +148,10 @@ fase_2_ai_stack() {
     cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
     cmake --build build --config Release -j$(nproc)
 
-    if [ -f "$BASE_DIR/tools/8gbModelCUDA.sh" ]; then
-        bash "$BASE_DIR/tools/8gbModelCUDA.sh"
+    if [ -f "$TOOLS_DIR/8gbModelCUDA.sh" ]; then
+        bash "$TOOLS_DIR/8gbModelCUDA.sh"
     else
-        echo "Script 8gbModelCUDA.sh non trovato (saltato download modelli)."
+        echo -e "\n\033[33m[!] Script 8gbModelCUDA.sh non trovato in $TOOLS_DIR (saltato download automatico).\033[0m"
     fi
 
     cat <<EOF > /etc/systemd/system/llama-server.service
@@ -179,32 +173,39 @@ EOF
     systemctl daemon-reload
     systemctl enable --now llama-server
     
-    echo -e "\n\033[32m[OK] Llama.cpp compilato e servizio avviato!\033[0m"
+    echo -e "\n\033[32m[OK] Llama.cpp compilato e servizio avviato sulla porta 8080!\033[0m"
     read -p "Premi Invio per continuare..."
 }
 
-fase_3_opencode() {
+fase_3_unsloth_studio() {
     clear
     echo -e "\033[36m======================================================================\033[0m"
-    echo -e " \033[1;37mFASE 3: Setup OpenCode Assistant\033[0m"
+    echo -e " \033[1;37mFASE 3: Setup Unsloth Environment & Fine-Tuning Studio\033[0m"
     echo -e "\033[36m======================================================================\033[0m"
 
-    mkdir -p /opt/homelab-ai/opencode
-    cd /opt/homelab-ai/opencode
-    uv venv --clear venv
+    mkdir -p "$BACKEND_DIR/unsloth"
+    cd "$BACKEND_DIR/unsloth"
 
-    cat <<EOF > /etc/systemd/system/opencode.service
+    echo -e "\n\033[32m[+] Creazione virtual environment con UV e installazione Unsloth...\033[0m"
+    uv venv --python 3.11 venv --clear
+    source venv/bin/activate
+    
+    # Installazione pacchetti essenziali per PyTorch CUDA 12.x / 13 compatibile
+    pip install --upgrade pip
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git" xformers
+
+    cat <<EOF > /etc/systemd/system/unsloth-studio.service
 [Unit]
-Description=OpenCode UI Assistant
-After=llama-server.service
+Description=Unsloth Fine-Tuning & Training Worker
+After=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/homelab-ai/opencode
-Environment="LLM_API=http://127.0.0.1:8080"
-Environment="PATH=/opt/homelab-ai/opencode/venv/bin:/usr/local/bin:/usr/bin"
-ExecStart=/bin/bash -c "echo 'OpenCode in ascolto (Placeholder)' && sleep infinity"
+WorkingDirectory=$BACKEND_DIR/unsloth
+Environment="PATH=$BACKEND_DIR/unsloth/venv/bin:/usr/local/bin:/usr/bin"
+ExecStart=/bin/bash -c "source venv/bin/activate && python3 -c 'import unsloth; print(\"Unsloth Studio pronto per il fine-tuning.\")' && sleep infinity"
 Restart=on-failure
 
 [Install]
@@ -212,9 +213,9 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable --now opencode
-    
-    echo -e "\n\033[32m[OK] Servizio OpenCode configurato!\033[0m"
+    systemctl enable --now unsloth-studio
+
+    echo -e "\n\033[32m[OK] Unsloth Studio integrato e configurato in /opt/homelab-ai/backend/unsloth!\033[0m"
     read -p "Premi Invio per continuare..."
 }
 
@@ -244,16 +245,16 @@ fase_4_dashboard() {
 
         local llama_status="\033[31m[OFFLINE]\033[0m"
         if systemctl is-active --quiet llama-server; then
-            llama_status="\033[32m[ATTIVO]\033[0m (Porta 8080)"
+            llama_status="\033[32m[ATTIVO]\033[0m  ➔ API: http://127.0.0.1:8080/v1"
         fi
 
-        local opencode_status="\033[31m[OFFLINE]\033[0m"
-        if systemctl is-active --quiet opencode; then
-            opencode_status="\033[32m[ATTIVO]\033[0m"
+        local unsloth_status="\033[31m[OFFLINE]\033[0m"
+        if systemctl is-active --quiet unsloth-studio; then
+            unsloth_status="\033[32m[ATTIVO]\033[0m  ➔ Workspace: /opt/homelab-ai/backend/unsloth"
         fi
 
         echo -e "\033[1;36m╔════════════════════════════════════════════════════════════════════════════╗\033[0m"
-        echo -e "\033[1;36m║\033[1;33m               HOMELAB AI - ADVANCED HARDWARE & AI MONITOR                  \033[1;36m║\033[0m"
+        echo -e "\033[1;36m║\033[1;33m             HOMELAB AI - ADVANCED HARDWARE & SERVICES MONITOR              \033[1;36m║\033[0m"
         echo -e "\033[1;36m╠════════════════════════════════════════════════════════════════════════════╣\033[0m"
         echo -e "\033[1;36m║\033[0m \033[1mUptime:   \033[0m $uptime_str"
         echo -e "\033[1;36m║\033[0m \033[1mLoad Avg: \033[0m $load_avg"
@@ -264,15 +265,20 @@ fase_4_dashboard() {
         echo -e "\033[1;36m║\033[0m Temp:  \033[1;31m${gpu_temp}°C\033[0m  | Fan Speed: \033[36m${gpu_fan}\033[0m | Power Draw: \033[33m${gpu_power}\033[0m"
         echo -e "\033[1;36m║\033[0m Core:  \033[1;32m${gpu_util}\033[0m    | VRAM Used: \033[1;32m${gpu_mem_used} / ${gpu_mem_total}\033[0m"
         echo -e "\033[1;36m╠────────────────────────────────────────────────────────────────────────────╣\033[0m"
-        echo -e "\033[1;36m║\033[1;35m [ 🤖 AI STACK SERVICES ]                                                    \033[1;36m║\033[0m"
-        echo -e "\033[1;36m║\033[0m llama.cpp Server : $llama_status"
-        echo -e "\033[1;36m║\033[0m OpenCode Assistant : $opencode_status"
+        echo -e "\033[1;36m║\033[1;35m [ 🤖 AI STACK SERVICES & API ENDPOINTS ]                                   \033[1;36m║\033[0m"
+        echo -e "\033[1;36m║\033[0m 1. llama.cpp (Inference):  $llama_status"
+        echo -e "\033[1;36m║\033[0m 2. Unsloth (Fine-Tuning): $unsloth_status"
+        echo -e "\033[1;36m╠────────────────────────────────────────────────────────────────────────────╣\033[0m"
+        echo -e "\033[1;36m║\033[1;33m QUICK API TEST (Curl):                                                     \033[1;36m║\033[0m"
+        echo -e "\033[1;36m║\033[0m curl http://127.0.0.1:8080/v1/chat/completions -d '{\"model\":\"qwen\",\"messages\":[{\"role\":\"user\",\"content\":\"Ciao\"}]}'\033[0m"
         echo -e "\033[1;36m╠════════════════════════════════════════════════════════════════════════════╣\033[0m"
-        echo -e "\033[1;36m║\033[1;33m COMMANDS: \033[0m[x] CSV Export  [b] AI Benchmark  [r] Refresh  [q] Exit      \033[1;36m║\033[0m"
+        echo -e "\033[1;36m║\033[1;33m COMMANDS: \033[0m[x] CSV Export  [b] Benchmark  [r] Refresh  [q] Exit      \033[1;36m║\033[0m"
         echo -e "\033[1;36m╚════════════════════════════════════════════════════════════════════════════╝\033[0m"
         echo -n -e "\033[1mSeleziona comando:\033[0m "
 
-        read -t 2 -n 1 -s key
+        # FIX CRITICO: Aggiunto '|| true' per evitare che il timeout di read chiuda lo script con set -e
+        read -t 2 -n 1 -s key || true
+
         if [[ "${key,,}" == "q" ]]; then
             tput cnorm
             break
@@ -301,8 +307,8 @@ fase_4_dashboard() {
 purge_all() {
     clear
     echo -e "\033[31m[!] Pulizia totale in corso...\033[0m"
-    systemctl disable --now llama-server opencode unsloth 2>/dev/null || true
-    rm -f /etc/systemd/system/llama-server.service /etc/systemd/system/opencode.service
+    systemctl disable --now llama-server unsloth-studio 2>/dev/null || true
+    rm -f /etc/systemd/system/llama-server.service /etc/systemd/system/unsloth-studio.service
     systemctl daemon-reload
     rm -rf /opt/homelab-ai
     apt-get purge -y '*nvidia*' '*cuda*' '*cublas*' || true
@@ -317,16 +323,16 @@ purge_all() {
 while true; do
     clear
     echo -e "\033[36m==================================================\033[0m"
-    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.8.6)      \033[0m"
+    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.9.0)      \033[0m"
     echo -e "\033[36m==================================================\033[0m"
     echo -e " Ambiente rilevato: \033[33m$VIRT_TYPE\033[0m"
-    echo -e " Cartella Driver:   \033[33m$DRIVERS_DIR\033[0m"
+    echo -e " Cartella Tools:    \033[33m$TOOLS_DIR\033[0m"
     echo " ------------------------------------------------"
     echo -e " \033[32mA.\033[0m Autodeploy Completo (Fasi 1-4)"
-    echo " 1. Installa Dipendenze, Auto-Download Driver & CUDA 13.2"
-    echo " 2. Compila Llama.cpp (ggml-org) & Modelli"
-    echo " 3. Setup OpenCode"
-    echo " 4. Dashboard Sensori e Benchmark"
+    echo " 1. Installa Dipendenze, Locales/TZ, Driver & CUDA 13.2"
+    echo " 2. Compila Llama.cpp & Modelli (Porta 8080)"
+    echo " 3. Setup Unsloth Studio & Fine-Tuning Environment"
+    echo " 4. Dashboard Sensori, API Guide & Benchmark"
     echo " 5. Esci"
     echo " ------------------------------------------------"
     echo -e " \033[31;1mP.\033[0m PURGE Totale (AI + Driver/CUDA)"
@@ -336,11 +342,11 @@ while true; do
     case "${key,,}" in
         a)
             if confirm_action "Avvia l'installazione completa."; then
-                fase_1_dipendenze && fase_2_ai_stack && fase_3_opencode && fase_4_dashboard
+                fase_1_dipendenze && fase_2_ai_stack && fase_3_unsloth_studio && fase_4_dashboard
             fi ;;
         1) confirm_action "Avvia installazione Fase 1." && fase_1_dipendenze ;;
         2) confirm_action "Compila Llama.cpp e scarica i modelli." && fase_2_ai_stack ;;
-        3) confirm_action "Crea l'ambiente per OpenCode." && fase_3_opencode ;;
+        3) confirm_action "Configura Unsloth Studio." && fase_3_unsloth_studio ;;
         4) fase_4_dashboard ;;
         5) clear; exit 0 ;;
         p) confirm_action "Elimina l'ambiente AI e disinstalla driver/CUDA." && purge_all ;;
