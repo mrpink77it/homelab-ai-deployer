@@ -1,4 +1,4 @@
-# Homelab AI Deployer - Technical Reference Manual
+# Homelab AI Deployer - Fine Tuning - NVIDIA GPU Workstation
 **Script:** `manager-finetuning.sh` (Versione 1.9.3)  
 **Ambiente Target:** Bare-metal / LXC (Debian 13 / Ubuntu 24)  
 **Hardware Ottimizzato:** NVIDIA RTX 3060 Ti / Architettura CUDA  
@@ -43,7 +43,7 @@ Lo script organizza il file system secondo una separazione netta tra i file di g
 
 ### Fase 2: Compilazione Llama.cpp & Gestione Centralizzata Modelli
 * **Clonazione e CMake:** Clona o aggiorna il repository ufficiale `ggml-org/llama.cpp`, pulisce le build precedenti e compila il progetto con il flag CUDA attivo (`-DGGML_CUDA=ON`) sfruttando tutti i core della CPU (`-j$(nproc)`).
-* **Modelli Centralizzati:** Verifica la presenza della cartella centralizzata `models/1_LLM_Text/` ed esegue l'eventuale script di download helper se presente in `tools/`.
+* **Modelli Centralizzati:** Verifica la presenza della cartella centralizzata `models/` ed esegue l'eventuale script di download helper se presente in `tools/`.
 * **Servizio Systemd (`llama-server.service`):** Configura e avvia il demone di sistema per mantenere il server di inferenza sempre attivo sulla porta `8080` con caricamento del modello in VRAM (`-ngl 99`).
 
 ### Fase 3: Installazione Unsloth Studio & External Backend Binding
