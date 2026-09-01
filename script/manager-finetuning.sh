@@ -1,8 +1,8 @@
 #!/bin/bash
 # ==============================================================================
 # manager-finetuning.sh - Homelab AI Deployer
-# Ambiente: Baremetal/LXC, Debian 13 / Ubuntu 24, NVIDIA CUDA
-# Versione: 1.2 (Fix CMake Build per llama.cpp)
+# Ambiente: Baremetal/LXC, Debian 13 / Ubuntu 24
+# Versione: 1.4 (UI Pseudo-Grafica + Logica NVIDIA nativa integrata)
 # ==============================================================================
 set -e
 
@@ -22,45 +22,96 @@ VIRT_TYPE=$(systemd-detect-virt || echo "baremetal")
 TUNING_STATUS=""
 
 # ------------------------------------------------------------------------------
-# MOTORE UI E CONFERME
+# MOTORE UI PSEUDO-GRAFICO (Barra % + Mini Terminale)
 # ------------------------------------------------------------------------------
 confirm_action() {
     local desc="$1"
     echo -e "\n\033[33mDESCRIZIONE:\033[0m $desc"
     read -p "Sei sicuro di voler procedere? [S/n]: " choice
     case "$choice" in
-        [Nn]* ) echo -e "\033[31mOperazione annullata.\033[0m"; sleep 1.5; return 1 ;;
+        [Nn]* ) echo -e "\033[31mOperazione annullata.\033[0m"; sleep 1; return 1 ;;
         * ) return 0 ;;
     esac
 }
 
-run_with_ui() {
+ui_execute() {
     local step_name="$1"
-    local command="$2"
-    
+    local desc="$2"
+    local cmd="$3"
+    local est_time="${4:-30}" # Tempo stimato per la barra (default 30s)
+
     clear
     echo -e "\033[36m======================================================================\033[0m"
-    echo -e "\033[1;37m FASE: $step_name \033[0m"
+    echo -e " \033[1;37mFASE:\033[0m $step_name "
     echo -e "\033[36m======================================================================\033[0m"
-    echo -e "OS: $OS_ID $OS_VER | Ambiente: $VIRT_TYPE | Log: $LOG_EXT"
-    echo -e "\033[90m------------------------- LOG TERMINALE ------------------------------\033[0m"
+    echo -e " \033[33mDESCRIZIONE:\033[0m $desc"
+    echo -e "\033[36m======================================================================\033[0m"
     
-    eval "$command" >> "$LOG_EXT" 2>> "$LOG_ERR" &
-    local cmd_pid=$!
-    tail -f -n 12 "$LOG_EXT" &
-    local tail_pid=$!
-    
-    wait $cmd_pid
-    local exit_code=$?
-    kill $tail_pid 2>/dev/null || true
-    
+    # Setup layout fisso
+    echo -e " AVANZAMENTO: [\033[32m░░░░░░░░░░░░░░░░░░░░\033[0m] 0% "
+    echo -e "\033[90m--------------------------- MINI TERMINALE ---------------------------\033[0m"
+    for i in {1..8}; do echo -e " \033[K"; done
     echo -e "\033[90m----------------------------------------------------------------------\033[0m"
+
+    # Esecuzione comando in background
+    eval "$cmd" >> "$LOG_EXT" 2>> "$LOG_ERR" &
+    local pid=$!
+    local elapsed=0
+
+    # Loop di aggiornamento UI
+    while kill -0 $pid 2>/dev/null; do
+        local pct=$(( elapsed * 100 / est_time ))
+        [ $pct -gt 99 ] && pct=99
+        local filled=$(( pct / 5 ))
+        local empty=$(( 20 - filled ))
+        local bar=$(printf "%${filled}s" | tr ' ' '█')$(printf "%${empty}s" | tr ' ' '░')
+        
+        # Riporta il cursore su di 11 righe per aggiornare
+        echo -en "\033[11A\r"
+        echo -e " AVANZAMENTO: [\033[32m${bar}\033[0m] $pct% (${elapsed}s) \033[K"
+        echo -e "\033[90m--------------------------- MINI TERMINALE ---------------------------\033[0m"
+        
+        # Stampa le ultime 8 righe del log troncate a 66 caratteri
+        local current_lines=0
+        while IFS= read -r line; do
+            printf "  %-66s\033[K\n" "${line:0:66}"
+            ((current_lines++))
+        done < <(tail -n 8 "$LOG_EXT")
+        
+        # Riempi lo spazio se ci sono meno di 8 righe
+        for ((i=current_lines; i<8; i++)); do echo -e " \033[K"; done
+        
+        # Salta il footer inferiore
+        echo -en "\033[1B\r"
+        
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    wait $pid
+    local exit_code=$?
+
+    # Aggiornamento finale UI
+    echo -en "\033[11A\r"
     if [ $exit_code -eq 0 ]; then
-        echo -e "\n\033[32m[OK]\033[0m Operazione completata con successo."
-        sleep 1.5
+        echo -e " AVANZAMENTO: [\033[32m████████████████████\033[0m] 100% \033[32m[OK]\033[0m \033[K"
     else
+        echo -e " AVANZAMENTO: [\033[31m████████████████████\033[0m] 100% \033[31m[ERRORE]\033[0m \033[K"
+    fi
+    echo -e "\033[90m--------------------------- MINI TERMINALE ---------------------------\033[0m"
+    local current_lines=0
+    while IFS= read -r line; do
+        printf "  %-66s\033[K\n" "${line:0:66}"
+        ((current_lines++))
+    done < <(tail -n 8 "$LOG_EXT")
+    for ((i=current_lines; i<8; i++)); do echo -e " \033[K"; done
+    echo -e "\033[90m----------------------------------------------------------------------\033[0m"
+
+    if [ $exit_code -ne 0 ]; then
         echo -e "\n\033[31m[ERRORE CRITICO]\033[0m Operazione fallita. Controlla $LOG_ERR."
-        read -p "Premi Invio per continuare..."
+        read -p "Premi Invio per tornare al menu..."
+    else
+        sleep 1.5
     fi
 }
 
@@ -68,20 +119,30 @@ run_with_ui() {
 # FASI DI INSTALLAZIONE
 # ------------------------------------------------------------------------------
 fase_1_dipendenze() {
-    local cmd='
-        PYTHONWARNINGS="ignore" apt-get update -y && \
-        PYTHONWARNINGS="ignore" apt-get install -y build-essential cmake git curl wget psmisc python3-venv python3-full hwinfo htop
+    # Integrazione logica corretta per NVIDIA (LXC vs Baremetal)
+    local setup_nvidia_cmd=""
+    if [ "$VIRT_TYPE" == "lxc" ]; then
+        # In LXC installiamo SOLAMENTE il toolkit CUDA e le dipendenze userspace.
+        # NIENTE nvidia-driver per evitare conflitti NVML col kernel del nodo Proxmox.
+        setup_nvidia_cmd='PYTHONWARNINGS="ignore" apt-get install -y --no-install-recommends nvidia-cuda-toolkit'
+    else
+        # In Baremetal installiamo il pacchetto driver completo
         if [ "$OS_ID" == "debian" ]; then
-            PYTHONWARNINGS="ignore" apt-get install -y nvidia-driver nvidia-cuda-toolkit
+            setup_nvidia_cmd='PYTHONWARNINGS="ignore" apt-get install -y nvidia-driver nvidia-cuda-toolkit'
         else
-            PYTHONWARNINGS="ignore" apt-get install -y nvidia-driver-535 nvidia-cuda-toolkit
+            setup_nvidia_cmd='PYTHONWARNINGS="ignore" apt-get install -y nvidia-driver-535 nvidia-cuda-toolkit'
         fi
+    fi
+
+    local cmd_base='
+        PYTHONWARNINGS="ignore" apt-get update -y && \
+        PYTHONWARNINGS="ignore" apt-get install -y build-essential cmake git curl wget psmisc python3-venv python3-full hwinfo htop && \
+        '"$setup_nvidia_cmd"'
     '
-    run_with_ui "1. Dipendenze e Driver NVIDIA" "$cmd"
+    ui_execute "1. Dipendenze e NVIDIA/CUDA" "Installazione pacchetti base e librerie NVIDIA (Modo: $VIRT_TYPE)" "$cmd_base" 60
 }
 
 fase_2_ai_stack() {
-    # PARTE 1: Compilazione con CMake (gestita con la UI a scomparsa)
     local cmd_compile='
         curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
         mkdir -p '"$BACKEND_DIR"'/{unsloth,models,llama.cpp}
@@ -94,9 +155,8 @@ fase_2_ai_stack() {
         cmake -B build -DGGML_CUDA=ON
         cmake --build build --config Release -j$(nproc)
     '
-    run_with_ui "2.A Compilazione Llama.cpp (CMake) & Unsloth" "$cmd_compile"
+    ui_execute "2.A Compilazione Llama.cpp" "Fetch repo ufficiale e build CMake con accelerazione CUDA" "$cmd_compile" 120
     
-    # PARTE 2: Esecuzione DIRETTA dello script dei modelli
     clear
     echo -e "\033[36m======================================================================\033[0m"
     echo -e "\033[1;37m 2.B DOWNLOAD MODELLI AI (8gbModelCUDA.sh) \033[0m"
@@ -105,7 +165,6 @@ fase_2_ai_stack() {
     echo -e "\n\033[32m[OK]\033[0m Download modelli completato."
     sleep 1.5
 
-    # PARTE 3: Creazione servizio (percorsi aggiornati a build/bin/)
     local cmd_service='
         cat <<EOF > /etc/systemd/system/llama-server.service
 [Unit]
@@ -124,18 +183,9 @@ WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
         systemctl enable --now llama-server
-        sleep 5
+        sleep 3
     '
-    run_with_ui "2.C Configurazione Servizio llama-server" "$cmd_service"
-    
-    clear
-    echo "=== CONTROLLO SERVIZI AI ==="
-    if systemctl is-active --quiet llama-server; then
-        echo -e "\033[32m[OK] llama-server in esecuzione.\033[0m"
-    else
-        echo -e "\033[31m[ERRORE] llama-server non è partito.\033[0m"
-    fi
-    read -n 1 -s -p "Premi un tasto per continuare..."
+    ui_execute "2.C Configurazione Servizio" "Creazione demone systemd per llama-server" "$cmd_service" 10
 }
 
 fase_3_opencode() {
@@ -164,7 +214,7 @@ EOF
         systemctl daemon-reload
         systemctl enable --now opencode
     '
-    run_with_ui "3. Setup OpenCode" "$cmd"
+    ui_execute "3. Setup OpenCode" "Creazione virtual environment e demone per l'UI" "$cmd" 15
 }
 
 fase_4_dashboard() {
@@ -176,7 +226,7 @@ fase_4_dashboard() {
         if command -v nvidia-smi &> /dev/null; then
             nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total --format=csv,noheader | awk -F', ' '{print "GPU: "$1" | Temp: "$2"C | Uso: "$3" | VRAM: "$4"/"$5}'
         else
-            echo "NVIDIA-SMI non disponibile."
+            echo "NVIDIA-SMI non disponibile o errore librerie."
         fi
         echo "--------------------------------------------------------"
         systemctl is-active --quiet llama-server && echo -e "llama.cpp: \033[32mATTIVO\033[0m (Porta 8080)" || echo -e "llama.cpp: \033[31mOFFLINE\033[0m"
@@ -187,90 +237,28 @@ fase_4_dashboard() {
         if [[ "${key,,}" == "q" ]]; then break;
         elif [[ "${key,,}" == "x" ]]; then
             local csv_file="$HOME/ai_telemetry_$TIMESTAMP.csv"
-            nvidia-smi --query-gpu=timestamp,name,temperature.gpu,utilization.gpu,memory.used --format=csv >> "$csv_file"
+            nvidia-smi --query-gpu=timestamp,name,temperature.gpu,utilization.gpu,memory.used --format=csv >> "$csv_file" 2>/dev/null || echo "Errore export."
             echo -e "\033[32mEsportato log in $csv_file\033[0m"
             sleep 1
         elif [[ "${key,,}" == "b" ]]; then
             clear
             echo -e "\033[36mEsecuzione Benchmark Qwen2.5-Coder...\033[0m"
-            local bench_log="$HOME/benchmark_${TIMESTAMP}.txt"
-            # Path aggiornato a build/bin/llama-cli
-            "$BACKEND_DIR"/llama.cpp/build/bin/llama-cli -m "$BACKEND_DIR"/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -p "Scrivi una classe Python per gestire un database SQLite." -n 256 -c 512 -ngl 99 | tee "$bench_log"
-            echo -e "\n\033[32mBenchmark salvato in $bench_log\033[0m"
+            "$BACKEND_DIR"/llama.cpp/build/bin/llama-cli -m "$BACKEND_DIR"/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -p "Scrivi una classe Python." -n 256 -c 512 -ngl 99
             read -n 1 -s -p "Premi un tasto per tornare alla dashboard..."
         fi
     done
 }
 
-fase_t_tuning() {
-    clear
-    echo -e "\033[36m=== AUTO-TUNING LLAMA.CPP ===\033[0m"
-    VRAM_TOTAL=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | awk '{print $1}' || echo "0")
-    
-    if [ "$VRAM_TOTAL" -ge 24000 ]; then NGL=99; CTX=32768; BATCH=2048; THREADS=8;
-    elif [ "$VRAM_TOTAL" -ge 16000 ]; then NGL=99; CTX=16384; BATCH=1024; THREADS=6;
-    elif [ "$VRAM_TOTAL" -ge 7900 ]; then NGL=99; CTX=8192; BATCH=512; THREADS=4;
-    else NGL=20; CTX=4096; BATCH=256; THREADS=$(nproc); fi
-
-    echo -e "VRAM Rilevata: \033[32m${VRAM_TOTAL} MB\033[0m"
-    echo -e "Parametri Calcolati: CTX=\033[33m$CTX\033[0m | NGL=\033[33m$NGL\033[0m | BATCH=\033[33m$BATCH\033[0m | THREADS=\033[33m$THREADS\033[0m\n"
-
-    read -t 5 -p "Premi INVIO per accettare (default in 5s) o digita 'M' per modificare: " tuning_choice || tuning_choice=""
-    
-    if [[ "${tuning_choice,,}" == "m" ]]; then
-        read -p "Context Size (es. 8192): " CTX
-        read -p "GPU Layers (es. 99): " NGL
-        read -p "Batch Size (es. 512): " BATCH
-        read -p "Threads (es. 4): " THREADS
-    fi
-
-    echo -e "\n\033[32mAggiornamento servizio systemd in corso...\033[0m"
-    # Path aggiornato a build/bin/llama-server
-    cat <<EOF > /etc/systemd/system/llama-server.service
-[Unit]
-Description=Llama.cpp API Server (Qwen2.5-Coder)
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=$BACKEND_DIR/llama.cpp
-ExecStart=$BACKEND_DIR/llama.cpp/build/bin/llama-server -m $BACKEND_DIR/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -c $CTX -b $BATCH -ngl $NGL -t $THREADS -fa --port 8080
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
-    systemctl restart llama-server
-
-    echo -e "\n\033[36mEsecuzione Benchmark Breve per validazione...\033[0m"
-    # Path aggiornato a build/bin/llama-cli
-    "$BACKEND_DIR"/llama.cpp/build/bin/llama-cli -m "$BACKEND_DIR"/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -p "Definisci un array." -n 32 -c "$CTX" -b "$BATCH" -ngl "$NGL" -t "$THREADS" -fa > /tmp/bench_tuning.txt 2>&1
-    grep -E "llama_print_timings" -A 5 /tmp/bench_tuning.txt || echo "Test completato con successo."
-    
-    TUNING_STATUS="\033[32m[STACK OTTIMIZZATO]\033[0m"
-    read -n 1 -s -p "Premi un tasto per tornare al menu principale..."
-}
-
-purge_ai() {
+purge_all() {
     local cmd="
         systemctl disable --now llama-server opencode unsloth 2>/dev/null || true
-        rm -f /etc/systemd/system/llama-server.service /etc/systemd/system/opencode.service /etc/systemd/system/unsloth.service
+        rm -f /etc/systemd/system/llama-server.service /etc/systemd/system/opencode.service
         systemctl daemon-reload
         rm -rf /opt/homelab-ai
-    "
-    run_with_ui "X. Rimozione Ambiente AI" "$cmd"
-}
-
-purge_all() {
-    purge_ai
-    local cmd="
-        PYTHONWARNINGS=\"ignore\" apt-get purge -y '*nvidia*' '*cuda*' '*cublas*'
+        PYTHONWARNINGS=\"ignore\" apt-get purge -y '*nvidia*' '*cuda*' '*cublas*' || true
         PYTHONWARNINGS=\"ignore\" apt-get autoremove -y
     "
-    run_with_ui "P. Purge Ambiente AI e NVIDIA" "$cmd"
+    ui_execute "P. PURGE AMBIENTE" "Eliminazione stack AI e disinstallazione librerie NVIDIA" "$cmd" 45
 }
 
 # ------------------------------------------------------------------------------
@@ -279,42 +267,31 @@ purge_all() {
 while true; do
     clear
     echo -e "\033[36m==================================================\033[0m"
-    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.2)        \033[0m"
+    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.4)        \033[0m"
     echo -e "\033[36m==================================================\033[0m"
-    [ -n "$TUNING_STATUS" ] && echo -e " Stato: $TUNING_STATUS\n"
-    
+    echo -e " Ambiente rilevato: \033[33m$VIRT_TYPE\033[0m"
+    echo " ------------------------------------------------"
     echo -e " \033[32mA.\033[0m Autodeploy Completo (Fasi 1-4)"
-    echo " ------------------------------------------------"
-    echo " 1. Installa Dipendenze e NVIDIA/CUDA"
-    echo " 2. Compila Llama.cpp & Unsloth (Download Modelli)"
-    echo " 3. Setup OpenCode (Interfaccia UI Baremetal)"
+    echo " 1. Installa Dipendenze e NVIDIA (Nativo)"
+    echo " 2. Compila Llama.cpp & Unsloth"
+    echo " 3. Setup OpenCode"
     echo " 4. Dashboard Sensori e Benchmark"
-    echo " 5. Servizi Accessori (services.sh)"
-    echo " 6. Esci"
+    echo " 5. Esci"
     echo " ------------------------------------------------"
-    echo -e " \033[33mT.\033[0m Tuning (Ottimizzazione Parametri VRAM)"
-    echo -e " \033[31mX.\033[0m Rimuovi ambiente AI (Modelli e Demoni)"
-    echo -e " \033[31;1mP.\033[0m PURGE Totale (AI + NVIDIA/CUDA)"
+    echo -e " \033[31;1mP.\033[0m PURGE Totale (AI + NVIDIA/CUDA via APT)"
     echo -e "\033[36m==================================================\033[0m"
     read -n 1 -s key
-    echo ""
 
     case "${key,,}" in
         a)
-            if confirm_action "Avvierà l'installazione completa (Fasi 1, 2, 3 e 4 in sequenza automatica)."; then
-                fase_1_dipendenze
-                fase_2_ai_stack
-                fase_3_opencode
-                fase_4_dashboard
+            if confirm_action "Avvia l'installazione completa."; then
+                fase_1_dipendenze; fase_2_ai_stack; fase_3_opencode; fase_4_dashboard
             fi ;;
-        1) confirm_action "Installa compilatori, driver NVIDIA e Toolkit CUDA." && fase_1_dipendenze ;;
-        2) confirm_action "Compila Llama.cpp e scarica i modelli AI in $BACKEND_DIR/models/." && fase_2_ai_stack ;;
-        3) confirm_action "Crea un venv isolato per OpenCode e lo connette al demone Llama.cpp." && fase_3_opencode ;;
-        4) confirm_action "Avvia l'interfaccia di monitoraggio in tempo reale (Sensori e Benchmark)." && fase_4_dashboard ;;
-        5) confirm_action "Esegue lo script dei servizi accessori." && bash "$BASE_DIR/tools/services.sh" 2>/dev/null || echo "File services.sh non trovato!" && sleep 2 ;;
-        6) clear; exit 0 ;;
-        t) confirm_action "Ricalcola NGL, Contesto, Batch e Threads in base alla VRAM disponibile." && fase_t_tuning ;;
-        x) confirm_action "Elimina Llama.cpp, OpenCode e tutti i modelli scaricati. I driver NVIDIA rimarranno." && purge_ai ;;
-        p) confirm_action "DISTRUTTIVO: Elimina l'ambiente AI e disinstalla completamente i driver NVIDIA/CUDA." && purge_all ;;
+        1) confirm_action "Installa dipendenze base e NVIDIA ($VIRT_TYPE)." && fase_1_dipendenze ;;
+        2) confirm_action "Compila Llama.cpp e scarica i modelli." && fase_2_ai_stack ;;
+        3) confirm_action "Crea l'ambiente per OpenCode." && fase_3_opencode ;;
+        4) fase_4_dashboard ;;
+        5) clear; exit 0 ;;
+        p) confirm_action "Elimina l'ambiente AI e tenta di rimuovere i pacchetti NVIDIA." && purge_all ;;
     esac
 done
