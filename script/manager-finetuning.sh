@@ -2,14 +2,15 @@
 # ==============================================================================
 # manager-finetuning.sh - Homelab AI Deployer
 # Ambiente: Baremetal/LXC, Debian 13 / Ubuntu 24
-# Versione: 1.5 (UI Pseudo-Grafica + LXC Kernel Regex Auto-Match per driver .run)
+# Versione: 1.6 (Driver .run Ufficiale + CUDA Toolkit 13.2 Repo Ufficiale)
 # ==============================================================================
 set -e
 
 BASE_DIR="/opt/homelab-ai-deployer"
+DRIVERS_DIR="$BASE_DIR/drivers"
 BACKEND_DIR="/opt/homelab-ai/backend"
 LOG_DIR="$BASE_DIR/logs"
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" "$DRIVERS_DIR"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_EXT="$LOG_DIR/install_ext_$TIMESTAMP.log"
 LOG_ERR="$LOG_DIR/install_err_$TIMESTAMP.log"
@@ -19,7 +20,6 @@ source /etc/os-release
 OS_ID=$ID
 OS_VER=$VERSION_ID
 VIRT_TYPE=$(systemd-detect-virt || echo "baremetal")
-TUNING_STATUS=""
 
 # ------------------------------------------------------------------------------
 # MOTORE UI PSEUDO-GRAFICO (Barra % + Mini Terminale)
@@ -38,7 +38,7 @@ ui_execute() {
     local step_name="$1"
     local desc="$2"
     local cmd="$3"
-    local est_time="${4:-30}" 
+    local est_time="${4:-45}" 
 
     clear
     echo -e "\033[36m======================================================================\033[0m"
@@ -110,33 +110,58 @@ ui_execute() {
 # FASI DI INSTALLAZIONE
 # ------------------------------------------------------------------------------
 fase_1_dipendenze() {
-    local setup_nvidia_cmd=""
-    local host_ver_major="Sconosciuto"
-    
+    # 1. Controllo presenza file .run del driver
+    local run_file=$(find "$DRIVERS_DIR" -maxdepth 1 -name "NVIDIA-Linux-x86_64-*.run" | head -n 1)
+    if [ -z "$run_file" ]; then
+        echo -e "\n\033[31m[ATTENZIONE]\033[0m Nessun file driver .run trovato in $DRIVERS_DIR!"
+        echo -e "Copia il file NVIDIA-Linux-x86_64-*.run nella cartella \033[33m$DRIVERS_DIR\033[0m prima di procedere."
+        read -p "Premi Invio per tornare al menu..."
+        return 1
+    }
+
+    # 2. Definizione comando driver in base a LXC o Baremetal
+    local driver_install_cmd=""
     if [ "$VIRT_TYPE" == "lxc" ]; then
-        if [ -f /proc/driver/nvidia/version ]; then
-            # Estrazione balistica: cerca il pattern XXX.XX.XX ed estrae il primo blocco (es. 550)
-            host_ver_major=$(cat /proc/driver/nvidia/version | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 | cut -d. -f1)
-            
-            # Installa SOLO i tool per sviluppatori e le librerie user-space corrispondenti
-            setup_nvidia_cmd="PYTHONWARNINGS=\"ignore\" apt-get install -y --no-install-recommends nvidia-cuda-toolkit nvidia-utils-${host_ver_major} libnvidia-compute-${host_ver_major}"
-        else
-            setup_nvidia_cmd='PYTHONWARNINGS="ignore" apt-get install -y --no-install-recommends nvidia-cuda-toolkit'
-        fi
+        driver_install_cmd="sh \"$run_file\" --no-kernel-modules --accept-license --no-questions"
     else
-        if [ "$OS_ID" == "debian" ]; then
-            setup_nvidia_cmd='PYTHONWARNINGS="ignore" apt-get install -y nvidia-driver nvidia-cuda-toolkit'
-        else
-            setup_nvidia_cmd='PYTHONWARNINGS="ignore" apt-get install -y nvidia-driver-535 nvidia-cuda-toolkit'
-        fi
+        driver_install_cmd="sh \"$run_file\" --dkms --accept-license --no-questions"
     fi
 
-    local cmd_base='
-        PYTHONWARNINGS="ignore" apt-get update -y && \
-        PYTHONWARNINGS="ignore" apt-get install -y build-essential cmake git curl wget psmisc python3-venv python3-full hwinfo htop && \
-        '"$setup_nvidia_cmd"'
+    # 3. Determinazione repository CUDA in base alla distro (Debian 13 o Ubuntu 24)
+    local repo_distro="debian13"
+    if [ "$OS_ID" == "ubuntu" ]; then
+        repo_distro="ubuntu2404"
+    fi
+
+    # 4. Comando cumulativo Fase 1
+    local cmd_all='
+        export DEBIAN_FRONTEND=noninteractive
+        apt update -y
+        apt install -y g++ freeglut3-dev build-essential libx11-dev libxmu-dev libxi-dev libglu1-mesa-dev libfreeimage-dev libglfw3-dev wget htop btop nvtop glances git pciutils cmake curl libcurl4-openssl-dev mc
+        
+        # Esecuzione installer driver .run
+        '"$driver_install_cmd"'
+        
+        # Installazione CUDA Toolkit 13.2 da repo ufficiale NVIDIA
+        cd /tmp
+        wget -nc https://developer.download.nvidia.com/compute/cuda/repos/'"$repo_distro"'/x86_64/cuda-keyring_1.1-1_all.deb
+        dpkg -i cuda-keyring_1.1-1_all.deb
+        apt update -y
+        apt install -y cuda-toolkit-13-2
+        
+        # Configurazione .bashrc e profile globale
+        if ! grep -q "cuda-13.2/bin" ~/.bashrc; then
+            cp ~/.bashrc ~/.bashrc-backup
+            echo '\''export PATH=/usr/local/cuda-13.2/bin${PATH:+:${PATH}}'\'' >> ~/.bashrc
+        fi
+        
+        cat <<EOF > /etc/profile.d/cuda.sh
+export PATH=/usr/local/cuda-13.2/bin\${PATH:+:\${PATH}}
+EOF
+        chmod +x /etc/profile.d/cuda.sh
     '
-    ui_execute "1. Dipendenze e NVIDIA/CUDA" "Rilevato driver Host NVIDIA: v${host_ver_major} (Modo: $VIRT_TYPE)" "$cmd_base" 75
+    
+    ui_execute "1. Dipendenze, Driver .run ($VIRT_TYPE) & CUDA 13.2" "Installazione pacchetti, driver NVIDIA personalizzato e CUDA Toolkit 13.2" "$cmd_all" 120
 }
 
 fase_2_ai_stack() {
@@ -158,7 +183,11 @@ fase_2_ai_stack() {
     echo -e "\033[36m======================================================================\033[0m"
     echo -e "\033[1;37m 2.B DOWNLOAD MODELLI AI (8gbModelCUDA.sh) \033[0m"
     echo -e "\033[36m======================================================================\033[0m"
-    bash "$BASE_DIR/tools/8gbModelCUDA.sh"
+    if [ -f "$BASE_DIR/tools/8gbModelCUDA.sh" ]; then
+        bash "$BASE_DIR/tools/8gbModelCUDA.sh"
+    else
+        echo "Script 8gbModelCUDA.sh non trovato in $BASE_DIR/tools/ (saltato)."
+    fi
     echo -e "\n\033[32m[OK]\033[0m Download modelli completato."
     sleep 1.5
 
@@ -252,10 +281,10 @@ purge_all() {
         rm -f /etc/systemd/system/llama-server.service /etc/systemd/system/opencode.service
         systemctl daemon-reload
         rm -rf /opt/homelab-ai
-        PYTHONWARNINGS=\"ignore\" apt-get purge -y '*nvidia*' '*cuda*' '*cublas*' || true
-        PYTHONWARNINGS=\"ignore\" apt-get autoremove -y
+        apt-get purge -y '*nvidia*' '*cuda*' '*cublas*' || true
+        apt-get autoremove -y
     "
-    ui_execute "P. PURGE AMBIENTE" "Eliminazione stack AI e disinstallazione librerie NVIDIA" "$cmd" 45
+    ui_execute "P. PURGE AMBIENTE" "Eliminazione stack AI e disinstallazione driver/librerie NVIDIA" "$cmd" 45
 }
 
 # ------------------------------------------------------------------------------
@@ -264,31 +293,32 @@ purge_all() {
 while true; do
     clear
     echo -e "\033[36m==================================================\033[0m"
-    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.5)        \033[0m"
+    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.6)        \033[0m"
     echo -e "\033[36m==================================================\033[0m"
     echo -e " Ambiente rilevato: \033[33m$VIRT_TYPE\033[0m"
+    echo -e " Cartella Driver:   \033[33m$DRIVERS_DIR\033[0m"
     echo " ------------------------------------------------"
     echo -e " \033[32mA.\033[0m Autodeploy Completo (Fasi 1-4)"
-    echo " 1. Installa Dipendenze e NVIDIA (Auto-Match Host)"
-    echo " 2. Compila Llama.cpp & Unsloth"
+    echo " 1. Installa Dipendenze, Driver .run & CUDA 13.2"
+    echo " 2. Compila Llama.cpp & Modelli"
     echo " 3. Setup OpenCode"
     echo " 4. Dashboard Sensori e Benchmark"
     echo " 5. Esci"
     echo " ------------------------------------------------"
-    echo -e " \033[31;1mP.\033[0m PURGE Totale (AI + NVIDIA/CUDA via APT)"
+    echo -e " \033[31;1mP.\033[0m PURGE Totale (AI + Driver/CUDA)"
     echo -e "\033[36m==================================================\033[0m"
     read -n 1 -s key
 
     case "${key,,}" in
         a)
             if confirm_action "Avvia l'installazione completa."; then
-                fase_1_dipendenze; fase_2_ai_stack; fase_3_opencode; fase_4_dashboard
+                fase_1_dipendenze && fase_2_ai_stack && fase_3_opencode && fase_4_dashboard
             fi ;;
-        1) confirm_action "Installa dipendenze base e librerie compatibili con il kernel Host." && fase_1_dipendenze ;;
+        1) confirm_action "Installa dipendenze, driver .run ($VIRT_TYPE) e CUDA 13.2." && fase_1_dipendenze ;;
         2) confirm_action "Compila Llama.cpp e scarica i modelli." && fase_2_ai_stack ;;
         3) confirm_action "Crea l'ambiente per OpenCode." && fase_3_opencode ;;
         4) fase_4_dashboard ;;
         5) clear; exit 0 ;;
-        p) confirm_action "Elimina l'ambiente AI e tenta di rimuovere i pacchetti NVIDIA." && purge_all ;;
+        p) confirm_action "Elimina l'ambiente AI e disinstalla driver/CUDA." && purge_all ;;
     esac
 done
