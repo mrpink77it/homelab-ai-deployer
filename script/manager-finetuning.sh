@@ -2,7 +2,7 @@
 # ==============================================================================
 # manager-finetuning.sh - Homelab AI Deployer
 # Ambiente: Baremetal/LXC, Debian 13 / Ubuntu 24
-# Versione: 1.9.2 (Official Unsloth Studio & External Llama.cpp Binding)
+# Versione: 1.9.3 (Optimized Model Paths & Unsloth External Binding)
 # ==============================================================================
 set -e
 
@@ -10,8 +10,9 @@ BASE_DIR="/opt/homelab-ai-deployer"
 TOOLS_DIR="$BASE_DIR/tools"
 DRIVERS_DIR="$BASE_DIR/drivers"
 BACKEND_DIR="/opt/homelab-ai/backend"
+MODELS_DIR="$BACKEND_DIR/models/1_LLM_Text"
 LOG_DIR="$BASE_DIR/logs"
-mkdir -p "$LOG_DIR" "$DRIVERS_DIR" "$TOOLS_DIR" "$BACKEND_DIR"
+mkdir -p "$LOG_DIR" "$DRIVERS_DIR" "$TOOLS_DIR" "$MODELS_DIR"
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_EXT="$LOG_DIR/install_ext_$TIMESTAMP.log"
@@ -128,14 +129,14 @@ fase_1_dipendenze() {
 fase_2_ai_stack() {
     clear
     echo -e "\033[36m======================================================================\033[0m"
-    echo -e " \033[1;37mFASE 2: Compilazione Llama.cpp (ggml-org) & Setup Modelli\033[0m"
+    echo -e " \033[1;37mFASE 2: Compilazione Llama.cpp & Gestione Centralizzata Modelli\033[0m"
     echo -e "\033[36m======================================================================\033[0m"
 
     export PATH="/usr/local/cuda-13.2/bin:/usr/local/cuda/bin:$PATH"
     export CUDACXX="/usr/local/cuda/bin/nvcc"
 
-    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
-    mkdir -p "$BACKEND_DIR"/{unsloth,models,llama.cpp}
+    mkdir -p "$BACKEND_DIR"/{unsloth,llama.cpp}
+    mkdir -p "$MODELS_DIR"
     
     if [ ! -d "$BACKEND_DIR/llama.cpp/.git" ]; then
         git clone https://github.com/ggml-org/llama.cpp.git "$BACKEND_DIR/llama.cpp"
@@ -151,19 +152,24 @@ fase_2_ai_stack() {
     if [ -f "$TOOLS_DIR/8gbModelCUDA.sh" ]; then
         bash "$TOOLS_DIR/8gbModelCUDA.sh"
     else
-        echo -e "\n\033[33m[!] Script 8gbModelCUDA.sh non trovato in $TOOLS_DIR (saltato download automatico).\033[0m"
+        echo -e "\n\033[33m[!] Script 8gbModelCUDA.sh non trovato in $TOOLS_DIR (assicurarsi che i modelli GGUF siano in $MODELS_DIR).\033[0m"
+    fi
+
+    local target_model="$MODELS_DIR/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
+    if [ ! -f "$target_model" ]; then
+        echo -e "\n\033[33m[!] Modello di default non trovato in $MODELS_DIR. Verrà creato un segnaposto o atteso download.\033[0m"
     fi
 
     cat <<EOF > /etc/systemd/system/llama-server.service
 [Unit]
-Description=Llama.cpp API Server (Qwen2.5-Coder)
+Description=Llama.cpp API Server (Shared Model Backend)
 After=network.target
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=$BACKEND_DIR/llama.cpp
-ExecStart=$BACKEND_DIR/llama.cpp/build/bin/llama-server -m $BACKEND_DIR/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -c 4096 --port 8080 -ngl 99
+ExecStart=$BACKEND_DIR/llama.cpp/build/bin/llama-server -m $target_model -c 4096 --port 8080 -ngl 99
 Restart=always
 
 [Install]
@@ -173,30 +179,32 @@ EOF
     systemctl daemon-reload
     systemctl enable --now llama-server
     
-    echo -e "\n\033[32m[OK] Llama.cpp compilato e servizio avviato sulla porta 8080!\033[0m"
+    echo -e "\n\033[32m[OK] Llama.cpp compilato e servizio avviato sulla porta 8080 (Modelli in: $MODELS_DIR)!\033[0m"
     read -p "Premi Invio per continuare..."
 }
 
 fase_3_unsloth_studio() {
     clear
     echo -e "\033[36m======================================================================\033[0m"
-    echo -e " \033[1;37mFASE 3: Installazione Ufficiale Unsloth Studio & Integrazione Llama.cpp\033[0m"
+    echo -e " \033[1;37mFASE 3: Installazione Unsloth Studio & External Backend Binding\033[0m"
     echo -e "\033[36m======================================================================\033[0m"
+
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
 
     mkdir -p "$BACKEND_DIR/unsloth"
     cd "$BACKEND_DIR/unsloth"
 
-    echo -e "\n\033[32m[+] Configurazione virtual environment e installazione di unsloth-studio...\033[0m"
+    echo -e "\n\033[32m[+] Configurazione virtual environment isolato e installazione unsloth-studio...\033[0m"
     uv venv --python 3.11 venv --clear
-    source venv/bin/activate
     
-    pip install --upgrade pip
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-    pip install unsloth-studio unsloth
+    # Installazione pulita tramite il pip del venv per evitare blocchi PEP 668
+    ./venv/bin/pip install --upgrade pip
+    ./venv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    ./venv/bin/pip install unsloth-studio unsloth
 
     cat <<EOF > /etc/systemd/system/unsloth-studio.service
 [Unit]
-Description=Unsloth Studio Web Interface (External Llama.cpp Backend)
+Description=Unsloth Studio Web Interface (No Duplicate Llama.cpp)
 After=network.target llama-server.service
 
 [Service]
@@ -215,7 +223,7 @@ EOF
     systemctl daemon-reload
     systemctl enable --now unsloth-studio
 
-    echo -e "\n\033[32m[OK] Unsloth Studio installato e configurato con backend esterno sulla porta 7860!\033[0m"
+    echo -e "\n\033[32m[OK] Unsloth Studio configurato con successo (Puntato al backend esterno 8080, UI su 7860)!\033[0m"
     read -p "Premi Invio per continuare..."
 }
 
@@ -294,7 +302,12 @@ fase_4_dashboard() {
             echo -e "\033[36m======================================================================\033[0m"
             echo -e " \033[1;37mBENCHMARK QWEN2.5-CODER IN CORSO...\033[0m"
             echo -e "\033[36m======================================================================\033[0m"
-            "$BACKEND_DIR"/llama.cpp/build/bin/llama-cli -m "$BACKEND_DIR"/models/1_LLM_Text/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf -p "Scrivi una classe Python per la gestione di un inventario." -n 256 -c 512 -ngl 99
+            local target_model="$MODELS_DIR/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
+            if [ -f "$target_model" ]; then
+                "$BACKEND_DIR"/llama.cpp/build/bin/llama-cli -m "$target_model" -p "Scrivi una classe Python per la gestione di un inventario." -n 256 -c 512 -ngl 99
+            else
+                echo -e "\n\033[31m[!] Modello GGUF non trovato in $target_model\033[0m"
+            fi
             echo -e "\n\033[32m[OK] Benchmark completato!\033[0m"
             read -n 1 -s -p "Premi un tasto per tornare alla dashboard..."
             tput civis
@@ -322,14 +335,14 @@ purge_all() {
 while true; do
     clear
     echo -e "\033[36m==================================================\033[0m"
-    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.9.2)      \033[0m"
+    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.9.3)      \033[0m"
     echo -e "\033[36m==================================================\033[0m"
     echo -e " Ambiente rilevato: \033[33m$VIRT_TYPE\033[0m"
-    echo -e " Cartella Tools:    \033[33m$TOOLS_DIR\033[0m"
+    echo -e " Cartella Modelli:  \033[33m$MODELS_DIR\033[0m"
     echo " ------------------------------------------------"
     echo -e " \033[32mA.\033[0m Autodeploy Completo (Fasi 1-4)"
     echo " 1. Installa Dipendenze, Locales/TZ, Driver & CUDA 13.2"
-    echo " 2. Compila Llama.cpp & Modelli (Porta 8080)"
+    echo " 2. Compila Llama.cpp & Modelli Centralizzati (Porta 8080)"
     echo " 3. Setup Unsloth Studio & External Backend Binding (Porta 7860)"
     echo " 4. Dashboard Sensori, API & Web Status"
     echo " 5. Esci"
@@ -344,7 +357,7 @@ while true; do
                 fase_1_dipendenze && fase_2_ai_stack && fase_3_unsloth_studio && fase_4_dashboard
             fi ;;
         1) confirm_action "Avvia installazione Fase 1." && fase_1_dipendenze ;;
-        2) confirm_action "Compila Llama.cpp e scarica i modelli." && fase_2_ai_stack ;;
+        2) confirm_action "Compila Llama.cpp e configura i modelli centralizzati." && fase_2_ai_stack ;;
         3) confirm_action "Configura Unsloth Studio e integrazione backend." && fase_3_unsloth_studio ;;
         4) fase_4_dashboard ;;
         5) clear; exit 0 ;;
