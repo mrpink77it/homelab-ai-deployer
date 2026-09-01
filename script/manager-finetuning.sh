@@ -2,7 +2,7 @@
 # ==============================================================================
 # manager-finetuning.sh - Homelab AI Deployer
 # Ambiente: Baremetal/LXC, Debian 13 / Ubuntu 24
-# Versione: 1.8.3 (Export automatico runtime CUDA & nvcc + ggml-org/llama.cpp)
+# Versione: 1.8.4 (UV venv --clear non-interattivo + ggml-org/llama.cpp)
 # ==============================================================================
 set -e
 
@@ -107,7 +107,6 @@ fase_1_dipendenze() {
     echo "export PATH=/usr/local/cuda-13.2/bin\${PATH:+:\${PATH}}" > /etc/profile.d/cuda.sh
     chmod +x /etc/profile.d/cuda.sh
 
-    # APPLICAZIONE IMMEDIATA DELLE VARIABILI NELLO SCRIPT
     export PATH="/usr/local/cuda-13.2/bin:/usr/local/cuda/bin:$PATH"
     export CUDACXX="/usr/local/cuda/bin/nvcc"
 
@@ -121,7 +120,6 @@ fase_2_ai_stack() {
     echo -e " \033[1;37mFASE 2: Compilazione Llama.cpp (ggml-org) & Setup Modelli\033[0m"
     echo -e "\033[36m======================================================================\033[0m"
 
-    # Assicura che le variabili CUDA siano attive anche se avviata singolarmente
     export PATH="/usr/local/cuda-13.2/bin:/usr/local/cuda/bin:$PATH"
     export CUDACXX="/usr/local/cuda/bin/nvcc"
 
@@ -177,7 +175,9 @@ fase_3_opencode() {
 
     mkdir -p /opt/homelab-ai/opencode
     cd /opt/homelab-ai/opencode
-    uv venv venv
+    
+    # Aggiunto --clear per evitare il prompt interattivo se la venv esiste già
+    uv venv --clear venv
 
     cat <<EOF > /etc/systemd/system/opencode.service
 [Unit]
@@ -255,7 +255,7 @@ purge_all() {
 while true; do
     clear
     echo -e "\033[36m==================================================\033[0m"
-    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.8.3)      \033[0m"
+    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.8.4)      \033[0m"
     echo -e "\033[36m==================================================\033[0m"
     echo -e " Ambiente rilevato: \033[33m$VIRT_TYPE\033[0m"
     echo -e " Cartella Driver:   \033[33m$DRIVERS_DIR\033[0m"
