@@ -2,7 +2,7 @@
 # ==============================================================================
 # manager-finetuning.sh - Homelab AI Deployer
 # Ambiente: Baremetal/LXC, Debian 13 / Ubuntu 24
-# Versione: 1.9.0 (Dashboard Moderna, API Guide, Unsloth Reintegrated & Bugfix)
+# Versione: 1.9.2 (Official Unsloth Studio & External Llama.cpp Binding)
 # ==============================================================================
 set -e
 
@@ -180,33 +180,33 @@ EOF
 fase_3_unsloth_studio() {
     clear
     echo -e "\033[36m======================================================================\033[0m"
-    echo -e " \033[1;37mFASE 3: Setup Unsloth Environment & Fine-Tuning Studio\033[0m"
+    echo -e " \033[1;37mFASE 3: Installazione Ufficiale Unsloth Studio & Integrazione Llama.cpp\033[0m"
     echo -e "\033[36m======================================================================\033[0m"
 
     mkdir -p "$BACKEND_DIR/unsloth"
     cd "$BACKEND_DIR/unsloth"
 
-    echo -e "\n\033[32m[+] Creazione virtual environment con UV e installazione Unsloth...\033[0m"
+    echo -e "\n\033[32m[+] Configurazione virtual environment e installazione di unsloth-studio...\033[0m"
     uv venv --python 3.11 venv --clear
     source venv/bin/activate
     
-    # Installazione pacchetti essenziali per PyTorch CUDA 12.x / 13 compatibile
     pip install --upgrade pip
     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-    pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git" xformers
+    pip install unsloth-studio unsloth
 
     cat <<EOF > /etc/systemd/system/unsloth-studio.service
 [Unit]
-Description=Unsloth Fine-Tuning & Training Worker
-After=network.target
+Description=Unsloth Studio Web Interface (External Llama.cpp Backend)
+After=network.target llama-server.service
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=$BACKEND_DIR/unsloth
 Environment="PATH=$BACKEND_DIR/unsloth/venv/bin:/usr/local/bin:/usr/bin"
-ExecStart=/bin/bash -c "source venv/bin/activate && python3 -c 'import unsloth; print(\"Unsloth Studio pronto per il fine-tuning.\")' && sleep infinity"
-Restart=on-failure
+Environment="LLAMA_CPP_URL=http://127.0.0.1:8080"
+ExecStart=$BACKEND_DIR/unsloth/venv/bin/unsloth-studio --port 7860 --backend-url http://127.0.0.1:8080
+Restart=always
 
 [Install]
 WantedBy=multi-user.target
@@ -215,7 +215,7 @@ EOF
     systemctl daemon-reload
     systemctl enable --now unsloth-studio
 
-    echo -e "\n\033[32m[OK] Unsloth Studio integrato e configurato in /opt/homelab-ai/backend/unsloth!\033[0m"
+    echo -e "\n\033[32m[OK] Unsloth Studio installato e configurato con backend esterno sulla porta 7860!\033[0m"
     read -p "Premi Invio per continuare..."
 }
 
@@ -250,7 +250,7 @@ fase_4_dashboard() {
 
         local unsloth_status="\033[31m[OFFLINE]\033[0m"
         if systemctl is-active --quiet unsloth-studio; then
-            unsloth_status="\033[32m[ATTIVO]\033[0m  ➔ Workspace: /opt/homelab-ai/backend/unsloth"
+            unsloth_status="\033[32m[ATTIVO]\033[0m  ➔ Web UI: http://127.0.0.1:7860"
         fi
 
         echo -e "\033[1;36m╔════════════════════════════════════════════════════════════════════════════╗\033[0m"
@@ -265,18 +265,17 @@ fase_4_dashboard() {
         echo -e "\033[1;36m║\033[0m Temp:  \033[1;31m${gpu_temp}°C\033[0m  | Fan Speed: \033[36m${gpu_fan}\033[0m | Power Draw: \033[33m${gpu_power}\033[0m"
         echo -e "\033[1;36m║\033[0m Core:  \033[1;32m${gpu_util}\033[0m    | VRAM Used: \033[1;32m${gpu_mem_used} / ${gpu_mem_total}\033[0m"
         echo -e "\033[1;36m╠────────────────────────────────────────────────────────────────────────────╣\033[0m"
-        echo -e "\033[1;36m║\033[1;35m [ 🤖 AI STACK SERVICES & API ENDPOINTS ]                                   \033[1;36m║\033[0m"
-        echo -e "\033[1;36m║\033[0m 1. llama.cpp (Inference):  $llama_status"
-        echo -e "\033[1;36m║\033[0m 2. Unsloth (Fine-Tuning): $unsloth_status"
+        echo -e "\033[1;36m║\033[1;35m [ 🤖 AI STACK SERVICES & WEB ACCESS ]                                      \033[1;36m║\033[0m"
+        echo -e "\033[1;36m║\033[0m 1. Llama.cpp (API Server) : $llama_status"
+        echo -e "\033[1;36m║\033[0m 2. Unsloth Studio (Web UI): $unsloth_status"
         echo -e "\033[1;36m╠────────────────────────────────────────────────────────────────────────────╣\033[0m"
         echo -e "\033[1;36m║\033[1;33m QUICK API TEST (Curl):                                                     \033[1;36m║\033[0m"
         echo -e "\033[1;36m║\033[0m curl http://127.0.0.1:8080/v1/chat/completions -d '{\"model\":\"qwen\",\"messages\":[{\"role\":\"user\",\"content\":\"Ciao\"}]}'\033[0m"
         echo -e "\033[1;36m╠════════════════════════════════════════════════════════════════════════════╣\033[0m"
-        echo -e "\033[1;36m║\033[1;33m COMMANDS: \033[0m[x] CSV Export  [b] Benchmark  [r] Refresh  [q] Exit      \033[1;36m║\033[0m"
+        echo -e "\033[1;36m║\033[1;33m COMMANDS: \033[0m[x] CSV Export  [b] AI Benchmark  [r] Refresh  [q] Exit      \033[1;36m║\033[0m"
         echo -e "\033[1;36m╚════════════════════════════════════════════════════════════════════════════╝\033[0m"
         echo -n -e "\033[1mSeleziona comando:\033[0m "
 
-        # FIX CRITICO: Aggiunto '|| true' per evitare che il timeout di read chiuda lo script con set -e
         read -t 2 -n 1 -s key || true
 
         if [[ "${key,,}" == "q" ]]; then
@@ -323,7 +322,7 @@ purge_all() {
 while true; do
     clear
     echo -e "\033[36m==================================================\033[0m"
-    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.9.0)      \033[0m"
+    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.9.2)      \033[0m"
     echo -e "\033[36m==================================================\033[0m"
     echo -e " Ambiente rilevato: \033[33m$VIRT_TYPE\033[0m"
     echo -e " Cartella Tools:    \033[33m$TOOLS_DIR\033[0m"
@@ -331,8 +330,8 @@ while true; do
     echo -e " \033[32mA.\033[0m Autodeploy Completo (Fasi 1-4)"
     echo " 1. Installa Dipendenze, Locales/TZ, Driver & CUDA 13.2"
     echo " 2. Compila Llama.cpp & Modelli (Porta 8080)"
-    echo " 3. Setup Unsloth Studio & Fine-Tuning Environment"
-    echo " 4. Dashboard Sensori, API Guide & Benchmark"
+    echo " 3. Setup Unsloth Studio & External Backend Binding (Porta 7860)"
+    echo " 4. Dashboard Sensori, API & Web Status"
     echo " 5. Esci"
     echo " ------------------------------------------------"
     echo -e " \033[31;1mP.\033[0m PURGE Totale (AI + Driver/CUDA)"
@@ -346,7 +345,7 @@ while true; do
             fi ;;
         1) confirm_action "Avvia installazione Fase 1." && fase_1_dipendenze ;;
         2) confirm_action "Compila Llama.cpp e scarica i modelli." && fase_2_ai_stack ;;
-        3) confirm_action "Configura Unsloth Studio." && fase_3_unsloth_studio ;;
+        3) confirm_action "Configura Unsloth Studio e integrazione backend." && fase_3_unsloth_studio ;;
         4) fase_4_dashboard ;;
         5) clear; exit 0 ;;
         p) confirm_action "Elimina l'ambiente AI e disinstalla driver/CUDA." && purge_all ;;
