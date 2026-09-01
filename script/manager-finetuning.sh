@@ -2,7 +2,7 @@
 # ==============================================================================
 # manager-finetuning.sh - Homelab AI Deployer
 # Ambiente: Baremetal/LXC, Debian 13 / Ubuntu 24
-# Versione: 1.4 (UI Pseudo-Grafica + Logica NVIDIA nativa integrata)
+# Versione: 1.5 (UI Pseudo-Grafica + LXC Kernel Regex Auto-Match per driver .run)
 # ==============================================================================
 set -e
 
@@ -38,7 +38,7 @@ ui_execute() {
     local step_name="$1"
     local desc="$2"
     local cmd="$3"
-    local est_time="${4:-30}" # Tempo stimato per la barra (default 30s)
+    local est_time="${4:-30}" 
 
     clear
     echo -e "\033[36m======================================================================\033[0m"
@@ -47,18 +47,15 @@ ui_execute() {
     echo -e " \033[33mDESCRIZIONE:\033[0m $desc"
     echo -e "\033[36m======================================================================\033[0m"
     
-    # Setup layout fisso
     echo -e " AVANZAMENTO: [\033[32m░░░░░░░░░░░░░░░░░░░░\033[0m] 0% "
     echo -e "\033[90m--------------------------- MINI TERMINALE ---------------------------\033[0m"
     for i in {1..8}; do echo -e " \033[K"; done
     echo -e "\033[90m----------------------------------------------------------------------\033[0m"
 
-    # Esecuzione comando in background
     eval "$cmd" >> "$LOG_EXT" 2>> "$LOG_ERR" &
     local pid=$!
     local elapsed=0
 
-    # Loop di aggiornamento UI
     while kill -0 $pid 2>/dev/null; do
         local pct=$(( elapsed * 100 / est_time ))
         [ $pct -gt 99 ] && pct=99
@@ -66,24 +63,19 @@ ui_execute() {
         local empty=$(( 20 - filled ))
         local bar=$(printf "%${filled}s" | tr ' ' '█')$(printf "%${empty}s" | tr ' ' '░')
         
-        # Riporta il cursore su di 11 righe per aggiornare
         echo -en "\033[11A\r"
         echo -e " AVANZAMENTO: [\033[32m${bar}\033[0m] $pct% (${elapsed}s) \033[K"
         echo -e "\033[90m--------------------------- MINI TERMINALE ---------------------------\033[0m"
         
-        # Stampa le ultime 8 righe del log troncate a 66 caratteri
         local current_lines=0
         while IFS= read -r line; do
             printf "  %-66s\033[K\n" "${line:0:66}"
             ((current_lines++))
         done < <(tail -n 8 "$LOG_EXT")
         
-        # Riempi lo spazio se ci sono meno di 8 righe
         for ((i=current_lines; i<8; i++)); do echo -e " \033[K"; done
         
-        # Salta il footer inferiore
         echo -en "\033[1B\r"
-        
         sleep 1
         elapsed=$((elapsed + 1))
     done
@@ -91,7 +83,6 @@ ui_execute() {
     wait $pid
     local exit_code=$?
 
-    # Aggiornamento finale UI
     echo -en "\033[11A\r"
     if [ $exit_code -eq 0 ]; then
         echo -e " AVANZAMENTO: [\033[32m████████████████████\033[0m] 100% \033[32m[OK]\033[0m \033[K"
@@ -119,14 +110,20 @@ ui_execute() {
 # FASI DI INSTALLAZIONE
 # ------------------------------------------------------------------------------
 fase_1_dipendenze() {
-    # Integrazione logica corretta per NVIDIA (LXC vs Baremetal)
     local setup_nvidia_cmd=""
+    local host_ver_major="Sconosciuto"
+    
     if [ "$VIRT_TYPE" == "lxc" ]; then
-        # In LXC installiamo SOLAMENTE il toolkit CUDA e le dipendenze userspace.
-        # NIENTE nvidia-driver per evitare conflitti NVML col kernel del nodo Proxmox.
-        setup_nvidia_cmd='PYTHONWARNINGS="ignore" apt-get install -y --no-install-recommends nvidia-cuda-toolkit'
+        if [ -f /proc/driver/nvidia/version ]; then
+            # Estrazione balistica: cerca il pattern XXX.XX.XX ed estrae il primo blocco (es. 550)
+            host_ver_major=$(cat /proc/driver/nvidia/version | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 | cut -d. -f1)
+            
+            # Installa SOLO i tool per sviluppatori e le librerie user-space corrispondenti
+            setup_nvidia_cmd="PYTHONWARNINGS=\"ignore\" apt-get install -y --no-install-recommends nvidia-cuda-toolkit nvidia-utils-${host_ver_major} libnvidia-compute-${host_ver_major}"
+        else
+            setup_nvidia_cmd='PYTHONWARNINGS="ignore" apt-get install -y --no-install-recommends nvidia-cuda-toolkit'
+        fi
     else
-        # In Baremetal installiamo il pacchetto driver completo
         if [ "$OS_ID" == "debian" ]; then
             setup_nvidia_cmd='PYTHONWARNINGS="ignore" apt-get install -y nvidia-driver nvidia-cuda-toolkit'
         else
@@ -139,7 +136,7 @@ fase_1_dipendenze() {
         PYTHONWARNINGS="ignore" apt-get install -y build-essential cmake git curl wget psmisc python3-venv python3-full hwinfo htop && \
         '"$setup_nvidia_cmd"'
     '
-    ui_execute "1. Dipendenze e NVIDIA/CUDA" "Installazione pacchetti base e librerie NVIDIA (Modo: $VIRT_TYPE)" "$cmd_base" 60
+    ui_execute "1. Dipendenze e NVIDIA/CUDA" "Rilevato driver Host NVIDIA: v${host_ver_major} (Modo: $VIRT_TYPE)" "$cmd_base" 75
 }
 
 fase_2_ai_stack() {
@@ -155,7 +152,7 @@ fase_2_ai_stack() {
         cmake -B build -DGGML_CUDA=ON
         cmake --build build --config Release -j$(nproc)
     '
-    ui_execute "2.A Compilazione Llama.cpp" "Fetch repo ufficiale e build CMake con accelerazione CUDA" "$cmd_compile" 120
+    ui_execute "2.A Compilazione Llama.cpp" "Fetch repo ufficiale e build CMake con accelerazione CUDA" "$cmd_compile" 180
     
     clear
     echo -e "\033[36m======================================================================\033[0m"
@@ -267,12 +264,12 @@ purge_all() {
 while true; do
     clear
     echo -e "\033[36m==================================================\033[0m"
-    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.4)        \033[0m"
+    echo -e "\033[1;37m   HOMELAB AI DEPLOYER - FINETUNING (v1.5)        \033[0m"
     echo -e "\033[36m==================================================\033[0m"
     echo -e " Ambiente rilevato: \033[33m$VIRT_TYPE\033[0m"
     echo " ------------------------------------------------"
     echo -e " \033[32mA.\033[0m Autodeploy Completo (Fasi 1-4)"
-    echo " 1. Installa Dipendenze e NVIDIA (Nativo)"
+    echo " 1. Installa Dipendenze e NVIDIA (Auto-Match Host)"
     echo " 2. Compila Llama.cpp & Unsloth"
     echo " 3. Setup OpenCode"
     echo " 4. Dashboard Sensori e Benchmark"
@@ -287,7 +284,7 @@ while true; do
             if confirm_action "Avvia l'installazione completa."; then
                 fase_1_dipendenze; fase_2_ai_stack; fase_3_opencode; fase_4_dashboard
             fi ;;
-        1) confirm_action "Installa dipendenze base e NVIDIA ($VIRT_TYPE)." && fase_1_dipendenze ;;
+        1) confirm_action "Installa dipendenze base e librerie compatibili con il kernel Host." && fase_1_dipendenze ;;
         2) confirm_action "Compila Llama.cpp e scarica i modelli." && fase_2_ai_stack ;;
         3) confirm_action "Crea l'ambiente per OpenCode." && fase_3_opencode ;;
         4) fase_4_dashboard ;;
