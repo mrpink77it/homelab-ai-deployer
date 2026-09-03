@@ -36,10 +36,49 @@ def unload_models():
     except Exception as e:
         print(f"[!] Errore unload: {e}")
 
-def get_installed_models():
-    """Lista i modelli disponibili su Ollama."""
-    res = requests.get(f"{OLLAMA_URL}/api/tags").json()
-    return [m["name"] for m in res.get("models", [])]
+def get_installed_models_metadata():
+    """Recupera la lista dei modelli, estrae i metadati GGUF e li ordina per dimensione su disco."""
+    try:
+        tags_res = requests.get(f"{OLLAMA_URL}/api/tags").json()
+        models = tags_res.get("models", [])
+    except Exception as e:
+        print(f"[!] Errore recupero modelli da Ollama API: {e}")
+        return []
+
+    model_data = []
+    for m in models:
+        name = m["name"]
+        size_bytes = m.get("size", 0)
+        size_gb = round(size_bytes / (1024**3), 2)
+
+        try:
+            show_res = requests.post(f"{OLLAMA_URL}/api/show", json={"name": name}).json()
+            details = show_res.get("details", {})
+            model_info = show_res.get("model_info", {})
+
+            params = details.get("parameter_size", "N/A")
+            quant = details.get("quantization_level", "N/A")
+
+            ctx = "N/A"
+            for k, v in model_info.items():
+                if k.endswith(".context_length"):
+                    ctx = f"{v // 1024}k" if isinstance(v, int) else str(v)
+                    break
+        except Exception:
+            params, quant, ctx = "N/A", "N/A", "N/A"
+
+        model_data.append({
+            "name": name,
+            "size_bytes": size_bytes,
+            "size_gb": size_gb,
+            "params": params,
+            "ctx": ctx,
+            "quant": quant
+        })
+
+    # Ordina per peso crescente (dal più leggero al più pesante)
+    model_data.sort(key=lambda x: x["size_bytes"])
+    return model_data
 
 def log_to_csv(data):
     """Aggiunge i risultati in append sul file CSV."""
@@ -55,13 +94,20 @@ def log_to_csv(data):
             writer.writeheader()
         writer.writerow(data)
 
+def get_gpu_layers_for_model(model_name):
+    """Seleziona i layer da testare in base alla stazza del modello per evitare timeout su AUTO."""
+    m_lower = model_name.lower()
+    if any(k in m_lower for k in ["32b", "24b", "22b", "deepseek-coder-v2"]):
+        return [22, 18, 14]
+    elif any(k in m_lower for k in ["14b", "12b", "9b"]):
+        return [None, 24, 18]
+    else:
+        return [None, 32, 24]
+
 # --- BENCHMARK RUNNER ---
 
 def run_benchmark(model_name, num_ctx, num_gpu=None):
     """Esegue un singolo test di benchmark su un modello con parametri specifici."""
-    unload_models()
-    time.sleep(1)
-    
     prompt = (
         "Scrivi una funzione Python per calcolare la sequenza di Fibonacci "
         "e spiegala in dettaglio inserendo commenti ed un esempio di refactoring."
@@ -71,6 +117,7 @@ def run_benchmark(model_name, num_ctx, num_gpu=None):
         "model": model_name,
         "prompt": prompt,
         "stream": False,
+        "keep_alive": "10m",
         "options": {
             "num_ctx": num_ctx,
         }
@@ -83,8 +130,7 @@ def run_benchmark(model_name, num_ctx, num_gpu=None):
     start_vram, total_vram = get_gpu_vram()
     
     try:
-        start_time = time.time()
-        resp = requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=180)
+        resp = requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=600)
         
         if resp.status_code != 200:
             raise Exception(f"HTTP {resp.status_code}: {resp.text}")
@@ -94,7 +140,6 @@ def run_benchmark(model_name, num_ctx, num_gpu=None):
         peak_vram, _ = get_gpu_vram()
         ram_used_gb = round(psutil.virtual_memory().used / (1024**3), 2)
         
-        # Calcolo Token / Secondo dai metadati di Ollama (convertendo da nanosecondi)
         eval_count = data.get("eval_count", 0)
         eval_duration = data.get("eval_duration", 1) / 1e9
         gen_tok_sec = round(eval_count / eval_duration, 2) if eval_duration > 0 else 0
@@ -135,7 +180,7 @@ def run_benchmark(model_name, num_ctx, num_gpu=None):
         log_to_csv(fail_data)
         return None
 
-# --- GENERAZIONE GRAFICI & CONSLUSIONE ---
+# --- GENERAZIONE GRAFICI & CONCLUSIONE ---
 
 def generate_charts_and_report(model_name, results):
     """Genera grafici comparativi e raccomandazione finale per il modello."""
@@ -149,19 +194,15 @@ def generate_charts_and_report(model_name, results):
 
     df = pd.DataFrame(valid_results)
     
-    # Creo identificatore per la configurazione
     df['Config'] = "CTX:" + df['Num_CTX'].astype(str) + " GPU:" + df['Num_GPU_Layers'].astype(str)
 
-    # Plot Grafici
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     
-    # Grafico 1: Token/s
     axes[0].bar(df['Config'], df['Gen_Tok_Sec'], color='skyblue')
     axes[0].set_title(f"Velocità di Generazione (t/s) - {model_name}")
     axes[0].set_ylabel("Tokens / sec")
     axes[0].tick_params(axis='x', rotation=30)
 
-    # Grafico 2: VRAM Libera vs Usata
     axes[1].bar(df['Config'], df['VRAM_Used_MB'], label='VRAM Usata (MB)', color='salmon')
     axes[1].bar(df['Config'], df['VRAM_Free_MB'], bottom=df['VRAM_Used_MB'], label='VRAM Libera (MB)', color='lightgreen')
     axes[1].set_title(f"Uso VRAM (MB) - {model_name}")
@@ -174,8 +215,6 @@ def generate_charts_and_report(model_name, results):
     plt.savefig(chart_filename)
     print(f"\n[+] Grafico comparativo salvato in: {chart_filename}")
 
-    # Logica Raccomandazione Miglior Setup
-    # Criterio: Il miglior compromesso con VRAM Libera >= 800MB per evitare OOM, ordinato per velocità t/s
     df_safe = df[df['VRAM_Free_MB'] >= 800]
     if not df_safe.empty:
         best = df_safe.sort_values(by='Gen_Tok_Sec', ascending=False).iloc[0]
@@ -195,24 +234,35 @@ def generate_charts_and_report(model_name, results):
 # --- MAIN CLI ---
 
 def main():
-    models = get_installed_models()
-    if not models:
+    models_data = get_installed_models_metadata()
+    if not models_data:
         print("[!] Nessun modello trovato su Ollama.")
         sys.exit(1)
 
-    print("\n--- BENCHMARK OLLAMA AUTOMATIZZATO ---")
-    for i, m in enumerate(models):
-        print(f" [{i}] {m}")
-    print(f" [{len(models)}] TESTA TUTTI I MODELLI")
+    header = f"{'IDX':<5} | {'MODELLO':<42} | {'PESO':<8} | {'PARAMETRI':<10} | {'CTX MAX':<8} | {'QUANT':<10}"
+    print("\n" + "=" * len(header))
+    print(" --- BENCHMARK OLLAMA AUTOMATIZZATO ---")
+    print("=" * len(header))
+    print(header)
+    print("=" * len(header))
+
+    for idx, m in enumerate(models_data):
+        idx_str = f"[{idx}]"
+        print(f"{idx_str:<5} | {m['name']:<42} | {m['size_gb']:>5} GB | {m['params']:<10} | {m['ctx']:<8} | {m['quant']:<10}")
+
+    print("=" * len(header))
+    all_idx = len(models_data)
+    print(f"[{all_idx}]   | TESTA TUTTI I MODELLI")
+    print("=" * len(header))
 
     choice = input("\nSeleziona il numero del modello da testare: ").strip()
     
     if choice.isdigit():
         idx = int(choice)
-        if idx == len(models):
-            selected_models = models
-        elif 0 <= idx < len(models):
-            selected_models = [models[idx]]
+        if idx == all_idx:
+            selected_models = [m['name'] for m in models_data]
+        elif 0 <= idx < all_idx:
+            selected_models = [models_data[idx]['name']]
         else:
             print("Scelta non valida.")
             sys.exit(1)
@@ -220,14 +270,15 @@ def main():
         print("Scelta non valida.")
         sys.exit(1)
 
-    # Parametri da testare in matrice
     context_list = [4096, 8192, 16384]
-    gpu_layers_list = [None, 20, 15]  # None = AUTO di Ollama
 
     for model in selected_models:
         print(f"\n==================================================")
         print(f" AVVIO BENCHMARK PER: {model}")
         print(f"==================================================")
+        
+        gpu_layers_list = get_gpu_layers_for_model(model)
+        unload_models()
         
         results = []
         for ctx in context_list:
