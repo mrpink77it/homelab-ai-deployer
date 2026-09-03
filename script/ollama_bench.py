@@ -12,10 +12,8 @@ from datetime import datetime
 OLLAMA_URL = "http://127.0.0.1:11434"
 CSV_FILE = "ollama_benchmark_results.csv"
 
-# --- HELPER FUNZIONI ---
-
 def get_gpu_vram():
-    """Restituisce la VRAM usata e totale in MB via nvidia-smi."""
+    """Rileva la VRAM via nvidia-smi (CUDA); gestisce il fallback sicuro se si usa Vulkan o altro hardware."""
     try:
         res = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"],
@@ -24,6 +22,7 @@ def get_gpu_vram():
         used, total = map(int, res.strip().split(','))
         return used, total
     except Exception:
+        # Fallback per ambienti Vulkan / non-NVIDIA o assenza di driver CUDA
         return 0, 0
 
 def unload_models():
@@ -76,17 +75,15 @@ def get_installed_models_metadata():
             "quant": quant
         })
 
-    # Ordina per peso crescente (dal più leggero al più pesante)
     model_data.sort(key=lambda x: x["size_bytes"])
     return model_data
 
 def log_to_csv(data):
-    """Aggiunge i risultati in append sul file CSV."""
     file_exists = os.path.isfile(CSV_FILE)
     headers = [
         "Timestamp", "Modello", "Num_CTX", "Num_GPU_Layers", 
         "Prompt_Tok_Sec", "Gen_Tok_Sec", "VRAM_Used_MB", "VRAM_Free_MB", 
-        "RAM_Used_GB", "Status"
+        "RAM_Used_GB", "CPU_Percent", "Status"
     ]
     with open(CSV_FILE, mode="a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=headers)
@@ -95,7 +92,6 @@ def log_to_csv(data):
         writer.writerow(data)
 
 def get_gpu_layers_for_model(model_name):
-    """Seleziona i layer da testare in base alla stazza del modello per evitare timeout su AUTO."""
     m_lower = model_name.lower()
     if any(k in m_lower for k in ["32b", "24b", "22b", "deepseek-coder-v2"]):
         return [22, 18, 14]
@@ -104,10 +100,7 @@ def get_gpu_layers_for_model(model_name):
     else:
         return [None, 32, 24]
 
-# --- BENCHMARK RUNNER ---
-
 def run_benchmark(model_name, num_ctx, num_gpu=None):
-    """Esegue un singolo test di benchmark su un modello con parametri specifici."""
     prompt = (
         "Scrivi una funzione Python per calcolare la sequenza di Fibonacci "
         "e spiegala in dettaglio inserendo commenti ed un esempio di refactoring."
@@ -120,6 +113,7 @@ def run_benchmark(model_name, num_ctx, num_gpu=None):
         "keep_alive": "10m",
         "options": {
             "num_ctx": num_ctx,
+            "seed": 42  # Fissa il seed per garantire output consistenti e misurazioni stabili
         }
     }
     if num_gpu is not None:
@@ -128,6 +122,7 @@ def run_benchmark(model_name, num_ctx, num_gpu=None):
     print(f"  └─ Testing CTX={num_ctx} | Layers GPU={num_gpu if num_gpu is not None else 'AUTO'}...")
     
     start_vram, total_vram = get_gpu_vram()
+    cpu_percent_start = psutil.cpu_percent(interval=None)
     
     try:
         resp = requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=600)
@@ -139,6 +134,7 @@ def run_benchmark(model_name, num_ctx, num_gpu=None):
         
         peak_vram, _ = get_gpu_vram()
         ram_used_gb = round(psutil.virtual_memory().used / (1024**3), 2)
+        cpu_percent_end = psutil.cpu_percent(interval=None)
         
         eval_count = data.get("eval_count", 0)
         eval_duration = data.get("eval_duration", 1) / 1e9
@@ -148,7 +144,7 @@ def run_benchmark(model_name, num_ctx, num_gpu=None):
         prompt_eval_duration = data.get("prompt_eval_duration", 1) / 1e9
         prompt_tok_sec = round(prompt_eval_count / prompt_eval_duration, 2) if prompt_eval_duration > 0 else 0
 
-        vram_free = total_vram - peak_vram
+        vram_free = (total_vram - peak_vram) if total_vram > 0 else 0
 
         res_data = {
             "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -160,10 +156,13 @@ def run_benchmark(model_name, num_ctx, num_gpu=None):
             "VRAM_Used_MB": peak_vram,
             "VRAM_Free_MB": vram_free,
             "RAM_Used_GB": ram_used_gb,
+            "CPU_Percent": cpu_percent_end,
             "Status": "OK"
         }
         log_to_csv(res_data)
-        print(f"     [OK] Gen: {gen_tok_sec} t/s | Prompt: {prompt_tok_sec} t/s | VRAM Usata: {peak_vram}MB (Libera: {vram_free}MB)")
+        
+        vram_str = f" | VRAM Usata: {peak_vram}MB" if total_vram > 0 else " | [Backend Vulkan/CPU]"
+        print(f"     [OK] Gen: {gen_tok_sec} t/s | Prompt: {prompt_tok_sec} t/s{vram_str} | RAM: {ram_used_gb}GB")
         return res_data
 
     except Exception as e:
@@ -175,15 +174,12 @@ def run_benchmark(model_name, num_ctx, num_gpu=None):
             "Num_GPU_Layers": num_gpu if num_gpu is not None else "AUTO",
             "Prompt_Tok_Sec": 0, "Gen_Tok_Sec": 0,
             "VRAM_Used_MB": 0, "VRAM_Free_MB": 0,
-            "RAM_Used_GB": 0, "Status": f"FAILED: {str(e)[:30]}"
+            "RAM_Used_GB": 0, "CPU_Percent": 0, "Status": f"FAILED: {str(e)[:30]}"
         }
         log_to_csv(fail_data)
         return None
 
-# --- GENERAZIONE GRAFICI & CONCLUSIONE ---
-
 def generate_charts_and_report(model_name, results):
-    """Genera grafici comparativi e raccomandazione finale per il modello."""
     valid_results = [r for r in results if r and r["Status"] == "OK"]
     if not valid_results:
         print("\n[!] Nessun dato valido raccolto per generare il report.")
@@ -193,7 +189,6 @@ def generate_charts_and_report(model_name, results):
     import matplotlib.pyplot as plt
 
     df = pd.DataFrame(valid_results)
-    
     df['Config'] = "CTX:" + df['Num_CTX'].astype(str) + " GPU:" + df['Num_GPU_Layers'].astype(str)
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
@@ -203,11 +198,17 @@ def generate_charts_and_report(model_name, results):
     axes[0].set_ylabel("Tokens / sec")
     axes[0].tick_params(axis='x', rotation=30)
 
-    axes[1].bar(df['Config'], df['VRAM_Used_MB'], label='VRAM Usata (MB)', color='salmon')
-    axes[1].bar(df['Config'], df['VRAM_Free_MB'], bottom=df['VRAM_Used_MB'], label='VRAM Libera (MB)', color='lightgreen')
-    axes[1].set_title(f"Uso VRAM (MB) - {model_name}")
-    axes[1].set_ylabel("MB VRAM")
-    axes[1].legend()
+    if df['VRAM_Used_MB'].sum() > 0:
+        axes[1].bar(df['Config'], df['VRAM_Used_MB'], label='VRAM Usata (MB)', color='salmon')
+        axes[1].bar(df['Config'], df['VRAM_Free_MB'], bottom=df['VRAM_Used_MB'], label='VRAM Libera (MB)', color='lightgreen')
+        axes[1].set_title(f"Uso VRAM (MB) - {model_name}")
+        axes[1].set_ylabel("MB VRAM")
+        axes[1].legend()
+    else:
+        axes[1].bar(df['Config'], df['RAM_Used_GB'], color='orange')
+        axes[1].set_title(f"Uso RAM di Sistema (GB) - {model_name}")
+        axes[1].set_ylabel("GB RAM")
+    
     axes[1].tick_params(axis='x', rotation=30)
 
     plt.tight_layout()
@@ -215,11 +216,7 @@ def generate_charts_and_report(model_name, results):
     plt.savefig(chart_filename)
     print(f"\n[+] Grafico comparativo salvato in: {chart_filename}")
 
-    df_safe = df[df['VRAM_Free_MB'] >= 800]
-    if not df_safe.empty:
-        best = df_safe.sort_values(by='Gen_Tok_Sec', ascending=False).iloc[0]
-    else:
-        best = df.sort_values(by='Gen_Tok_Sec', ascending=False).iloc[0]
+    best = df.sort_values(by='Gen_Tok_Sec', ascending=False).iloc[0]
 
     print("\n" + "="*60)
     print(f" RACCOMANDAZIONE OTTIMALE PER: {model_name}")
@@ -227,11 +224,9 @@ def generate_charts_and_report(model_name, results):
     print(f" Configurazione migliore : CTX = {best['Num_CTX']} | GPU Layers = {best['Num_GPU_Layers']}")
     print(f" Velocità Generazione    : {best['Gen_Tok_Sec']} tok/s")
     print(f" Velocità Prompt Eval    : {best['Prompt_Tok_Sec']} tok/s")
-    print(f" Margine VRAM Residuo    : {best['VRAM_Free_MB']} MB")
     print(f" Impatto RAM di Sistema  : {best['RAM_Used_GB']} GB")
+    print(f" Carico CPU medio        : {best['CPU_Percent']}%")
     print("="*60 + "\n")
-
-# --- MAIN CLI ---
 
 def main():
     models_data = get_installed_models_metadata()
@@ -241,7 +236,7 @@ def main():
 
     header = f"{'IDX':<5} | {'MODELLO':<42} | {'PESO':<8} | {'PARAMETRI':<10} | {'CTX MAX':<8} | {'QUANT':<10}"
     print("\n" + "=" * len(header))
-    print(" --- BENCHMARK OLLAMA AUTOMATIZZATO ---")
+    print(" --- BENCHMARK OLLAMA (CUDA / VULKAN COMPLIANT) ---")
     print("=" * len(header))
     print(header)
     print("=" * len(header))
