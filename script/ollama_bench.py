@@ -185,6 +185,8 @@ def generate_charts_and_report(model_name, results):
         print("\n[!] Nessun dato valido raccolto per generare il report.")
         return
 
+    import matplotlib
+    matplotlib.use("Agg")
     import pandas as pd
     import matplotlib.pyplot as plt
 
