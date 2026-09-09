@@ -43,8 +43,8 @@ if [ ! -f .env ]; then
     fi
 fi
 
-echo "Installazione moduli npm con Node 20..."
-"$NODE20_DIR/bin/npm" install
+echo "Installazione moduli npm con Node 20 (--legacy-peer-deps)..."
+"$NODE20_DIR/bin/npm" install --legacy-peer-deps
 
 echo "=== [5/6] Creazione servizio systemd ==="
 sudo bash -c "cat <<EOF > $SERVICE_FILE
