@@ -115,4 +115,4 @@ sudo systemctl enable --now anythingllm.service -q
 
 echo "=== Installazione completata con successo ==="
 sleep 2
-sudo systemctl status anythingllm.service --no-pagerv
+sudo systemctl status anythingllm.service --no-pager
