@@ -1,54 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ==============================================================================
-# CONTROLLO E IMPOSTAZIONE LOCALE UTF-8
-# ==============================================================================
-export LANG="${LANG:-C.UTF-8}"
-export LC_ALL="${LC_ALL:-C.UTF-8}"
-export PYTHONIOENCODING="utf-8"
+echo "==> Avvio configurazione e deployment bare-metal di TEI (bge-m3)..."
 
-# Fix specifico per AMD RX 5700 XT (Navi 10 / RDNA1) in ambiente ROCm/HIP
-export HSA_OVERRIDE_GFX_VERSION="10.1.0"
-
-echo "=== Configurazione Omarchy AI: LANG=$LANG | GPU=RX 5700 XT (gfx1010) ==="
-
-# 1. Rilevamento gestore pacchetti (Debian/Ubuntu vs Arch/Manjaro)
-echo "[1/5] Verifica dipendenze di sistema..."
-if command -v apt-get &> /dev/null; then
-    sudo apt-get update && sudo apt-get install -y \
-        curl build-essential cmake pkg-config libssl-dev git locales
-    sudo locale-gen en_US.UTF-8 it_IT.UTF-8 C.UTF-8
-    sudo update-locale LANG=C.UTF-8 LC_ALL=C.UTF-8
-elif command -v pacman &> /dev/null; then
-    sudo pacman -Sy --needed --noconfirm \
-        curl base-devel cmake pkgconf openssl git
+# 1. Creazione utente ed gruppo di sistema dedicato (se non esistono)
+if ! getent group tei >/dev/null 2>&1; then
+    echo "[+] Creazione gruppo 'tei'..."
+    sudo groupadd -r tei
 fi
 
-# 2. Configurazione Toolchain Rust
-echo "[2/5] Verificazione ambiente Rust..."
-if ! command -v cargo &> /dev/null; then
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    source "$HOME/.cargo/env"
+if ! id -u tei >/dev/null 2>&1; then
+    echo "[+] Creazione utente di sistema 'tei'..."
+    sudo useradd -r -g tei -d /var/lib/tei -s /usr/bin/nologin -c "TEI Service Account" tei
 fi
 
-# 3. Compilazione / Installazione di TEI
-echo "[3/5] Compilazione di HuggingFace text-embeddings-router..."
-cargo install --git https://github.com/huggingface/text-embeddings-inference.git text-embeddings-router
-
-sudo cp "$HOME/.cargo/bin/text-embeddings-router" /usr/local/bin/
-
-# 4. Configurazione directory dati ed utente di servizio
-echo "[4/5] Preparazione cartelle locali..."
-sudo id -u tei &>/dev/null || sudo useradd -r -s /bin/false tei
-sudo mkdir -p /var/lib/tei/data
+# 2. Struttura delle directory di lavoro e cache Hugging Face
+echo "[+] Configurazione directory /var/lib/tei e permessi..."
+sudo mkdir -p /var/lib/tei/cache
 sudo chown -R tei:tei /var/lib/tei
+sudo chmod -R 750 /var/lib/tei
 
-# 5. Creazione del servizio Systemd con variabili UTF-8 e ROCm/HIP
-echo "[5/5] Configurazione servizio Systemd (tei-bge-m3.service)..."
-sudo bash -c 'cat << EOF > /etc/systemd/system/tei-bge-m3.service
+# 3. Verifica binario text-embeddings-router
+if [ ! -x "/usr/local/bin/text-embeddings-router" ]; then
+    echo "[!] WARNING: /usr/local/bin/text-embeddings-router non trovato o non eseguibile."
+    echo "    Assicurati che il binario sia stato compilato/spostato correttamente."
+fi
+
+# 4. Generazione del file di unit systemd ottimizzato per CPU
+echo "[+] Creazione /etc/systemd/system/tei-bge-m3.service..."
+sudo tee /etc/systemd/system/tei-bge-m3.service > /dev/null << 'EOF'
 [Unit]
-Description=HuggingFace Text Embeddings Inference (bge-m3) su Omarchy RX 5700 XT
+Description=HuggingFace Text Embeddings Inference (bge-m3) su Omarchy
 After=network.target
 
 [Service]
@@ -59,27 +41,33 @@ WorkingDirectory=/var/lib/tei
 Environment="LANG=C.UTF-8"
 Environment="LC_ALL=C.UTF-8"
 Environment="PYTHONIOENCODING=utf-8"
+Environment="HOME=/var/lib/tei"
+Environment="HF_HOME=/var/lib/tei/cache"
 Environment="HSA_OVERRIDE_GFX_VERSION=10.1.0"
+
 ExecStart=/usr/local/bin/text-embeddings-router \
     --model-id BAAI/bge-m3 \
     --hostname 0.0.0.0 \
     --port 8080 \
-    --max-concurrent-requests 512 \
-    --max-batch-tokens 16384 \
-    --max-client-batch-size 128 \
-    --auto-truncate
+    --max-concurrent-requests 128 \
+    --max-batch-requests 4 \
+    --max-batch-tokens 8192 \
+    --max-client-batch-size 32
+
 Restart=always
 RestartSec=5
 LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
-EOF'
+EOF
 
-# Abilitazione e avvio del servizio
+# 5. Reload systemd, abilitazione ed avvio servizio
+echo "[+] Reload systemd daemon, abilitazione ed avvio del servizio..."
 sudo systemctl daemon-reload
-sudo systemctl enable --now tei-bge-m3
+sudo systemctl enable tei-bge-m3.service
+sudo systemctl restart tei-bge-m3.service
 
-echo "=== Installazione su Omarchy completata ==="
-echo "Stato del servizio:"
-sudo systemctl status tei-bge-m3 --no-pager
+echo "==> Configurazione completata!"
+echo "Verifica i log di avvio e il warm-up con:"
+echo "    sudo journalctl -u tei-bge-m3.service -f"
