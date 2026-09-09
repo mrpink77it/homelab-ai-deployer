@@ -47,8 +47,9 @@ JWT_SECRET="$JWT_SECRET"
 DISABLE_TELEMETRY="true"
 EOF
 
-echo "=== [6/7] Installazione moduli NPM e migrazione Database Prisma ==="
+echo "=== [6/7] Installazione moduli NPM, Fix Zod e migrazione Database Prisma ==="
 "$NODE20_DIR/bin/npm" install --legacy-peer-deps
+"$NODE20_DIR/bin/npm" install zod-to-json-schema@latest zod@latest --legacy-peer-deps
 "$NODE20_DIR/bin/npx" prisma generate
 "$NODE20_DIR/bin/npx" prisma migrate deploy --schema=./prisma/schema.prisma
 
@@ -74,6 +75,6 @@ EOF"
 sudo systemctl daemon-reload
 sudo systemctl enable --now anythingllm.service
 
-echo "=== Verifica avvio in corso... ==="
+echo "=== Installazione completata con successo ==="
 sleep 3
 sudo systemctl status anythingllm.service --no-pager
