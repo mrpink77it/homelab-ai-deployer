@@ -8,7 +8,6 @@ APPIMAGE_PATH="${INSTALL_DIR}/AnythingLLM.AppImage"
 SERVICE_FILE="/etc/systemd/system/anythingllm.service"
 APP_USER="${SUDO_USER:-$USER}"
 
-# Fallback se lo script viene eseguito direttamente da root
 if [ "$APP_USER" = "root" ]; then
     APP_USER="alex"
 fi
@@ -19,20 +18,27 @@ sudo pacman -Sy --needed --noconfirm curl wget fuse2 jq git
 echo "[2/5] Preparazione directory ${INSTALL_DIR}..."
 sudo mkdir -p "${INSTALL_DIR}"
 
-# Arresta il servizio se già attivo per sbloccare il file AppImage
 if systemctl is-active --quiet anythingllm.service 2>/dev/null; then
     echo "   -> Arresto temporaneo del servizio anythingllm in corso..."
     sudo systemctl stop anythingllm.service
 fi
 
-echo "[3/5] Download di AnythingLLM AppImage (con gestione redirect)..."
-sudo curl -SL "https://s3.amazonaws.com/anythingllm-desktop/AnythingLLMDesktop.AppImage" -o "${APPIMAGE_PATH}"
+echo "[3/5] Recupero URL ultima release di AnythingLLM da GitHub..."
+LATEST_URL=$(curl -s https://api.github.com/repos/Mintplex-Labs/anything-llm/releases/latest | jq -r '.assets[] | select(.name | endswith(".AppImage")) | .browser_download_url' | head -n 1)
 
-# Verifica di sicurezza sulla dimensione del file scaricato
+if [ -z "${LATEST_URL}" ] || [ "${LATEST_URL}" = "null" ]; then
+    echo "   [!] Impossibile recuperare l'URL da GitHub API, uso URL fallback CDN..."
+    LATEST_URL="https://cdn.useanything.com/latest/AnythingLLMDesktop.AppImage"
+fi
+
+echo "   -> Download in corso da: ${LATEST_URL}"
+sudo curl -SL "${LATEST_URL}" -o "${APPIMAGE_PATH}"
+
 FILE_SIZE=$(stat -c%s "${APPIMAGE_PATH}" 2>/dev/null || echo 0)
 if [ "$FILE_SIZE" -lt 50000000 ]; then
     echo "[!] ERRORE: Download fallito o incompleto (Dimensione: ${FILE_SIZE} bytes)."
-    echo "    Verifica la connettività di rete e riprova."
+    echo "    Contenuto della risposta:"
+    cat "${APPIMAGE_PATH}"
     exit 1
 fi
 
