@@ -38,28 +38,26 @@ sudo rm -rf "$ANYTHINGLLM_DIR"
 
 echo "=== [2/8] Installazione dipendenze di sistema ==="
 if command -v pacman &>/dev/null; then
-    sudo pacman -Sy --needed --noconfirm git curl tar make gcc python openssl
+    sudo pacman -Sy --needed --noconfirm -q git curl tar make gcc python openssl >/dev/null 2>&1
 elif command -v apt-get &>/dev/null; then
-    sudo apt-get update && sudo apt-get install -y git curl tar build-essential python3 openssl
+    sudo apt-get update -qq >/dev/null 2>&1 && sudo apt-get install -y -qq git curl tar build-essential python3 openssl >/dev/null 2>&1
 fi
 
 echo "=== [3/8] Setup Node.js v20 LTS isolato in $NODE20_DIR ==="
 if [ ! -x "$NODE20_DIR/bin/node" ]; then
     sudo mkdir -p "$NODE20_DIR"
+    # curl usa -fsSL per scaricare in modo silenzioso (s), mostrando solo errori (f)
     curl -fsSL https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-x64.tar.xz | sudo tar -xJ --strip-components=1 -C "$NODE20_DIR"
 fi
 
-echo "Node attivo: $($NODE20_DIR/bin/node -v)"
-echo "NPM attivo:  $($NODE20_DIR/bin/npm -v)"
-
 echo "=== [4/8] Clonazione AnythingLLM in $ANYTHINGLLM_DIR ==="
-sudo git clone --depth 1 https://github.com/Mintplex-Labs/anything-llm.git "$ANYTHINGLLM_DIR"
+sudo git clone -q --depth 1 https://github.com/Mintplex-Labs/anything-llm.git "$ANYTHINGLLM_DIR"
 sudo chown -R "$RUN_USER:$RUN_USER" "$ANYTHINGLLM_DIR"
 
 echo "=== [5/8] Configurazione file .env e ripristino storage ==="
 # Se esiste il backup, lo rimettiamo al suo posto con il comando mv
 if [ -d "/opt/anythingllm_storage_backup" ]; then
-    echo "[!] Ripristino il backup dello storage precedente..."
+    echo "          [!] Ripristino il backup dello storage precedente..."
     mkdir -p "$ANYTHINGLLM_DIR/server"
     sudo mv /opt/anythingllm_storage_backup "$ANYTHINGLLM_DIR/server/storage"
     sudo chown -R "$RUN_USER:$RUN_USER" "$ANYTHINGLLM_DIR/server/storage"
@@ -78,18 +76,18 @@ EOF
 
 echo "=== [6/8] Installazione Backend, Fix Zod e DB Prisma ==="
 cd "$ANYTHINGLLM_DIR/server"
-"$NODE20_DIR/bin/npm" install --legacy-peer-deps
-"$NODE20_DIR/bin/npm" install zod-to-json-schema@latest zod@latest --legacy-peer-deps
-"$NODE20_DIR/bin/npx" prisma generate
-"$NODE20_DIR/bin/npx" prisma migrate deploy --schema=./prisma/schema.prisma
+"$NODE20_DIR/bin/npm" install --legacy-peer-deps --loglevel error --no-fund --no-audit
+"$NODE20_DIR/bin/npm" install zod-to-json-schema@latest zod@latest --legacy-peer-deps --loglevel error --no-fund --no-audit
+"$NODE20_DIR/bin/npx" prisma generate >/dev/null 2>&1
+"$NODE20_DIR/bin/npx" prisma migrate deploy --schema=./prisma/schema.prisma >/dev/null 2>&1
 
 echo "=== [7/8] Compilazione Interfaccia Web (Frontend) ==="
 cd "$ANYTHINGLLM_DIR/frontend"
-"$NODE20_DIR/bin/npm" install --legacy-peer-deps
-"$NODE20_DIR/bin/npm" install regenerator-runtime --legacy-peer-deps
-"$NODE20_DIR/bin/npm" run build
+"$NODE20_DIR/bin/npm" install --legacy-peer-deps --loglevel error --no-fund --no-audit
+"$NODE20_DIR/bin/npm" install regenerator-runtime --legacy-peer-deps --loglevel error --no-fund --no-audit
+# Reindirizziamo l'output della build per nascondere i warning di Vite
+"$NODE20_DIR/bin/npm" run build --loglevel error >/dev/null 2>&1
 
-# FIX: Colleghiamo il frontend compilato alla directory che il backend si aspetta
 cd "$ANYTHINGLLM_DIR/server"
 ln -s ../frontend/dist ./public
 
@@ -113,8 +111,8 @@ WantedBy=multi-user.target
 EOF"
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now anythingllm.service
+sudo systemctl enable --now anythingllm.service -q
 
 echo "=== Installazione completata con successo ==="
-sleep 3
-sudo systemctl status anythingllm.service --no-pager
+sleep 2
+sudo systemctl status anythingllm.service --no-pagerv
