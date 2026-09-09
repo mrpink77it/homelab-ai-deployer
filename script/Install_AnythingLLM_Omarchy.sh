@@ -6,6 +6,29 @@ NODE20_DIR="/opt/node20"
 SERVICE_FILE="/etc/systemd/system/anythingllm.service"
 RUN_USER="${SUDO_USER:-$USER}"
 
+echo "=========================================================================="
+echo "  ██████╗  █████╗  ██████╗██╗  ██╗██╗   ██╗██████╗ "
+echo "  ██╔══██╗██╔══██╗██╔════╝██║ ██╔╝██║   ██║██╔══██╗"
+echo "  ██████╔╝███████║██║     █████╔╝ ██║   ██║██████╔╝"
+echo "  ██╔══██╗██╔══██║██║     ██╔═██╗ ██║   ██║██╔═══╝ "
+echo "  ██████╔╝██║  ██║╚██████╗██║  ██╗╚██████╔╝██║     "
+echo "  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     "
+echo "=========================================================================="
+echo "  ATTENZIONE: SALVATAGGIO DATI E DATABASE (STORAGE) IN CORSO"
+echo "  I file verranno SPOSTATI in: /opt/anythingllm_storage_backup"
+echo "=========================================================================="
+sleep 2
+
+if [ -d "$ANYTHINGLLM_DIR/server/storage" ]; then
+    # Rimuove eventuali backup precedenti prima di spostare il nuovo
+    sudo rm -rf /opt/anythingllm_storage_backup
+    sudo mv "$ANYTHINGLLM_DIR/server/storage" /opt/anythingllm_storage_backup
+    echo "[OK] Storage spostato con successo."
+else
+    echo "[INFO] Nessuno storage esistente trovato. Salto il backup."
+fi
+sleep 1
+
 echo "=== [1/8] Pulizia installazioni e servizi precedenti ==="
 sudo systemctl stop anythingllm.service 2>/dev/null || true
 sudo systemctl disable anythingllm.service 2>/dev/null || true
@@ -33,8 +56,16 @@ echo "=== [4/8] Clonazione AnythingLLM in $ANYTHINGLLM_DIR ==="
 sudo git clone --depth 1 https://github.com/Mintplex-Labs/anything-llm.git "$ANYTHINGLLM_DIR"
 sudo chown -R "$RUN_USER:$RUN_USER" "$ANYTHINGLLM_DIR"
 
-echo "=== [5/8] Configurazione file .env e directory storage ==="
-mkdir -p "$ANYTHINGLLM_DIR/server/storage"
+echo "=== [5/8] Configurazione file .env e ripristino storage ==="
+# Se esiste il backup, lo rimettiamo al suo posto con il comando mv
+if [ -d "/opt/anythingllm_storage_backup" ]; then
+    echo "[!] Ripristino il backup dello storage precedente..."
+    mkdir -p "$ANYTHINGLLM_DIR/server"
+    sudo mv /opt/anythingllm_storage_backup "$ANYTHINGLLM_DIR/server/storage"
+    sudo chown -R "$RUN_USER:$RUN_USER" "$ANYTHINGLLM_DIR/server/storage"
+else
+    mkdir -p "$ANYTHINGLLM_DIR/server/storage"
+fi
 
 JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || echo "anythingllm_secret_$(date +%s)")
 
@@ -57,6 +88,7 @@ cd "$ANYTHINGLLM_DIR/frontend"
 "$NODE20_DIR/bin/npm" install --legacy-peer-deps
 "$NODE20_DIR/bin/npm" install regenerator-runtime --legacy-peer-deps
 "$NODE20_DIR/bin/npm" run build
+
 # FIX: Colleghiamo il frontend compilato alla directory che il backend si aspetta
 cd "$ANYTHINGLLM_DIR/server"
 ln -s ../frontend/dist ./public
