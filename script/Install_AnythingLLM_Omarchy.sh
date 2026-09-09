@@ -1,67 +1,73 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ==============================================================================
-# CONTROLLO E IMPOSTAZIONE LOCALE UTF-8
-# ==============================================================================
-export LANG="${LANG:-C.UTF-8}"
-export LC_ALL="${LC_ALL:-C.UTF-8}"
-export PYTHONIOENCODING="utf-8"
+echo "=== Installazione e Configurazione AnythingLLM Nativo su Omarchy ==="
 
-echo "=== Configurazione AnythingLLM Nativo su Omarchy ==="
+INSTALL_DIR="/opt/anythingllm"
+APPIMAGE_PATH="${INSTALL_DIR}/AnythingLLM.AppImage"
+SERVICE_FILE="/etc/systemd/system/anythingllm.service"
+APP_USER="${SUDO_USER:-$USER}"
 
-# 1. Installazione dipendenze di sistema
-echo "[1/4] Installazione dipendenze di sistema..."
-if command -v apt-get &> /dev/null; then
-    sudo apt-get update && sudo apt-get install -y \
-        curl wget libfuse2 jq git locales
-    sudo locale-gen en_US.UTF-8 it_IT.UTF-8 C.UTF-8
-    sudo update-locale LANG=C.UTF-8 LC_ALL=C.UTF-8
-elif command -v pacman &> /dev/null; then
-    sudo pacman -Sy --needed --noconfirm \
-        curl wget fuse2 jq git
+# Fallback se lo script viene eseguito direttamente da root
+if [ "$APP_USER" = "root" ]; then
+    APP_USER="alex"
 fi
 
-# 2. Setup directory ed utente dedicato
-echo "[2/4] Creazione directory per AnythingLLM..."
-INSTALL_DIR="/opt/anythingllm"
-DATA_DIR="/var/lib/anythingllm"
+echo "[1/5] Installazione dipendenze di sistema..."
+sudo pacman -Sy --needed --noconfirm curl wget fuse2 jq git
 
-sudo mkdir -p "$INSTALL_DIR" "$DATA_DIR"
-sudo chown -R $USER:$USER "$INSTALL_DIR" "$DATA_DIR"
+echo "[2/5] Preparazione directory ${INSTALL_DIR}..."
+sudo mkdir -p "${INSTALL_DIR}"
 
-# 3. Download dell'ultimo eseguibile/AppImage di AnythingLLM Desktop/Server
-echo "[3/4] Download di AnythingLLM..."
-cd "$INSTALL_DIR"
-curl -sL "https://s3.amazonaws.com/anythingllm-desktop/latest/AnythingLLMDesktop.AppImage" -o AnythingLLM.AppImage
-chmod +x AnythingLLM.AppImage
+# Arresta il servizio se già attivo per sbloccare il file AppImage
+if systemctl is-active --quiet anythingllm.service 2>/dev/null; then
+    echo "   -> Arresto temporaneo del servizio anythingllm in corso..."
+    sudo systemctl stop anythingllm.service
+fi
 
-# 4. Creazione del servizio Systemd per avvio automatico
-echo "[4/4] Creazione del servizio Systemd..."
-sudo bash -c "cat << EOF > /etc/systemd/system/anythingllm.service
+echo "[3/5] Download di AnythingLLM AppImage (con gestione redirect)..."
+sudo curl -SL "https://s3.amazonaws.com/anythingllm-desktop/AnythingLLMDesktop.AppImage" -o "${APPIMAGE_PATH}"
+
+# Verifica di sicurezza sulla dimensione del file scaricato
+FILE_SIZE=$(stat -c%s "${APPIMAGE_PATH}" 2>/dev/null || echo 0)
+if [ "$FILE_SIZE" -lt 50000000 ]; then
+    echo "[!] ERRORE: Download fallito o incompleto (Dimensione: ${FILE_SIZE} bytes)."
+    echo "    Verifica la connettività di rete e riprova."
+    exit 1
+fi
+
+echo "[+] Download completato con successo: $(du -h "${APPIMAGE_PATH}" | cut -f1)"
+
+echo "[4/5] Configurazione permessi e proprietario..."
+sudo chmod +x "${APPIMAGE_PATH}"
+sudo chown -R "${APP_USER}:${APP_USER}" "${INSTALL_DIR}"
+
+echo "[5/5] Creazione e configurazione del servizio Systemd..."
+sudo tee "${SERVICE_FILE}" > /dev/null << EOF
 [Unit]
 Description=AnythingLLM Service su Omarchy
-After=network.target tei-bge-m3.service
+After=network.target
 
 [Service]
 Type=simple
-User=$USER
-WorkingDirectory=$INSTALL_DIR
-Environment=\"LANG=C.UTF-8\"
-Environment=\"LC_ALL=C.UTF-8\"
-Environment=\"PYTHONIOENCODING=utf-8\"
-Environment=\"STORAGE_DIR=$DATA_DIR\"
-ExecStart=$INSTALL_DIR/AnythingLLM.AppImage --no-sandbox
-Restart=always
+User=${APP_USER}
+WorkingDirectory=${INSTALL_DIR}
+Environment="APPIMAGE_EXTRACT_AND_RUN=1"
+ExecStart=${APPIMAGE_PATH} --no-sandbox
+Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-EOF"
+EOF
 
+echo "[+] Reload systemd, abilitazione ed avvio del servizio..."
 sudo systemctl daemon-reload
-sudo systemctl enable --now anythingllm
+sudo systemctl enable anythingllm.service
+sudo systemctl restart anythingllm.service
 
-echo "=== Installazione di AnythingLLM Nativo Completata ==="
-echo "Stato del servizio:"
-sudo systemctl status anythingllm --no-pager
+echo "[+] Attesa avvio processo..."
+sleep 3
+
+echo "=== Stato del Servizio AnythingLLM ==="
+sudo systemctl status anythingllm.service --no-pager
