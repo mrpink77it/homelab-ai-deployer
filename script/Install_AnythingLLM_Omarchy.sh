@@ -57,6 +57,9 @@ cd "$ANYTHINGLLM_DIR/frontend"
 "$NODE20_DIR/bin/npm" install --legacy-peer-deps
 "$NODE20_DIR/bin/npm" install regenerator-runtime --legacy-peer-deps
 "$NODE20_DIR/bin/npm" run build
+# FIX: Colleghiamo il frontend compilato alla directory che il backend si aspetta
+cd "$ANYTHINGLLM_DIR/server"
+ln -s ../frontend/dist ./public
 
 echo "=== [8/8] Configurazione ed avvio del servizio Systemd ==="
 sudo bash -c "cat <<EOF > $SERVICE_FILE
