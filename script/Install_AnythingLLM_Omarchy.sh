@@ -55,6 +55,7 @@ cd "$ANYTHINGLLM_DIR/server"
 echo "=== [7/8] Compilazione Interfaccia Web (Frontend) ==="
 cd "$ANYTHINGLLM_DIR/frontend"
 "$NODE20_DIR/bin/npm" install --legacy-peer-deps
+"$NODE20_DIR/bin/npm" install regenerator-runtime --legacy-peer-deps
 "$NODE20_DIR/bin/npm" run build
 
 echo "=== [8/8] Configurazione ed avvio del servizio Systemd ==="
