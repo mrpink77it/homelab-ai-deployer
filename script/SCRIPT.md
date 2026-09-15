@@ -16,7 +16,13 @@ Una raccolta di script Bash automatizzati per il provisioning, la gestione e l'o
 | `manager-amd.sh` | Ubuntu / Debian (AMD) | Console di gestione TUI (Whiptail) per stack AMD: build `llama.cpp` Vulkan, Open WebUI e orchestrazione modelli GGUF. |
 | `manager-cpu.sh` | Linux (CPU) | Manager TUI per infrastrutture CPU-only: auto-tuning dei thread/RAM, ottimizzazione AVX2/AVX-512 e installazione Open WebUI via `uv`. |
 | `manager-finetuning.sh` | Debian / Ubuntu (NVIDIA) | Suite di gestione per training e fine-tuning: installazione driver NVIDIA, CUDA, Unsloth Studio e dashboard di telemetria GPU in tempo reale. |
-
+| manager-nvidia.sh | Debian / Ubuntu (NVIDIA) | Console TUI (Whiptail) per stack NVIDIA: installazione driver/CUDA, compilazione llama.cpp (CUDA), Open WebUI, Jupyter/Unsloth e gestione servizi/porte. |
+| manager-wsl-amd.sh | WSL2 / Windows (AMD) | Manager TUI per ambienti WSL2 con GPU AMD (Vulkan): build llama.cpp, setup Open WebUI e gestione modelli. |
+| manager-wsl-cpu.sh | WSL2 / Windows (CPU) | Console TUI per deployment AI su WSL2 CPU-only: auto-tuning delle risorse CPU/RAM, build llama.cpp e integrazione Open WebUI. |
+| manager-wsl-nvidia.sh | WSL2 / Windows (NVIDIA) | Manager TUI per WSL2 con GPU NVIDIA (CUDA): build di llama.cpp, configurazione Open WebUI e gestione dei servizi systemd. |
+| monitor.sh | Linux / Proxmox LXC | Dashboard web in tempo reale (FastAPI/WebSocket) per il monitoraggio di CPU, RAM e VRAM/carico GPU (NVIDIA & AMD). |
+| ollama_bench.py | Generico (Ollama / Python) | Suite di benchmark per modelli Ollama: misurazione tok/s (prompt/generazione), monitoraggio VRAM/RAM e generazione di grafici e report. |
+| proxmox_lxc_sandbox_setup.sh | Proxmox VE | Wizard interattivo per il provisioning automatico di container LXC (Debian/Ubuntu) ottimizzati come ambienti sandbox per l'AI. |
 ---
 
 ## 🛠️ Dettaglio Funzionalità
