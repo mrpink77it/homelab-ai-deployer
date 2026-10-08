@@ -50,4 +50,4 @@ Al termine dell'installazione dell'OS, avrai un utente con autologin su KDE e un
 
 [ ] Sviluppo dell'Orchestratore Web (CT 99).
 
-Progetto ideato e sviluppato da mrpink77it.
+
