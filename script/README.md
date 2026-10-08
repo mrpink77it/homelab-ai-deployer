@@ -4,7 +4,7 @@ Una raccolta di script Bash automatizzati per il provisioning, la gestione e l'o
 
 ---
 
-## 📜 Panoramica Script
+
 
 | Script | Sistema / Piattaforma | Descrizione Sintetica |
 | :--- | :--- | :--- |
@@ -24,16 +24,3 @@ Una raccolta di script Bash automatizzati per il provisioning, la gestione e l'o
 | ollama_bench.py | Generico (Ollama / Python) | Suite di benchmark per modelli Ollama: misurazione tok/s (prompt/generazione), monitoraggio VRAM/RAM e generazione di grafici e report. |
 | proxmox_lxc_sandbox_setup.sh | Proxmox VE | Wizard interattivo per il provisioning automatico di container LXC (Debian/Ubuntu) ottimizzati come ambienti sandbox per l'AI. |
 ---
-
-## 🛠️ Dettaglio Funzionalità
-
-### Gestione Motori & Modelli
-* **Inference Engine Setup:** Compilazione nativa e ottimizzata di `llama.cpp` per backend CUDA, Vulkan o estensioni vettoriali CPU (AVX2/AVX-512).
-* **Text Embeddings Inference (TEI):** Script dedicati per la compilazione e il tuning delle performance del modello di embedding `BAAI/bge-m3`.
-
-### Interfacce & Strumenti
-* **Frontend Web:** Deployment e configurazione di AnythingLLM, Open WebUI e Unsloth Studio collegati direttamente alle API locali.
-* **TUI & Telemetria:** Interfacce a riga di comando per il monitoraggio hardware (temperatura GPU, VRAM, consumo energetico) e gestione delle porte dei servizi.
-
----
-
