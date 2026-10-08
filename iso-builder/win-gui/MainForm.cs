@@ -4,6 +4,7 @@ using System.IO;
 using System.Management;
 using System.Net.Http;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -117,18 +118,15 @@ namespace HomelabUSBBuilder
                 Directory.CreateDirectory(tempDir);
                 string isoPath = Path.Combine(tempDir, "proxmox-ve-latest.iso");
 
-                // Step 1: Download ISO
                 lblStatus.Text = "Stato: Download ISO Proxmox VE in corso...";
                 progressBar.Value = 20;
                 await DownloadIsoAsync("https://enterprise.proxmox.com/iso/proxmox-ve_8.2-1.iso", isoPath);
 
-                // Step 2: Generazione Answer.toml
                 lblStatus.Text = "Stato: Generazione configurazione automatica (answer.toml)...";
                 progressBar.Value = 60;
                 string answerToml = BuildAnswerToml();
                 File.WriteAllText(Path.Combine(tempDir, "answer.toml"), answerToml, Encoding.UTF8);
 
-                // Step 3: Flash su USB
                 lblStatus.Text = "Stato: Scrittura immagine sulla USB in corso...";
                 progressBar.Value = 80;
                 await FlashToUsbAsync(targetUsb.DeviceID, isoPath, tempDir);
@@ -155,27 +153,27 @@ namespace HomelabUSBBuilder
             string cidr = radioDhcp.Checked ? "dhcp" : txtIp.Text;
             string gateway = radioDhcp.Checked ? "" : txtGateway.Text;
 
-            return $@"
-[global]
-keyboard = ""it""
-country = ""it""
-timezone = ""Europe/Rome""
-fqdn = ""pve.homelab.local""
-mailto = ""admin@homelab.local""
-root_password = ""proxmox""
-reboot_mode = ""reboot""
+            return $$"""
+            [global]
+            keyboard = "it"
+            country = "it"
+            timezone = "Europe/Rome"
+            fqdn = "pve.homelab.local"
+            mailto = "admin@homelab.local"
+            root_password = "proxmox"
+            reboot_mode = "reboot"
 
-[network]
-source = ""{netSource}""
-cidr = ""{cidr}""
-gateway = ""{gateway}""
-dns = ""1.1.1.1""
-dns2 = ""8.8.8.8""
+            [network]
+            source = "{{netSource}}"
+            cidr = "{{cidr}}"
+            gateway = "{{gateway}}"
+            dns = "1.1.1.1"
+            dns2 = "8.8.8.8"
 
-[disk_setup]
-filesystem = ""zfs (RAID0)""
-disk_list = [""filter:first_matched""]
-";
+            [disk_setup]
+            filesystem = "zfs (RAID0)"
+            disk_list = ["filter:first_matched"]
+            """;
         }
 
         private async Task DownloadIsoAsync(string url, string destination)
@@ -190,8 +188,12 @@ disk_list = [""filter:first_matched""]
         {
             await Task.Run(() =>
             {
-                string diskNum = deviceId.Replace(@"\\.\PHYSICALDRIVE", "");
-                string scriptContent = "$DiskpartScript = \"select disk " + diskNum + "`nclean`nconvert mbr`nactive\"\n\$DiskpartScript | diskpart";
+                string diskNum = Regex.Match(deviceId, @"\d+").Value;
+
+                string scriptContent = $"""
+                $DiskpartScript = "select disk {diskNum}`nclean`nconvert mbr`nactive"
+                \$DiskpartScript | diskpart
+                """;
 
                 var psi = new ProcessStartInfo("powershell")
                 {
