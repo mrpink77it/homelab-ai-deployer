@@ -62,7 +62,7 @@ New-Item -ItemType Directory -Force -Path \$WorkDir | Out-Null
 $IsoPath = "$WorkDir\proxmox-ve-latest.iso"
 
 Write-Host "`n[3/5] Download ultima ISO ufficiale di Proxmox VE..." -ForegroundColor Yellow
-$PveDownloadUrl = "https://enterprise.proxmox.com/iso/proxmox-ve_8.2-1.iso" # URL aggiornabile/dinamico
+$PveDownloadUrl = "https://enterprise.proxmox.com/iso/proxmox-ve_9.2-1.iso" # URL aggiornabile/dinamico
 
 if (-not (Test-Path $IsoPath)) {
     Invoke-WebRequest -Uri $PveDownloadUrl -OutFile $IsoPath -UseBasicParsing
