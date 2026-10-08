@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Management;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -83,7 +84,7 @@ namespace HomelabUSBBuilder
 
         private void InitializeComponentLayout()
         {
-            this.Text = "Proxmox AI Deployer - USB Creator v4.4 (Debug Log)";
+            this.Text = "Proxmox AI Deployer - USB Creator v4.5 (Native Write)";
             this.Size = new System.Drawing.Size(540, 430);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -369,13 +370,12 @@ namespace HomelabUSBBuilder
             string physicalDrive = @"\\.\PhysicalDrive" + diskNum;
             Logger.Log("Inizio FlashToUsbRawAsync sul disco fisico: " + physicalDrive + " (Numero disco: " + diskNum + ")");
 
-            // 1. Pulizia e sblocco volumi tramite PowerShell con log esteso
+            // 1. Pulizia e sblocco volumi tramite PowerShell
             lblStatus.Text = "Stato: Sblocco e dismissione volumi USB...";
             progressBar.Value = 30;
 
             string preCleanScript = "Set-Disk -Number " + diskNum + " -IsOffline $false; " +
                 "Get-Disk -Number " + diskNum + " | Get-Partition | Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { " +
-                "  Write-Output ('Smontaggio volume ' + $_.DriveLetter); " +
                 "  Dismount-Volume -DriveLetter $_.DriveLetter -Force -Confirm:$false -ErrorAction SilentlyContinue; " +
                 "}; " +
                 "Set-Disk -Number " + diskNum + " -IsReadOnly $false; " +
@@ -385,7 +385,7 @@ namespace HomelabUSBBuilder
             await RunPowerShellAsync(preCleanScript);
             await Task.Delay(2000);
 
-            // 2. Scrittura RAW tramite API Win32 con logging dettagliato di ogni errore nativo
+            // 2. Scrittura RAW tramite API Win32 (CreateFile + DeviceIoControl Lock/Dismount + WriteFile nativo)
             lblStatus.Text = "Stato: Scrittura RAW dell'immagine ISO Proxmox...";
             Logger.Log("Tentativo di apertura handle nativo su " + physicalDrive + " con CreateFile...");
 
@@ -404,35 +404,49 @@ namespace HomelabUSBBuilder
 
                 if (handle == SafeNativeMethods.INVALID_HANDLE_VALUE)
                 {
-                    int errCode = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                    int errCode = Marshal.GetLastWin32Error();
                     Logger.Log("ERRORE CRITICO: CreateFile ha restituito INVALID_HANDLE_VALUE. Codice errore Win32: " + errCode);
                     throw new Exception("Impossibile aprire l'handle del disco fisico. Codice errore Win32: " + errCode);
                 }
 
-                Logger.Log("Handle nativo aperto con successo (Handle pointer: " + handle + "). Inizializzazione diskStream...");
+                Logger.Log("Handle nativo aperto con successo (Handle pointer: " + handle + "). Blocco volume e scrittura nativa...");
 
-                using var diskStream = new FileStream(new Microsoft.Win32.SafeHandles.SafeFileHandle(handle, true), FileAccess.Write, 1024 * 1024, false);
-
-                byte[] buffer = new byte[1024 * 1024];
-                int bytesRead;
-                long totalBytes = isoStream.Length;
-                long bytesWritten = 0;
-
-                Logger.Log("Inizio scrittura flussi byte su disco...");
-                while ((bytesRead = isoStream.Read(buffer, 0, buffer.Length)) > 0)
+                try
                 {
-                    diskStream.Write(buffer, 0, bytesRead);
-                    bytesWritten += bytesRead;
-                    int pct = 30 + (int)((bytesWritten * 40) / totalBytes);
+                    // Blocca e smonta il volume a livello driver per evitare accessi negati di Windows
+                    SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_LOCK_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+                    SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_DISMOUNT_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
 
-                    this.Invoke(new Action(() =>
+                    byte[] buffer = new byte[1024 * 1024]; // 1MB buffer
+                    int bytesRead;
+                    long totalBytes = isoStream.Length;
+                    long bytesWritten = 0;
+
+                    while ((bytesRead = isoStream.Read(buffer, 0, buffer.Length)) > 0)
                     {
-                        progressBar.Value = Math.Min(70, pct);
-                        lblStatus.Text = "Stato: Scrittura RAW ISO in corso... (" + (bytesWritten / (1024 * 1024)) + " MB / " + (totalBytes / (1024 * 1024)) + " MB)";
-                    }));
+                        bool success = SafeNativeMethods.WriteFile(handle, buffer, (uint)bytesRead, out uint bytesWrittenChunk, IntPtr.Zero);
+                        if (!success || bytesWrittenChunk != (uint)bytesRead)
+                        {
+                            int errCode = Marshal.GetLastWin32Error();
+                            Logger.Log("ERRORE CRITICO: WriteFile fallito. Codice Win32: " + errCode);
+                            throw new Exception("Errore scrittura RAW sul disco fisico tramite WriteFile. Codice Win32: " + errCode);
+                        }
+
+                        bytesWritten += bytesWrittenChunk;
+                        int pct = 30 + (int)((bytesWritten * 40) / totalBytes);
+
+                        this.Invoke(new Action(() =>
+                        {
+                            progressBar.Value = Math.Min(70, pct);
+                            lblStatus.Text = "Stato: Scrittura RAW ISO in corso... (" + (bytesWritten / (1024 * 1024)) + " MB / " + (totalBytes / (1024 * 1024)) + " MB)";
+                        }));
+                    }
+                    Logger.Log("Scrittura RAW completata con successo. Byte scritti: " + bytesWritten);
                 }
-                diskStream.Flush();
-                Logger.Log("Scrittura RAW completata con successo. Byte scritti: " + bytesWritten);
+                finally
+                {
+                    SafeNativeMethods.CloseHandle(handle);
+                }
             });
 
             // 3. Creazione partizione PROXMOX-AIS
@@ -519,7 +533,10 @@ namespace HomelabUSBBuilder
         public const uint FILE_FLAG_WRITE_THROUGH = 0x80000000;
         public static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
 
-        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+        public const uint FSCTL_LOCK_VOLUME = 0x00090018;
+        public const uint FSCTL_DISMOUNT_VOLUME = 0x00090020;
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         public static extern IntPtr CreateFile(
             string lpFileName,
             uint dwDesiredAccess,
@@ -528,6 +545,28 @@ namespace HomelabUSBBuilder
             uint dwCreationDisposition,
             uint dwFlagsAndAttributes,
             IntPtr hTemplateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool DeviceIoControl(
+            IntPtr hDevice,
+            uint dwIoControlCode,
+            IntPtr lpInBuffer,
+            uint nInBufferSize,
+            IntPtr lpOutBuffer,
+            uint nOutBufferSize,
+            out uint lpBytesReturned,
+            IntPtr lpOverlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool WriteFile(
+            IntPtr hFile,
+            byte[] lpBuffer,
+            uint nNumberOfBytesToWrite,
+            out uint lpNumberOfBytesWritten,
+            IntPtr lpOverlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool CloseHandle(IntPtr hObject);
     }
 
     public class UsbDriveItem
