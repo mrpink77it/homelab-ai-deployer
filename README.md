@@ -2,7 +2,7 @@
 
 Benvenuto in **Proxmox AI Deployer** (`homelab-ai-deployer`), la suite definitiva per trasformare il tuo nodo Proxmox VE in una **Fabbrica del Software Autonoma** o in una **AI Workstation** completa. 
 
-Sfruttando la containerizzazione LXC, questo progetto permette di orchestrare un intero stack di intelligenza artificiale (LLM, Agenti Coding, RAG, Addestramento locale) ottimizzando in modo chirurgico risorse hardware limitate (es. una singola GPU NVIDIA da 8GB di VRAM come la RTX 3060 Ti).
+Sfruttando la containerizzazione LXC, questo progetto permette di orchestrare un intero stack di intelligenza artificiale (LLM, Agenti Coding, RAG, Addestramento locale) ottimizzando in modo chirurgico risorse hardware limitate (es. una singola GPU da 8GB di VRAM).
 
 ## 🌟 Caratteristiche Principali (v2.0.0)
 
