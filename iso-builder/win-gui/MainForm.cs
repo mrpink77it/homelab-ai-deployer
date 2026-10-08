@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Management;
 using System.Net.Http;
 using System.Security.Principal;
@@ -22,11 +23,16 @@ namespace HomelabUSBBuilder
             Logger.Log("=== AVVIO APPLICAZIONE ===");
 
             bool isAdmin = IsAdministrator();
-            Logger.Log($"Esecuzione come Amministratore: {isAdmin}");
+            Logger.Log(\$"Esecuzione come Amministratore: {isAdmin}");
+
+            if (!isAdmin)
+            {
+                MessageBox.Show("Questa applicazione richiede privilegi di Amministratore per la scrittura RAW dei dischi.", "Privilegi Insufficienti", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
 
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
             {
-                Logger.Log($"CRASH NON GESTITO: {e.ExceptionObject}");
+                Logger.Log(\$"CRASH NON GESTITO: {e.ExceptionObject}");
             };
 
             Application.Run(new MainForm());
@@ -48,7 +54,7 @@ namespace HomelabUSBBuilder
         {
             try
             {
-                string logLine = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
+                string logLine = \$"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
                 File.AppendAllText(LogFilePath, logLine, Encoding.UTF8);
             }
             catch
@@ -77,7 +83,7 @@ namespace HomelabUSBBuilder
 
         private void InitializeComponentLayout()
         {
-            this.Text = "Proxmox AI Deployer - USB Creator v3.0 (KDE Auto-Install)";
+            this.Text = "Proxmox AI Deployer - USB Creator v3.5 (RAW + PROXMOX-AIS)";
             this.Size = new System.Drawing.Size(540, 430);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -134,9 +140,9 @@ namespace HomelabUSBBuilder
                     ulong sizeBytes = Convert.ToUInt64(drive["Size"]);
                     double sizeGb = Math.Round((double)sizeBytes / (1024 * 1024 * 1024), 1);
 
-                    var usbItem = new UsbDriveItem { DisplayName = $"{model} ({sizeGb} GB)", DeviceID = deviceId };
+                    var usbItem = new UsbDriveItem { DisplayName = \$"{model} ({sizeGb} GB)", DeviceID = deviceId };
                     comboUsb.Items.Add(usbItem);
-                    Logger.Log($"Trovata USB: {usbItem.DisplayName} [{deviceId}]");
+                    Logger.Log(\$"Trovata USB: {usbItem.DisplayName} [{deviceId}]");
                 }
 
                 if (comboUsb.Items.Count > 0)
@@ -151,8 +157,8 @@ namespace HomelabUSBBuilder
             }
             catch (Exception ex)
             {
-                Logger.Log($"ERRORE lettura USB: {ex}");
-                MessageBox.Show($"Errore lettura USB: {ex.Message}", "Errore", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Logger.Log(\$"ERRORE lettura USB: {ex}");
+                MessageBox.Show(\$"Errore lettura USB: {ex.Message}", "Errore", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -177,48 +183,48 @@ namespace HomelabUSBBuilder
 
             try
             {
-                Logger.Log($"Inizio processo per l'unità: {targetUsb.DisplayName} ({targetUsb.DeviceID})");
+                Logger.Log(\$"Inizio processo RAW per l'unità: {targetUsb.DisplayName} ({targetUsb.DeviceID})");
 
                 string tempDir = Path.Combine(Path.GetTempPath(), "proxmox-builder");
                 Directory.CreateDirectory(tempDir);
 
                 string isoPath = Path.Combine(tempDir, "proxmox-ve-latest.iso");
                 string answerPath = Path.Combine(tempDir, "answer.toml");
-                string preCheckPath = Path.Combine(tempDir, "pre-install-check.sh");
-                string postInstallPath = Path.Combine(tempDir, "post-install.sh");
+                string prerunPath = Path.Combine(tempDir, "prerun.sh");
+                string postrunPath = Path.Combine(tempDir, "postrun.sh");
 
                 // Step 1: Download ISO Proxmox
                 lblStatus.Text = "Stato: Verifica e Download ISO Proxmox VE...";
                 progressBar.Value = 10;
                 await DownloadIsoAsync("https://enterprise.proxmox.com/iso/proxmox-ve_9.2-1.iso", isoPath);
 
-                // Step 2: Download pre-install-check.sh da GitHub
-                lblStatus.Text = "Stato: Download script pre-install-check.sh...";
+                // Step 2: Download prerun.sh da GitHub
+                lblStatus.Text = "Stato: Download script prerun.sh...";
                 progressBar.Value = 15;
-                await DownloadFileAsync("https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/iso-builder/pre-install-check.sh", preCheckPath);
+                await DownloadFileAsync("https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/iso-builder/pre-install-check.sh", prerunPath);
 
                 // Step 3: Generazione answer.toml
                 lblStatus.Text = "Stato: Generazione answer.toml...";
                 progressBar.Value = 20;
                 File.WriteAllText(answerPath, BuildAnswerToml(), Encoding.UTF8);
 
-                // Step 4: Generazione post-install.sh
-                lblStatus.Text = "Stato: Generazione script di installazione KDE e Autologin...";
+                // Step 4: Generazione postrun.sh
+                lblStatus.Text = "Stato: Generazione script postrun.sh (KDE + Autologin)...";
                 progressBar.Value = 25;
-                File.WriteAllText(postInstallPath, BuildPostInstallScript(), new UTF8Encoding(false));
+                File.WriteAllText(postrunPath, BuildPostInstallScript(), new UTF8Encoding(false));
 
-                // Step 5: Formattazione USB, estrazione ISO, patch GRUB e copia script
-                await FlashToUsbAsync(targetUsb.DeviceID, answerPath, isoPath, preCheckPath, postInstallPath);
+                // Step 5: Scrittura RAW ISO e Configurazione Partizione PROXMOX-AIS
+                await FlashToUsbRawAsync(targetUsb.DeviceID, answerPath, isoPath, prerunPath, postrunPath);
 
                 progressBar.Value = 100;
                 lblStatus.Text = "Stato: CREAZIONE E VERIFICA COMPLETATE CON SUCCESSO!";
                 Logger.Log("=== CREAZIONE E VERIFICA COMPLETATE CON SUCCESSO ===");
-                MessageBox.Show("Chiavetta USB Proxmox + KDE autologin creata con successo!", "Completato", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("Chiavetta USB Proxmox + KDE autologin creata con successo in modalità RAW Autoinstall!", "Completato", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                Logger.Log($"ERRORE FATALE: {ex}");
-                MessageBox.Show($"Errore durante la creazione: {ex.Message}\n\nConsulta 'app.log' per maggiori dettagli.", "Errore Fatale", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Logger.Log(\$"ERRORE FATALE: {ex}");
+                MessageBox.Show(\$"Errore durante la creazione: {ex.Message}\n\nConsulta 'app.log' per maggiori dettagli.", "Errore Fatale", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 lblStatus.Text = "Stato: Errore riscontrato.";
             }
             finally
@@ -245,15 +251,21 @@ namespace HomelabUSBBuilder
             sb.AppendLine("reboot_mode = \"reboot\"");
             sb.AppendLine();
             sb.AppendLine("[network]");
-            sb.AppendLine($"source = \"{netSource}\"");
-            sb.AppendLine($"cidr = \"{cidr}\"");
-            sb.AppendLine($"gateway = \"{gateway}\"");
+            sb.AppendLine(\$"source = \"{netSource}\"");
+            sb.AppendLine(\$"cidr = \"{cidr}\"");
+            sb.AppendLine(\$"gateway = \"{gateway}\"");
             sb.AppendLine("dns = \"1.1.1.1\"");
             sb.AppendLine("dns2 = \"8.8.8.8\"");
             sb.AppendLine();
             sb.AppendLine("[disk_setup]");
             sb.AppendLine("filesystem = \"zfs (RAID0)\"");
             sb.AppendLine("disk_list = [\"filter:first_matched\"]");
+            sb.AppendLine();
+            sb.AppendLine("[prerun]");
+            sb.AppendLine("source = \"from-partition\"");
+            sb.AppendLine();
+            sb.AppendLine("[postrun]");
+            sb.AppendLine("source = \"from-partition\"");
 
             return sb.ToString();
         }
@@ -321,7 +333,7 @@ namespace HomelabUSBBuilder
                 long length = new FileInfo(destination).Length;
                 if (length > 500 * 1024 * 1024)
                 {
-                    Logger.Log($"File ISO già presente e valido ({length} byte).");
+                    Logger.Log(\$"File ISO già presente e valido ({length} byte).");
                     return;
                 }
                 File.Delete(destination);
@@ -344,177 +356,33 @@ namespace HomelabUSBBuilder
             await streamToRead.CopyToAsync(streamToWrite);
         }
 
-        private async Task FlashToUsbAsync(string deviceId, string answerPath, string isoPath, string preCheckPath, string postInstallPath)
+        private async Task FlashToUsbRawAsync(string deviceId, string answerPath, string isoPath, string prerunPath, string postrunPath)
         {
-            await Task.Run(() =>
+            string diskNum = Regex.Match(deviceId, @"\d+").Value;
+            if (string.IsNullOrEmpty(diskNum))
             {
-                string diskNum = Regex.Match(deviceId, @"\d+").Value;
-                if (string.IsNullOrEmpty(diskNum))
+                throw new Exception(\$"Impossibile estrarre il numero di disco da DeviceID: {deviceId}");
+            }
+
+            string physicalDrive = \$@"\\.\PhysicalDrive{diskNum}";
+
+            // 1. Pulizia disco USB
+            lblStatus.Text = "Stato: Pulizia della chiavetta USB...";
+            progressBar.Value = 30;
+            await RunDiskPartAsync(\$"select disk {diskNum}\nclean\nrescan\n");
+
+            // 2. Scrittura RAW (DD) dell'immagine ISO
+            lblStatus.Text = "Stato: Scrittura RAW dell'immagine ISO Proxmox...";
+            await Task.Run(async () =>
+            {
+                using var isoStream = new FileStream(isoPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using var diskStream = new FileStream(physicalDrive, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+
+                byte[] buffer = new byte[1024 * 1024]; // Buffer da 1MB
+                int bytesRead;
+                long totalBytes = isoStream.Length;
+                long bytesWritten = 0;
+
+                while ((bytesRead = await isoStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
                 {
-                    throw new Exception($"Impossibile estrarre il numero di disco da DeviceID: {deviceId}");
-                }
-
-                string escAnswer = answerPath.Replace("\\", "\\\\");
-                string escIso = isoPath.Replace("\\", "\\\\");
-                string escPre = preCheckPath.Replace("\\", "\\\\");
-                string escPost = postInstallPath.Replace("\\", "\\\\");
-
-                var sb = new StringBuilder();
-                sb.AppendLine($"$diskNum = \"{diskNum}\"");
-                sb.AppendLine($"$answer = \"{escAnswer}\"");
-                sb.AppendLine($"$iso = \"{escIso}\"");
-                sb.AppendLine($"$preCheck = \"{escPre}\"");
-                sb.AppendLine($"$postInstall = \"{escPost}\"");
-
-                // Step 1: Formattazione GPT/FAT32
-                sb.AppendLine("Write-Host 'STATUS:30:Formattazione disco USB in GPT/FAT32...'");
-                sb.AppendLine("$diskpartScript = @\"");
-                sb.AppendLine("select disk $diskNum");
-                sb.AppendLine("clean");
-                sb.AppendLine("convert gpt");
-                sb.AppendLine("create partition primary");
-                sb.AppendLine("format fs=fat32 quick label=\"PROXMOXAID\"");
-                sb.AppendLine("assign");
-                sb.AppendLine("\"@");
-
-                sb.AppendLine("$dpOutput = $diskpartScript | diskpart");
-                sb.AppendLine("if ($dpOutput -match 'Errore del servizio Dischi virtuali' -or $dpOutput -match 'Error') { throw 'Errore durante formattazione con DiskPart.' }");
-
-                sb.AppendLine("Start-Sleep -Seconds 3");
-
-                // Step 2: Rilevamento lettera di unità
-                sb.AppendLine("$vol = Get-Partition -DiskNumber $diskNum | Get-Volume");
-                sb.AppendLine("if (-not ($vol -and $vol.DriveLetter)) { throw 'Impossibile identificare la lettera della USB.' }");
-                sb.AppendLine("$driveLetter = $vol.DriveLetter.ToString().Trim()");
-
-                // Step 3: Montaggio ISO e copia file
-                sb.AppendLine("Write-Host 'STATUS:40:Montaggio ISO Proxmox ed estrazione dei file...'");
-                sb.AppendLine("$isoMount = Mount-DiskImage -ImagePath $iso -PassThru");
-                sb.AppendLine("$isoVol = $isoMount | Get-Volume");
-                sb.AppendLine("$isoDrive = $isoVol.DriveLetter");
-
-                sb.AppendLine("Write-Host 'STATUS:50:Copia dei file ISO sulla chiavetta USB...'");
-                sb.AppendLine("Copy-Item -Path ($isoDrive + ':\\*') -Destination ($driveLetter + ':\\') -Recurse -Force -ErrorAction Stop");
-
-                // Step 4: Copia file di configurazione e script nella radice USB
-                sb.AppendLine("Write-Host 'STATUS:65:Iniezione answer.toml, pre-install e post-install script...'");
-                sb.AppendLine("Copy-Item -Path $answer -Destination ($driveLetter + ':\\answer.toml') -Force");
-                sb.AppendLine("Copy-Item -Path $preCheck -Destination ($driveLetter + ':\\pre-install-check.sh') -Force");
-                sb.AppendLine("Copy-Item -Path $postInstall -Destination ($driveLetter + ':\\post-install.sh') -Force");
-
-                // Step 5: Patch GRUB Bootloader
-                sb.AppendLine("Write-Host 'STATUS:70:Modifica configurazione GRUB bootloader sulla USB...'");
-                sb.AppendLine("$grubCfg = $driveLetter + ':\\boot\\grub\\grub.cfg'");
-                sb.AppendLine("if (Test-Path $grubCfg) {");
-                sb.AppendLine("    $fileObj = Get-Item -Path $grubCfg");
-                sb.AppendLine("    if ($fileObj.IsReadOnly) { $fileObj.IsReadOnly = $false }");
-                sb.AppendLine("    $content = Get-Content -Path $grubCfg -Raw -Encoding UTF8");
-                sb.AppendLine("    $content = $content -replace 'linux /boot/linux26', 'linux /boot/linux26 proxmox-start-script=/game/pre-install-check.sh proxmox-post-hook=/game/post-install.sh'");
-                sb.AppendLine("    Set-Content -Path $grubCfg -Value $content -Encoding UTF8 -Force -ErrorAction Stop");
-                sb.AppendLine("}");
-
-                // Step 6: VERIFICA INTEGRITÀ E COERENZA DEI FILE SCRITTI
-                sb.AppendLine("Write-Host 'STATUS:75:Avvio verifica di coerenza dei dati scritti sulla USB...'");
-                sb.AppendLine("$isoFiles = Get-ChildItem -Path ($isoDrive + ':\\') -Recurse -File");
-                sb.AppendLine("$totalFiles = $isoFiles.Count");
-                sb.AppendLine("$currentIndex = 0");
-                sb.AppendLine("$corruptCount = 0");
-
-                sb.AppendLine("foreach ($file in $isoFiles) {");
-                sb.AppendLine("    $currentIndex++");
-                sb.AppendLine("    $pct = 75 + [math]::Round(($currentIndex / $totalFiles) * 23)");
-                sb.AppendLine("    $relativePath = $file.FullName.Substring(3)");
-                sb.AppendLine("    Write-Host \"STATUS:${pct}:Verifica [$currentIndex/$totalFiles]: $relativePath\"");
-
-                sb.AppendLine("    $targetPath = Join-Path ($driveLetter + ':\\') $relativePath");
-                sb.AppendLine("    if (-not (Test-Path $targetPath)) {");
-                sb.AppendLine("        Write-Host \"ERRORE VERIFICA: File non trovato sulla USB: $targetPath\"");
-                sb.AppendLine("        $corruptCount++; break");
-                sb.AppendLine("    }");
-
-                sb.AppendLine("    $targetFile = Get-Item -Path $targetPath");
-
-                // Controllo case-insensitive diretto sul nome file per escludere grub.cfg
-                sb.AppendLine("    if ($file.Name -ine 'grub.cfg') {");
-                sb.AppendLine("        if ($file.Length -ne $targetFile.Length) {");
-                sb.AppendLine("            Write-Host \"ERRORE VERIFICA: Dimensione non corrispondente per $relativePath (ISO: $($file.Length), USB: $($targetFile.Length))\"");
-                sb.AppendLine("            $corruptCount++; break");
-                sb.AppendLine("        }");
-                sb.AppendLine("    }");
-                sb.AppendLine("}");
-
-                // Smontaggio immagine ISO silenzioso
-                sb.AppendLine("Dismount-DiskImage -ImagePath $iso -ErrorAction SilentlyContinue | Out-Null");
-
-                sb.AppendLine("if ($corruptCount -gt 0) { throw 'Verifica coerenza dati fallita.' }");
-                sb.AppendLine("Write-Host 'STATUS:99:Verifica dati completata con successo.'");
-
-                var psi = new ProcessStartInfo("powershell")
-                {
-                    CreateNoWindow = true,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                };
-                psi.ArgumentList.Add("-NoProfile");
-                psi.ArgumentList.Add("-ExecutionPolicy");
-                psi.ArgumentList.Add("Bypass");
-                psi.ArgumentList.Add("-Command");
-                psi.ArgumentList.Add(sb.ToString());
-
-                using var proc = new Process { StartInfo = psi };
-                bool hasErrors = false;
-
-                proc.OutputDataReceived += (s, e) =>
-                {
-                    if (string.IsNullOrWhiteSpace(e.Data)) return;
-                    Logger.Log($"[PowerShell]: {e.Data}");
-
-                    if (e.Data.StartsWith("STATUS:"))
-                    {
-                        var parts = e.Data.Split(new[] { ':' }, 3);
-                        if (parts.Length >= 3 && int.TryParse(parts[1], out int pct))
-                        {
-                            string msg = parts[2];
-                            this.Invoke(new Action(() =>
-                            {
-                                progressBar.Value = Math.Min(100, Math.Max(0, pct));
-                                lblStatus.Text = $"Stato: {msg}";
-                            }));
-                        }
-                    }
-                    else if (e.Data.Contains("ERRORE") || e.Data.Contains("throw"))
-                    {
-                        hasErrors = true;
-                    }
-                };
-
-                proc.ErrorDataReceived += (s, e) =>
-                {
-                    if (!string.IsNullOrWhiteSpace(e.Data))
-                    {
-                        Logger.Log($"[PowerShell Errore]: {e.Data}");
-                        hasErrors = true;
-                    }
-                };
-
-                proc.Start();
-                proc.BeginOutputReadLine();
-                proc.BeginErrorReadLine();
-                proc.WaitForExit();
-
-                if (proc.ExitCode != 0 || hasErrors)
-                {
-                    throw new Exception("La creazione o la verifica della chiavetta USB è fallita. Verifica app.log.");
-                }
-            });
-        }
-    }
-
-    public class UsbDriveItem
-    {
-        public string DisplayName { get; set; } = "";
-        public string DeviceID { get; set; } = "";
-        public override string ToString() => DisplayName;
-    }
-}
+                    await disk
