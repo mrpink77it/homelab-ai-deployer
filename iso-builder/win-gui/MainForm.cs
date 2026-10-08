@@ -385,7 +385,7 @@ namespace HomelabUSBBuilder
             await RunPowerShellAsync(preCleanScript);
             await Task.Delay(2000);
 
-            // 2. Scrittura RAW tramite API Win32 pure (CreateFile + DeviceIoControl Lock/Dismount + WriteFile)
+            // 2. Scrittura RAW tramite API Win32 pure (CreateFile + DeviceIoControl Dismount/Lock + WriteFile)
             lblStatus.Text = "Stato: Scrittura RAW dell'immagine ISO Proxmox...";
             Logger.Log("Tentativo di apertura handle nativo su " + physicalDrive + " con CreateFile...");
 
@@ -409,13 +409,15 @@ namespace HomelabUSBBuilder
                     throw new Exception("Impossibile aprire l'handle del disco fisico. Codice errore Win32: " + errCode);
                 }
 
-                Logger.Log("Handle nativo aperto con successo (Handle pointer: " + handle + "). Blocco volume e scrittura nativa pura...");
+                Logger.Log("Handle nativo aperto con successo (Handle pointer: " + handle + "). Smontaggio e blocco volume in corso...");
 
                 try
                 {
-                    // Blocca e smonta il volume a livello driver
-                    SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_LOCK_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
-                    SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_DISMOUNT_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+                    // Prima smonta il volume, poi bloccalo
+                    bool dismountOk = SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_DISMOUNT_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+                    bool lockOk = SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_LOCK_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+                    
+                    Logger.Log($"Esito Dismount: {dismountOk}, Esito Lock: {lockOk} (Win32 Error: {Marshal.GetLastWin32Error()})");
 
                     byte[] buffer = new byte[1024 * 1024]; // 1MB buffer
                     int bytesRead;
@@ -445,6 +447,7 @@ namespace HomelabUSBBuilder
                 }
                 finally
                 {
+                    SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_UNLOCK_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
                     SafeNativeMethods.CloseHandle(handle);
                 }
             });
@@ -482,7 +485,7 @@ namespace HomelabUSBBuilder
             Logger.Log("Unità PROXMOX-AIS trovata su: " + driveLetter + ". Copia file in corso...");
             File.Copy(answerPath, Path.Combine(driveLetter, "answer.toml"), true);
             File.Copy(prerunPath, Path.Combine(driveLetter, "prerun.sh"), true);
-            File.Copy(postrunPath, Path.Combine(driveLetter, "postrun.sh"), true);
+            File.Copy(postrunpath, Path.Combine(driveLetter, "postrun.sh"), true);
 
             Logger.Log("Copia file di configurazione completata con successo su " + driveLetter);
         }
@@ -534,6 +537,7 @@ namespace HomelabUSBBuilder
 
         public const uint FSCTL_LOCK_VOLUME = 0x00090018;
         public const uint FSCTL_DISMOUNT_VOLUME = 0x00090020;
+        public const uint FSCTL_UNLOCK_VOLUME = 0x0009001C;
 
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         public static extern IntPtr CreateFile(
