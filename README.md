@@ -38,3 +38,19 @@ git clone [https://github.com/mrpink77it/homelab-ai-deployer.git](https://github
 cd homelab-ai-deployer
 chmod +x install.sh
 ./install.sh
+
+
+#### Metodo 2: Workstation Auto-ISO (Per nuove installazioni)
+Usa il builder incluso nel repository per iniettare lo script first-boot.sh nella ISO ufficiale di Proxmox.
+Al termine dell'installazione dell'OS, avrai un utente con autologin su KDE e un prompt a schermo intero pronto a configurare l'infrastruttura IA per te. (Vedi la cartella iso-builder/ per i dettagli).
+
+🗺️ Roadmap Attuale (Lavori in Corso)
+[ ] Refactoring degli script di configurazione LXC (riciclo script v1.0).
+
+[ ] Integrazione dello script TUI principale con le nuove opzioni (CT 102, CT 103, CT 104).
+
+[ ] Creazione del modulo "ISO Builder" per iniettare i pacchetti KDE e SDDM.
+
+[ ] Sviluppo dell'Orchestratore Web (CT 99).
+
+Progetto ideato e sviluppato da mrpink77it.
