@@ -1,4 +1,4 @@
-# Homelab AI & Local LLM Deployment Scripts
+# Local LLM Deployment Scripts
 
 Una raccolta di script Bash automatizzati per il provisioning, la gestione e l'ottimizzazione di ambienti AI locali, motori di inferenza LLM, modelli di embedding e interfacce web su architetture NVIDIA, AMD e CPU.
 
