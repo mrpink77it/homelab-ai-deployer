@@ -1,4 +1,6 @@
-# 🚀 Proxmox AI Deployer
+# 🚀 Proxmox AI Deployer - WIP - LAVORI IN CORSO
+
+NON UTILIZZABILE - ATTENDERE IL RILASCIO
 
 Benvenuto in **Proxmox AI Deployer** (`homelab-ai-deployer`), la suite definitiva per trasformare il tuo nodo Proxmox VE in una **Fabbrica del Software Autonoma** o in una **AI Workstation** completa. 
 
