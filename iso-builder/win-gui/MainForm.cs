@@ -84,7 +84,7 @@ namespace HomelabUSBBuilder
 
         private void InitializeComponentLayout()
         {
-            this.Text = "Proxmox AI Deployer - USB Creator v4.7 (DASD Unlocked)";
+            this.Text = "Proxmox AI Deployer - USB Creator v4.8 (Stable RAW Write)";
             this.Size = new System.Drawing.Size(540, 430);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -370,25 +370,23 @@ namespace HomelabUSBBuilder
             string physicalDrive = @"\\.\PhysicalDrive" + diskNum;
             Logger.Log("Inizio FlashToUsbRawAsync sul disco fisico: " + physicalDrive + " (Numero disco: " + diskNum + ")");
 
-            // 1. Pulizia e messa OFFLINE del disco tramite PowerShell
-            lblStatus.Text = "Stato: Sblocco, pulizia e isolamento (Offline) disco USB...";
+            // 1. Sgancio lettere di unità senza distruggere partizioni (evita race condition PnP di Windows)
+            lblStatus.Text = "Stato: Sblocco lettere di unita disco USB...";
             progressBar.Value = 30;
 
-            string preCleanScript = "Set-Disk -Number " + diskNum + " -IsOffline $false; " +
-                "Get-Disk -Number " + diskNum + " | Get-Partition | Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { " +
-                "  Dismount-Volume -DriveLetter $_.DriveLetter -Force -Confirm:$false -ErrorAction SilentlyContinue; " +
+            string preCleanScript = 
+                "Set-Disk -Number " + diskNum + " -IsReadOnly $false -ErrorAction SilentlyContinue; " +
+                "Get-Disk -Number " + diskNum + " | Get-Partition | Where-Object DriveLetter | ForEach-Object { " +
+                "  Remove-PartitionAccessPath -DiskNumber " + diskNum + " -PartitionNumber $_.PartitionNumber -AccessPath ($_.DriveLetter + ':\\') -ErrorAction SilentlyContinue " +
                 "}; " +
-                "Set-Disk -Number " + diskNum + " -IsReadOnly $false; " +
-                "Clear-Disk -Number " + diskNum + " -RemoveData -RemoveOEM -Confirm:$false; " +
-                "Set-Disk -Number " + diskNum + " -IsOffline $true; " +
-                "Write-Output 'Pulizia completata e disco messo OFFLINE'";
+                "Write-Output 'Lettere unita rimosse e disco pronto'";
 
             await RunPowerShellAsync(preCleanScript);
-            await Task.Delay(3000);
+            await Task.Delay(2000);
 
-            // 2. Scrittura RAW tramite API Win32 pure con DASD IO e No-Buffering
+            // 2. Scrittura RAW tramite API Win32 (Standard IO, no-buffering disabilitato)
             lblStatus.Text = "Stato: Scrittura RAW dell'immagine ISO Proxmox...";
-            Logger.Log("Tentativo di apertura handle nativo su " + physicalDrive + " con CreateFile e flag No-Buffering...");
+            Logger.Log("Tentativo di apertura handle nativo su " + physicalDrive + " con I/O Standard...");
 
             await Task.Run(() =>
             {
@@ -400,7 +398,7 @@ namespace HomelabUSBBuilder
                     SafeNativeMethods.FILE_SHARE_READ | SafeNativeMethods.FILE_SHARE_WRITE,
                     IntPtr.Zero,
                     SafeNativeMethods.OPEN_EXISTING,
-                    SafeNativeMethods.FILE_FLAG_NO_BUFFERING | SafeNativeMethods.FILE_FLAG_WRITE_THROUGH,
+                    0, // Flags azzerati: la gestione standard di Windows evita gli Errori 5 di memoria non allineata
                     IntPtr.Zero);
 
                 if (handle == SafeNativeMethods.INVALID_HANDLE_VALUE)
@@ -410,14 +408,15 @@ namespace HomelabUSBBuilder
                     throw new Exception("Impossibile aprire l'handle del disco fisico. Codice errore Win32: " + errCode);
                 }
 
-                Logger.Log("Handle nativo aperto con successo (Handle pointer: " + handle + "). Richiesta permessi DASD estesi in corso...");
+                Logger.Log("Handle nativo aperto con successo (Handle pointer: " + handle + "). Locking fisico in corso...");
 
                 try
                 {
-                    bool dasdOk = SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_ALLOW_EXTENDED_DASD_IO, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+                    // Blocco disco intero e disconnessione dei file system residui
                     bool lockOk = SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_LOCK_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+                    bool dismountOk = SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_DISMOUNT_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
                     
-                    Logger.Log($"Esito DASD_IO: {dasdOk}, Esito Lock: {lockOk} (Win32 Error: {Marshal.GetLastWin32Error()})");
+                    Logger.Log($"Esito Lock: {lockOk}, Esito Dismount: {dismountOk} (Win32 Error: {Marshal.GetLastWin32Error()})");
 
                     const int sectorSize = 512;
                     byte[] buffer = new byte[1024 * 1024]; // 1MB buffer
@@ -427,6 +426,7 @@ namespace HomelabUSBBuilder
 
                     while ((bytesRead = isoStream.Read(buffer, 0, buffer.Length)) > 0)
                     {
+                        // Mantiene l'allineamento dei settori per compatibilità API fisica
                         int bytesToWrite = bytesRead;
                         if (bytesToWrite % sectorSize != 0)
                         {
@@ -440,7 +440,7 @@ namespace HomelabUSBBuilder
                         if (!success)
                         {
                             int errCode = Marshal.GetLastWin32Error();
-                            Logger.Log("ERRORE CRITICO: WriteFile fallito. Codice Win32: " + errCode);
+                            Logger.Log("ERRORE CRITICO: WriteFile fallito al byte " + bytesWritten + ". Codice Win32: " + errCode);
                             throw new Exception("Errore scrittura RAW sul disco fisico tramite WriteFile. Codice Win32: " + errCode);
                         }
 
@@ -454,6 +454,10 @@ namespace HomelabUSBBuilder
                         }));
                     }
                     Logger.Log("Scrittura RAW completata con successo. Byte scritti: " + bytesWritten);
+
+                    // Forza Windows a rileggere la nuova tabella delle partizioni appena scritta dall'ISO
+                    Logger.Log("Forzatura aggiornamento tabella partizioni in Windows (IOCTL_DISK_UPDATE_PROPERTIES)...");
+                    SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.IOCTL_DISK_UPDATE_PROPERTIES, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
                 }
                 finally
                 {
@@ -462,14 +466,14 @@ namespace HomelabUSBBuilder
                 }
             });
 
-            // 3. Rimessa ONLINE e creazione partizione PROXMOX-AIS
-            lblStatus.Text = "Stato: Ripristino stato disco e creazione partizione PROXMOX-AIS...";
+            // 3. Creazione partizione PROXMOX-AIS
+            lblStatus.Text = "Stato: Creazione partizione PROXMOX-AIS nello spazio residuo...";
             progressBar.Value = 75;
 
-            string psPartitionScript = "Set-Disk -Number " + diskNum + " -IsOffline $false; " +
-                                       "Start-Sleep -Seconds 2; " +
-                                       "New-Partition -DiskNumber " + diskNum + " -UseMaximumSize -AssignDriveLetter | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'PROXMOX-AIS' -Confirm:$false; " +
-                                       "Write-Output 'Partizione creata'";
+            string psPartitionScript = 
+                "Update-HostStorageCache; Start-Sleep -Seconds 3; " +
+                "New-Partition -DiskNumber " + diskNum + " -UseMaximumSize -AssignDriveLetter | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'PROXMOX-AIS' -Confirm:$false; " +
+                "Write-Output 'Partizione FAT32 creata'";
 
             await RunPowerShellAsync(psPartitionScript);
             await Task.Delay(4000);
@@ -548,13 +552,10 @@ namespace HomelabUSBBuilder
         public const uint OPEN_EXISTING = 3;
         public static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
 
-        public const uint FILE_FLAG_NO_BUFFERING = 0x20000000;
-        public const uint FILE_FLAG_WRITE_THROUGH = 0x80000000;
-
         public const uint FSCTL_LOCK_VOLUME = 0x00090018;
         public const uint FSCTL_DISMOUNT_VOLUME = 0x00090020;
         public const uint FSCTL_UNLOCK_VOLUME = 0x0009001C;
-        public const uint FSCTL_ALLOW_EXTENDED_DASD_IO = 0x00090083;
+        public const uint IOCTL_DISK_UPDATE_PROPERTIES = 0x00070050; // Per forzare la rilettura delle partizioni
 
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         public static extern IntPtr CreateFile(
