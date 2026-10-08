@@ -410,25 +410,4 @@ namespace HomelabUSBBuilder
                 sb.AppendLine("    if (\$fileObj.IsReadOnly) { $fileObj.IsReadOnly =$false }");
                 sb.AppendLine("    $content = Get-Content -Path$grubCfg -Raw -Encoding UTF8");
                 sb.AppendLine("    $content =$content -replace 'linux /boot/linux26', 'linux /boot/linux26 proxmox-start-script=/game/pre-install-check.sh proxmox-post-hook=/game/post-install.sh'");
-                sb.AppendLine("    Set-Content -Path $grubCfg -Value$content -Encoding UTF8 -Force -ErrorAction Stop");
-                sb.AppendLine("}");
-
-                // Step 6: VERIFICA INTEGRITÀ E COERENZA DEI FILE SCRITTI
-                sb.AppendLine("Write-Host 'STATUS:75:Avvio verifica di coerenza dei dati scritti sulla USB...'");
-                sb.AppendLine("$isoFiles = Get-ChildItem -Path \"${isoDrive}:\\\" -Recurse -File");
-                sb.AppendLine("$totalFiles =$isoFiles.Count");
-                sb.AppendLine("\$currentIndex = 0");
-                sb.AppendLine("\$corruptCount = 0");
-
-                sb.AppendLine("foreach ($file in$isoFiles) {");
-                sb.AppendLine("    \$currentIndex++");
-                sb.AppendLine("    \$pct = 75 + [math]::Round(($currentIndex / $totalFiles) * 23)");
-                sb.AppendLine("    $relativePath =$file.FullName.Substring(3)");
-                sb.AppendLine("    Write-Host \"STATUS:${pct}:Verifica [$currentIndex/$totalFiles]:$relativePath\"");
-
-                sb.AppendLine("    \$targetPath = Join-Path \"${driveLetter}:\\\" $relativePath");
-                sb.AppendLine("    if (-not (Test-Path $targetPath)) {$corruptCount++; break }");
-                sb.AppendLine("    $targetFile = Get-Item$targetPath");
-
-                // Esclusione di grub.cfg dalla verifica rigida della dimensione (modificato intenzionalmente)
-                sb.AppendLine("    if (\$relativePath -inotlike '*boot*grub*grub.cfg*')
+                sb.AppendLine("    Set-Content
