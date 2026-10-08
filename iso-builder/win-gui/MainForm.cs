@@ -369,10 +369,10 @@ namespace HomelabUSBBuilder
 
             string physicalDrive = @"\\.\PhysicalDrive" + diskNum;
 
-            // 1. Pulizia disco e messa OFFLINE
+            // 1. Pulizia disco e messa OFFLINE tramite PowerShell (evita "Dispositivo non pronto")
             lblStatus.Text = "Stato: Disattivazione volumi e sblocco disco USB...";
             progressBar.Value = 30;
-            await RunDiskPartAsync("select disk " + diskNum + "\nclean\noffline disk\nrescan\n");
+            await RunPowerShellAsync("Clear-Disk -Number " + diskNum + " -RemoveData -RemoveOEM -Confirm:$false; Set-Disk -Number " + diskNum + " -IsOffline $true");
 
             await Task.Delay(2000);
 
@@ -409,12 +409,12 @@ namespace HomelabUSBBuilder
                 await diskStream.FlushAsync();
             });
 
-            // 3. Ripristino ONLINE e creazione partizione PROXMOX-AIS
+            // 3. Ripristino ONLINE e creazione partizione PROXMOX-AIS con PowerShell
             lblStatus.Text = "Stato: Ripristino disco e creazione partizione PROXMOX-AIS...";
             progressBar.Value = 75;
 
-            string onlineScript = "select disk " + diskNum + "\nonline disk\nattributes disk clear readonly\nrescan\ncreate partition primary\nformat fs=fat32 quick label=\"PROXMOX-AIS\"\nassign\n";
-            await RunDiskPartAsync(onlineScript);
+            string psPartitionScript = "Set-Disk -Number " + diskNum + " -IsOffline $false; Set-Disk -Number " + diskNum + " -IsReadOnly $false; New-Partition -DiskNumber " + diskNum + " -UseMaximumSize -AssignDriveLetter | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'PROXMOX-AIS' -Confirm:$false";
+            await RunPowerShellAsync(psPartitionScript);
 
             await Task.Delay(3000);
 
@@ -445,12 +445,9 @@ namespace HomelabUSBBuilder
             Logger.Log("Copia completata con successo su " + driveLetter + " (PROXMOX-AIS)");
         }
 
-        private async Task RunDiskPartAsync(string script)
+        private async Task RunPowerShellAsync(string command)
         {
-            string tempScript = Path.GetTempFileName();
-            File.WriteAllText(tempScript, script);
-
-            var psi = new ProcessStartInfo("diskpart", "/s \"" + tempScript + "\"")
+            var psi = new ProcessStartInfo("powershell", "-NoProfile -ExecutionPolicy Bypass -Command \"" + command + "\"")
             {
                 CreateNoWindow = true,
                 UseShellExecute = false,
@@ -463,13 +460,17 @@ namespace HomelabUSBBuilder
             {
                 await Task.Run(() => proc.WaitForExit());
                 string output = await proc.StandardOutput.ReadToEndAsync();
-                Logger.Log("[DiskPart Output]: " + output);
-            }
-            File.Delete(tempScript);
+                string error = await proc.StandardError.ReadToEndAsync();
+                Logger.Log("[PowerShell Output]: " + output);
+                if (!string.IsNullOrEmpty(error))
+                {
+                    Logger.Log("[PowerShell Error]: " + error);
+                }
 
-            if (proc?.ExitCode != 0)
-            {
-                throw new Exception("Errore durante l'esecuzione dei comandi DiskPart.");
+                if (proc.ExitCode != 0)
+                {
+                    throw new Exception("Errore esecuzione comando PowerShell: " + error);
+                }
             }
         }
     }
