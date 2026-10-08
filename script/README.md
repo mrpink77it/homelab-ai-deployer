@@ -37,9 +37,3 @@ Una raccolta di script Bash automatizzati per il provisioning, la gestione e l'o
 
 ---
 
-## 🚀 Guida Rapida all'Uso
-
-1. Clona il repository e accedi alla cartella:
-   ```bash
-   git clone <url-repository>
-   cd <nome-cartella>
