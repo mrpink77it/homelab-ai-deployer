@@ -54,7 +54,7 @@ namespace HomelabUSBBuilder
         {
             try
             {
-                string logLine = "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "] " + message + Environment.NewLine;
+                string logLine = "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "] " + message + Environment.NewLine;
                 File.AppendAllText(LogFilePath, logLine, Encoding.UTF8);
             }
             catch
@@ -83,7 +83,7 @@ namespace HomelabUSBBuilder
 
         private void InitializeComponentLayout()
         {
-            this.Text = "Proxmox AI Deployer - USB Creator v4.3";
+            this.Text = "Proxmox AI Deployer - USB Creator v4.4 (Debug Log)";
             this.Size = new System.Drawing.Size(540, 430);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -224,7 +224,7 @@ namespace HomelabUSBBuilder
             }
             catch (Exception ex)
             {
-                Logger.Log("ERRORE FATALE: " + ex.Message);
+                Logger.Log("ERRORE FATALE: " + ex.Message + "\nStackTrace: " + ex.StackTrace);
                 MessageBox.Show("Errore durante la creazione: " + ex.Message + "\n\nConsulta 'app.log' per maggiori dettagli.", "Errore Fatale", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 lblStatus.Text = "Stato: Errore riscontrato.";
             }
@@ -367,21 +367,28 @@ namespace HomelabUSBBuilder
             }
 
             string physicalDrive = @"\\.\PhysicalDrive" + diskNum;
+            Logger.Log("Inizio FlashToUsbRawAsync sul disco fisico: " + physicalDrive + " (Numero disco: " + diskNum + ")");
 
-            // 1. Assicura che il disco sia ONLINE e smonta tutti i volumi per sbloccarlo
+            // 1. Pulizia e sblocco volumi tramite PowerShell con log esteso
             lblStatus.Text = "Stato: Sblocco e dismissione volumi USB...";
             progressBar.Value = 30;
 
             string preCleanScript = "Set-Disk -Number " + diskNum + " -IsOffline $false; " +
-                "Get-Disk -Number " + diskNum + " | Get-Partition | Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { Dismount-Volume -DriveLetter $_.DriveLetter -Force -Confirm:$false -ErrorAction SilentlyContinue }; " +
+                "Get-Disk -Number " + diskNum + " | Get-Partition | Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { " +
+                "  Write-Output ('Smontaggio volume ' + $_.DriveLetter); " +
+                "  Dismount-Volume -DriveLetter $_.DriveLetter -Force -Confirm:$false -ErrorAction SilentlyContinue; " +
+                "}; " +
                 "Set-Disk -Number " + diskNum + " -IsReadOnly $false; " +
-                "Clear-Disk -Number " + diskNum + " -RemoveData -RemoveOEM -Confirm:$false";
+                "Clear-Disk -Number " + diskNum + " -RemoveData -RemoveOEM -Confirm:$false; " +
+                "Write-Output 'Pulizia partizioni completata'";
 
             await RunPowerShellAsync(preCleanScript);
             await Task.Delay(2000);
 
-            // 2. Scrittura RAW tramite API Win32 con GENERIC_READ | GENERIC_WRITE (Disco online e volumi smontati)
+            // 2. Scrittura RAW tramite API Win32 con logging dettagliato di ogni errore nativo
             lblStatus.Text = "Stato: Scrittura RAW dell'immagine ISO Proxmox...";
+            Logger.Log("Tentativo di apertura handle nativo su " + physicalDrive + " con CreateFile...");
+
             await Task.Run(() =>
             {
                 using var isoStream = new FileStream(isoPath, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -398,8 +405,11 @@ namespace HomelabUSBBuilder
                 if (handle == SafeNativeMethods.INVALID_HANDLE_VALUE)
                 {
                     int errCode = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                    Logger.Log("ERRORE CRITICO: CreateFile ha restituito INVALID_HANDLE_VALUE. Codice errore Win32: " + errCode);
                     throw new Exception("Impossibile aprire l'handle del disco fisico. Codice errore Win32: " + errCode);
                 }
+
+                Logger.Log("Handle nativo aperto con successo (Handle pointer: " + handle + "). Inizializzazione diskStream...");
 
                 using var diskStream = new FileStream(new Microsoft.Win32.SafeHandles.SafeFileHandle(handle, true), FileAccess.Write, 1024 * 1024, false);
 
@@ -408,6 +418,7 @@ namespace HomelabUSBBuilder
                 long totalBytes = isoStream.Length;
                 long bytesWritten = 0;
 
+                Logger.Log("Inizio scrittura flussi byte su disco...");
                 while ((bytesRead = isoStream.Read(buffer, 0, buffer.Length)) > 0)
                 {
                     diskStream.Write(buffer, 0, bytesRead);
@@ -421,13 +432,14 @@ namespace HomelabUSBBuilder
                     }));
                 }
                 diskStream.Flush();
+                Logger.Log("Scrittura RAW completata con successo. Byte scritti: " + bytesWritten);
             });
 
             // 3. Creazione partizione PROXMOX-AIS
             lblStatus.Text = "Stato: Creazione partizione PROXMOX-AIS...";
             progressBar.Value = 75;
 
-            string psPartitionScript = "New-Partition -DiskNumber " + diskNum + " -UseMaximumSize -AssignDriveLetter | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'PROXMOX-AIS' -Confirm:$false";
+            string psPartitionScript = "New-Partition -DiskNumber " + diskNum + " -UseMaximumSize -AssignDriveLetter | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'PROXMOX-AIS' -Confirm:$false; Write-Output 'Partizione creata'";
 
             await RunPowerShellAsync(psPartitionScript);
             await Task.Delay(3000);
@@ -449,18 +461,21 @@ namespace HomelabUSBBuilder
 
             if (string.IsNullOrEmpty(driveLetter))
             {
+                Logger.Log("ERRORE: Impossibile individuare la lettera di unità per PROXMOX-AIS dopo 10 tentativi.");
                 throw new Exception("Impossibile individuare la partizione PROXMOX-AIS creata.");
             }
 
+            Logger.Log("Unità PROXMOX-AIS trovata su: " + driveLetter + ". Copia file in corso...");
             File.Copy(answerPath, Path.Combine(driveLetter, "answer.toml"), true);
             File.Copy(prerunPath, Path.Combine(driveLetter, "prerun.sh"), true);
             File.Copy(postrunPath, Path.Combine(driveLetter, "postrun.sh"), true);
 
-            Logger.Log("Copia completata con successo su " + driveLetter + " (PROXMOX-AIS)");
+            Logger.Log("Copia file di configurazione completata con successo su " + driveLetter);
         }
 
         private async Task RunPowerShellAsync(string command)
         {
+            Logger.Log("Esecuzione comando PowerShell: " + command);
             var psi = new ProcessStartInfo("powershell", "-NoProfile -ExecutionPolicy Bypass -Command \"" + command + "\"")
             {
                 CreateNoWindow = true,
@@ -475,14 +490,19 @@ namespace HomelabUSBBuilder
                 await Task.Run(() => proc.WaitForExit());
                 string output = await proc.StandardOutput.ReadToEndAsync();
                 string error = await proc.StandardError.ReadToEndAsync();
-                Logger.Log("[PowerShell Output]: " + output);
-                if (!string.IsNullOrEmpty(error))
+                
+                if (!string.IsNullOrWhiteSpace(output))
                 {
-                    Logger.Log("[PowerShell Error]: " + error);
+                    Logger.Log("[PowerShell Output]: " + output.Trim());
+                }
+                if (!string.IsNullOrWhiteSpace(error))
+                {
+                    Logger.Log("[PowerShell Error]: " + error.Trim());
                 }
 
                 if (proc.ExitCode != 0)
                 {
+                    Logger.Log("ERRORE: PowerShell ha restituito exit code " + proc.ExitCode);
                     throw new Exception("Errore esecuzione comando PowerShell: " + error);
                 }
             }
