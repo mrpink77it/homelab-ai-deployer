@@ -8,7 +8,7 @@
 set -e
 
 # ------------------------------------------------------------------------------
-# RIMOZIONE SCRIPT DI INSTALLAZIONE
+# RIMOZIONE VECCHI SCRIPT DI INSTALLAZIONE
 # ------------------------------------------------------------------------------
 for search_dir in "." "$HOME" "$HOME/Downloads" "/root" "/root/Downloads"; do
     if [ -f "$search_dir/install.sh" ]; then
@@ -17,7 +17,7 @@ for search_dir in "." "$HOME" "$HOME/Downloads" "/root" "/root/Downloads"; do
 done
 
 # ------------------------------------------------------------------------------
-# CONTROLLI PRELIMINARI
+# CONTROLLI PRELIMINARI DI SISTEMA
 # ------------------------------------------------------------------------------
 if [ "$EUID" -ne 0 ]; then
   echo -e "\033[0;31m[ERROR] Questo script deve essere eseguito come root!\033[0m"
@@ -39,7 +39,7 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# RILEVAMENTO AMBIENTE E HARDWARE
+# RILEVAMENTO AMBIENTE VIRTUALIZZATO
 # ------------------------------------------------------------------------------
 is_wsl() {
     if grep -qi microsoft /proc/version 2>/dev/null || grep -qi wsl /proc/version 2>/dev/null; then
@@ -57,19 +57,51 @@ else
     VIRT_ENV="Proxmox Host / Bare-Metal"
 fi
 
-HW_DETECTED="Nessuna GPU dedicata (Fallback CPU)"
-export GPU_TYPE="CPU" # Variabile esportata per gli script figli
+# ------------------------------------------------------------------------------
+# RILEVAMENTO AVANZATO HARDWARE & BACKEND GPU (CUDA / ROCm / VULKAN MIXED / CPU)
+# ------------------------------------------------------------------------------
+HAS_NVIDIA=false
+HAS_AMD=false
+HAS_INTEL=false
 
 if lspci | grep -iq "NVIDIA" || [ -d "/proc/driver/nvidia" ] || command -v nvidia-smi &> /dev/null; then
-    HW_DETECTED="NVIDIA GPU (CUDA)"
+    HAS_NVIDIA=true
+fi
+
+if lspci | grep -i "vga\|3d\|display" | grep -iq "AMD\|Radeon" || [ -d "/sys/module/amdgpu" ]; then
+    HAS_AMD=true
+fi
+
+if lspci | grep -i "vga\|3d\|display" | grep -iq "Intel"; then
+    HAS_INTEL=true
+fi
+
+# Matrice di determinazione della modalità operativa GPU
+export GPU_TYPE="CPU"
+HW_DETECTED="Nessuna GPU dedicata (Fallback CPU)"
+
+if [ "$HAS_NVIDIA" = true ] && [ "$HAS_AMD" = true ]; then
+    GPU_TYPE="MIXED_VULKAN"
+    HW_DETECTED="GPU Miste (NVIDIA + AMD) -> Backend: Vulkan"
+elif [ "$HAS_NVIDIA" = true ] && [ "$HAS_INTEL" = true ]; then
+    GPU_TYPE="MIXED_VULKAN"
+    HW_DETECTED="GPU Miste (NVIDIA + Intel) -> Backend: Vulkan"
+elif [ "$HAS_AMD" = true ] && [ "$HAS_INTEL" = true ]; then
+    GPU_TYPE="MIXED_VULKAN"
+    HW_DETECTED="GPU Miste (AMD + Intel) -> Backend: Vulkan"
+elif [ "$HAS_NVIDIA" = true ]; then
     GPU_TYPE="NVIDIA"
-elif lspci | grep -i "vga\|3d\|display" | grep -iq "AMD\|Radeon" || [ -d "/sys/module/amdgpu" ]; then
-    HW_DETECTED="AMD GPU (ROCm)"
+    HW_DETECTED="NVIDIA GPU Singola/Multipla -> Backend: CUDA"
+elif [ "$HAS_AMD" = true ]; then
     GPU_TYPE="AMD"
+    HW_DETECTED="AMD GPU Singola/Multipla -> Backend: ROCm"
+elif [ "$HAS_INTEL" = true ]; then
+    GPU_TYPE="VULKAN"
+    HW_DETECTED="Intel GPU -> Backend: Vulkan/oneAPI"
 fi
 
 # ------------------------------------------------------------------------------
-# BANNER INTRODUTTIVO OTTIMIZZATO
+# BANNER INTRODUTTIVO
 # ------------------------------------------------------------------------------
 show_intro_banner() {
     local INFO_TEXT="
@@ -81,8 +113,9 @@ show_intro_banner() {
           Questo strumento configurerà il tuo nodo Proxmox:
           
             * Dual Mode: Server Headless o AI Workstation (KDE)
-            * Orchestrazione LXC: LLM, Agenti Coder, RAG
-            * Ottimizzazione GPU: Condivisione VRAM Avanzata
+            * Multi-GPU: Supporto CUDA, ROCm e Vulkan (Mixed)
+            * Orchestrazione LXC: LLM, Agenti Coder, RAG, Decisore
+            * Gestione VRAM: VRAM Manager integrato per 8GB
 
         --------------------------------------------------
           Ambiente : $VIRT_ENV
@@ -95,7 +128,7 @@ show_intro_banner() {
 }
 
 # ------------------------------------------------------------------------------
-# FUNZIONE DI ESECUZIONE 
+# FUNZIONE DI ESECUZIONE SCRIPT FIGLI
 # ------------------------------------------------------------------------------
 run_script() {
     local target_script="$1"
@@ -118,10 +151,10 @@ run_script() {
 }
 
 # ------------------------------------------------------------------------------
-# MENU GRAFICO PRINCIPALE (ROUTING)
+# MENU GRAFICO PRINCIPALE
 # ------------------------------------------------------------------------------
 show_menu() {
-    CHOICE=$(whiptail --title "Proxmox AI - Main Dispatcher" \
+    CHOICE=$(whiptail --title "Proxmox AI - Main Dispatcher v2.0.0" \
         --menu "\nAmbiente: $VIRT_ENV\nHardware Rilevato: $HW_DETECTED\n\nScegli un'operazione per iniziare:" 21 80 6 \
         "1" "🛠️  Prepara Server Edition (Host Headless)" \
         "2" "🖥️  Prepara Workstation Edition (KDE + Drivers)" \
