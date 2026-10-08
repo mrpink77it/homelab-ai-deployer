@@ -10,6 +10,17 @@ using System.Windows.Forms;
 
 namespace HomelabUSBBuilder
 {
+    internal static class Program
+    {
+        [STAThread]
+        static void Main()
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new MainForm());
+        }
+    }
+
     public partial class MainForm : Form
     {
         private ComboBox comboUsb = null!;
@@ -85,7 +96,7 @@ namespace HomelabUSBBuilder
                     ulong sizeBytes = Convert.ToUInt64(drive["Size"]);
                     double sizeGb = Math.Round((double)sizeBytes / (1024 * 1024 * 1024), 1);
 
-                    comboUsb.Items.Add(new UsbDriveItem { DisplayName = $"{model} ({sizeGb} GB)", DeviceID = deviceId });
+                    comboUsb.Items.Add(new UsbDriveItem { DisplayName = \$"{model} ({sizeGb} GB)", DeviceID = deviceId });
                 }
 
                 if (comboUsb.Items.Count > 0) comboUsb.SelectedIndex = 0;
@@ -93,7 +104,7 @@ namespace HomelabUSBBuilder
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Errore lettura USB: {ex.Message}", "Errore", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(\$"Errore lettura USB: {ex.Message}", "Errore", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -105,7 +116,7 @@ namespace HomelabUSBBuilder
                 return;
             }
 
-            var confirm = MessageBox.Show($"ATTENZIONE: TUTTI I DATI sulla chiavetta:\n\n{targetUsb.DisplayName}\n\nVERRANNO CANCELLATI PER SEMPRE!\n\nVuoi continuare?",
+            var confirm = MessageBox.Show(\$"ATTENZIONE: TUTTI I DATI sulla chiavetta:\n\n{targetUsb.DisplayName}\n\nVERRANNO CANCELLATI PER SEMPRE!\n\nVuoi continuare?",
                                           "Conferma Scrittura USB", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
             if (confirm != DialogResult.Yes) return;
 
@@ -136,112 +147,4 @@ namespace HomelabUSBBuilder
                 lblStatus.Text = "Stato: OPERAZIONE COMPLETATA CON SUCCESSO!";
                 MessageBox.Show("Chiavetta USB creata con successo!\n\nInserisci la USB nel computer/server di destinazione e fai il boot per avviare l'installazione automatica.", "Completato", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Errore durante la creazione: {ex.Message}", "Errore Fatale", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                lblStatus.Text = "Stato: Errore riscontrato.";
-            }
-            finally
-            {
-                btnCreate.Enabled = true;
-                comboUsb.Enabled = true;
-            }
-        }
-
-        private string BuildAnswerToml()
-        {
-            string netSource = radioDhcp.Checked ? "from-dhcp" : "from-answer";
-            string cidr = radioDhcp.Checked ? "dhcp" : txtIp.Text;
-            string gateway = radioDhcp.Checked ? "" : txtGateway.Text;
-
-            return $$"""
-            [global]
-            keyboard = "it"
-            country = "it"
-            timezone = "Europe/Rome"
-            fqdn = "pve.homelab.local"
-            mailto = "admin@homelab.local"
-            root_password = "proxmox"
-            reboot_mode = "reboot"
-
-            [network]
-            source = "{{netSource}}"
-            cidr = "{{cidr}}"
-            gateway = "{{gateway}}"
-            dns = "1.1.1.1"
-            dns2 = "8.8.8.8"
-
-            [disk_setup]
-            filesystem = "zfs (RAID0)"
-            disk_list = ["filter:first_matched"]
-            """;
-        }
-
-        private async Task DownloadIsoAsync(string url, string destination)
-        {
-            if (File.Exists(destination)) return;
-            using var client = new HttpClient();
-            using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
-            response.EnsureSuccessStatusCode();
-            using var streamToRead = await response.Content.ReadAsStreamAsync();
-            using var streamToWrite = File.Create(destination);
-            await streamToRead.CopyToAsync(streamToWrite);
-        }
-
-        private async Task FlashToUsbAsync(string deviceId, string isoPath, string answerPath)
-        {
-            await Task.Run(() =>
-            {
-                string diskNum = Regex.Match(deviceId, @"\d+").Value;
-
-                string scriptTemplate = """
-                $diskNum = "__DISK_NUM__"
-                $answer = "__ANSWER_PATH__"
-
-                $diskpartCmd = @"
-                select disk $diskNum
-                clean
-                convert mbr
-                create partition primary
-                format fs=fat32 quick label="PROXMOX-ANSWER"
-                active
-                assign
-                "@
-                $diskpartCmd | diskpart
-
-                Start-Sleep -Seconds 2
-                $driveLetter = (Get-Partition -DiskNumber $diskNum | Get-Volume).DriveLetter
-
-                if ($driveLetter) {
-                    Copy-Item -Path $answer -Destination "${driveLetter}:\answer.toml" -Force
-                }
-                """;
-
-                string scriptContent = scriptTemplate
-                    .Replace("__DISK_NUM__", diskNum)
-                    .Replace("__ANSWER_PATH__", answerPath);
-
-                var psi = new ProcessStartInfo("powershell")
-                {
-                    CreateNoWindow = true,
-                    UseShellExecute = false
-                };
-                psi.ArgumentList.Add("-NoProfile");
-                psi.ArgumentList.Add("-ExecutionPolicy");
-                psi.ArgumentList.Add("Bypass");
-                psi.ArgumentList.Add("-Command");
-                psi.ArgumentList.Add(scriptContent);
-
-                using var proc = Process.Start(psi);
-                proc?.WaitForExit();
-            });
-        }
-    }
-
-    public class UsbDriveItem
-    {
-        public string DisplayName { get; set; } = "";
-        public string DeviceID { get; set; } = "";
-        public override string ToString() => DisplayName;
-    }
-}
+            catch (
