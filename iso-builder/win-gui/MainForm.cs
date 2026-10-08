@@ -485,7 +485,7 @@ namespace HomelabUSBBuilder
             Logger.Log("Unità PROXMOX-AIS trovata su: " + driveLetter + ". Copia file in corso...");
             File.Copy(answerPath, Path.Combine(driveLetter, "answer.toml"), true);
             File.Copy(prerunPath, Path.Combine(driveLetter, "prerun.sh"), true);
-            File.Copy(postrunpath, Path.Combine(driveLetter, "postrun.sh"), true);
+            File.Copy(postrunPath, Path.Combine(driveLetter, "postrun.sh"), true);
 
             Logger.Log("Copia file di configurazione completata con successo su " + driveLetter);
         }
