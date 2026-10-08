@@ -23,7 +23,7 @@ namespace HomelabUSBBuilder
             Logger.Log("=== AVVIO APPLICAZIONE ===");
 
             bool isAdmin = IsAdministrator();
-            Logger.Log(\$"Esecuzione come Amministratore: {isAdmin}");
+            Logger.Log($"Esecuzione come Amministratore: {isAdmin}");
 
             if (!isAdmin)
             {
@@ -32,7 +32,7 @@ namespace HomelabUSBBuilder
 
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
             {
-                Logger.Log(\$"CRASH NON GESTITO: {e.ExceptionObject}");
+                Logger.Log($"CRASH NON GESTITO: {e.ExceptionObject}");
             };
 
             Application.Run(new MainForm());
@@ -54,7 +54,7 @@ namespace HomelabUSBBuilder
         {
             try
             {
-                string logLine = \$"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
+                string logLine = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
                 File.AppendAllText(LogFilePath, logLine, Encoding.UTF8);
             }
             catch
@@ -83,7 +83,7 @@ namespace HomelabUSBBuilder
 
         private void InitializeComponentLayout()
         {
-            this.Text = "Proxmox AI Deployer - USB Creator v3.5 (RAW + PROXMOX-AIS)";
+            this.Text = "Proxmox AI Deployer - USB Creator v3.6 (RAW + PROXMOX-AIS)";
             this.Size = new System.Drawing.Size(540, 430);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -140,9 +140,9 @@ namespace HomelabUSBBuilder
                     ulong sizeBytes = Convert.ToUInt64(drive["Size"]);
                     double sizeGb = Math.Round((double)sizeBytes / (1024 * 1024 * 1024), 1);
 
-                    var usbItem = new UsbDriveItem { DisplayName = \$"{model} ({sizeGb} GB)", DeviceID = deviceId };
+                    var usbItem = new UsbDriveItem { DisplayName = $"{model} ({sizeGb} GB)", DeviceID = deviceId };
                     comboUsb.Items.Add(usbItem);
-                    Logger.Log(\$"Trovata USB: {usbItem.DisplayName} [{deviceId}]");
+                    Logger.Log($"Trovata USB: {usbItem.DisplayName} [{deviceId}]");
                 }
 
                 if (comboUsb.Items.Count > 0)
@@ -157,8 +157,8 @@ namespace HomelabUSBBuilder
             }
             catch (Exception ex)
             {
-                Logger.Log(\$"ERRORE lettura USB: {ex}");
-                MessageBox.Show(\$"Errore lettura USB: {ex.Message}", "Errore", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Logger.Log($"ERRORE lettura USB: {ex}");
+                MessageBox.Show($"Errore lettura USB: {ex.Message}", "Errore", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -183,7 +183,7 @@ namespace HomelabUSBBuilder
 
             try
             {
-                Logger.Log(\$"Inizio processo RAW per l'unità: {targetUsb.DisplayName} ({targetUsb.DeviceID})");
+                Logger.Log($"Inizio processo RAW per l'unità: {targetUsb.DisplayName} ({targetUsb.DeviceID})");
 
                 string tempDir = Path.Combine(Path.GetTempPath(), "proxmox-builder");
                 Directory.CreateDirectory(tempDir);
@@ -223,8 +223,8 @@ namespace HomelabUSBBuilder
             }
             catch (Exception ex)
             {
-                Logger.Log(\$"ERRORE FATALE: {ex}");
-                MessageBox.Show(\$"Errore durante la creazione: {ex.Message}\n\nConsulta 'app.log' per maggiori dettagli.", "Errore Fatale", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Logger.Log($"ERRORE FATALE: {ex}");
+                MessageBox.Show($"Errore durante la creazione: {ex.Message}\n\nConsulta 'app.log' per maggiori dettagli.", "Errore Fatale", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 lblStatus.Text = "Stato: Errore riscontrato.";
             }
             finally
@@ -251,9 +251,9 @@ namespace HomelabUSBBuilder
             sb.AppendLine("reboot_mode = \"reboot\"");
             sb.AppendLine();
             sb.AppendLine("[network]");
-            sb.AppendLine(\$"source = \"{netSource}\"");
-            sb.AppendLine(\$"cidr = \"{cidr}\"");
-            sb.AppendLine(\$"gateway = \"{gateway}\"");
+            sb.AppendLine($"source = \"{netSource}\"");
+            sb.AppendLine($"cidr = \"{cidr}\"");
+            sb.AppendLine($"gateway = \"{gateway}\"");
             sb.AppendLine("dns = \"1.1.1.1\"");
             sb.AppendLine("dns2 = \"8.8.8.8\"");
             sb.AppendLine();
@@ -278,10 +278,12 @@ namespace HomelabUSBBuilder
             sb.AppendLine("exec > /var/log/homelab-firstboot.log 2>&1");
             sb.AppendLine("echo '=== INIZIO SETUP FIRST-BOOT PROXMOX + KDE ==='");
 
-            sb.AppendLine("echo '1. Creazione utente homelab...'");
+            sb.AppendLine("echo '1. Creazione utente homelab con privilegi sudo senza password...'");
             sb.AppendLine("if ! id -u homelab >/dev/null 2>&1; then");
             sb.AppendLine("    useradd -m -s /bin/bash -G sudo homelab");
             sb.AppendLine("    echo 'homelab:proxmox' | chpasswd");
+            sb.AppendLine("    echo 'homelab ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/homelab");
+            sb.AppendLine("    chmod 0440 /etc/sudoers.d/homelab");
             sb.AppendLine("fi");
 
             sb.AppendLine("echo '2. Installazione KDE Plasma e SDDM...'");
@@ -305,7 +307,7 @@ namespace HomelabUSBBuilder
             sb.AppendLine("#!/bin/bash");
             sb.AppendLine("echo 'Avvio procedura di configurazione guidata Homelab AI...'");
             sb.AppendLine("if [ -f /usr/bin/konsole ]; then");
-            sb.AppendLine("    konsole -e bash -c 'echo \"=== HOMELAB AI DEPLOYER ===\"; sleep 2; git clone https://github.com/mrpink77it/homelab-ai-deployer.git /tmp/deployer && cd /tmp/deployer && ./deploy.sh; exec bash'");
+            sb.AppendLine("    konsole -e bash -c 'echo \"=== HOMELAB AI DEPLOYER ===\"; sleep 2; sudo rm -rf /opt/homelab-ai-deployer && sudo git clone https://github.com/mrpink77it/homelab-ai-deployer.git /opt/homelab-ai-deployer && cd /opt/homelab-ai-deployer && sudo chmod +x install.sh && sudo ./install.sh; exec bash'");
             sb.AppendLine("fi");
             sb.AppendLine("EOF");
 
@@ -333,7 +335,7 @@ namespace HomelabUSBBuilder
                 long length = new FileInfo(destination).Length;
                 if (length > 500 * 1024 * 1024)
                 {
-                    Logger.Log(\$"File ISO già presente e valido ({length} byte).");
+                    Logger.Log($"File ISO già presente e valido ({length} byte).");
                     return;
                 }
                 File.Delete(destination);
@@ -361,15 +363,15 @@ namespace HomelabUSBBuilder
             string diskNum = Regex.Match(deviceId, @"\d+").Value;
             if (string.IsNullOrEmpty(diskNum))
             {
-                throw new Exception(\$"Impossibile estrarre il numero di disco da DeviceID: {deviceId}");
+                throw new Exception($"Impossibile estrarre il numero di disco da DeviceID: {deviceId}");
             }
 
-            string physicalDrive = \$@"\\.\PhysicalDrive{diskNum}";
+            string physicalDrive = $@"\\.\PhysicalDrive{diskNum}";
 
             // 1. Pulizia disco USB
             lblStatus.Text = "Stato: Pulizia della chiavetta USB...";
             progressBar.Value = 30;
-            await RunDiskPartAsync(\$"select disk {diskNum}\nclean\nrescan\n");
+            await RunDiskPartAsync($"select disk {diskNum}\nclean\nrescan\n");
 
             // 2. Scrittura RAW (DD) dell'immagine ISO
             lblStatus.Text = "Stato: Scrittura RAW dell'immagine ISO Proxmox...";
@@ -385,4 +387,88 @@ namespace HomelabUSBBuilder
 
                 while ((bytesRead = await isoStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
                 {
-                    await disk
+                    await diskStream.WriteAsync(buffer, 0, bytesRead);
+                    bytesWritten += bytesRead;
+                    int pct = 30 + (int)((bytesWritten * 40) / totalBytes);
+
+                    this.Invoke(new Action(() =>
+                    {
+                        progressBar.Value = Math.Min(70, pct);
+                        lblStatus.Text = $"Stato: Scrittura RAW ISO in corso... ({bytesWritten / (1024 * 1024)} MB / {totalBytes / (1024 * 1024)} MB)";
+                    }));
+                }
+                await diskStream.FlushAsync();
+            });
+
+            // 3. Creazione partizione PROXMOX-AIS nello spazio rimanente
+            lblStatus.Text = "Stato: Creazione partizione ausiliaria PROXMOX-AIS...";
+            progressBar.Value = 75;
+
+            string createPartScript = $"select disk {diskNum}\nrescan\ncreate partition primary\nformat fs=fat32 quick label=\"PROXMOX-AIS\"\nassign\n";
+            await RunDiskPartAsync(createPartScript);
+
+            await Task.Delay(3000);
+
+            // 4. Copia dei file di automazione sulla partizione PROXMOX-AIS
+            lblStatus.Text = "Stato: Iniezione file answer.toml, prerun.sh e postrun.sh...";
+            progressBar.Value = 85;
+
+            string? driveLetter = null;
+            for (int i = 0; i < 10; i++)
+            {
+                driveLetter = DriveInfo.GetDrives()
+                    .FirstOrDefault(d => d.IsReady && string.Equals(d.VolumeLabel, "PROXMOX-AIS", StringComparison.OrdinalIgnoreCase))
+                    ?.Name;
+
+                if (!string.IsNullOrEmpty(driveLetter)) break;
+                await Task.Delay(1000);
+            }
+
+            if (string.IsNullOrEmpty(driveLetter))
+            {
+                throw new Exception("Impossibile individuare la partizione PROXMOX-AIS creata.");
+            }
+
+            File.Copy(answerPath, Path.Combine(driveLetter, "answer.toml"), true);
+            File.Copy(prerunPath, Path.Combine(driveLetter, "prerun.sh"), true);
+            File.Copy(postrunPath, Path.Combine(driveLetter, "postrun.sh"), true);
+
+            Logger.Log($"Copia completata con successo su {driveLetter} (PROXMOX-AIS)");
+        }
+
+        private async Task RunDiskPartAsync(string script)
+        {
+            string tempScript = Path.GetTempFileName();
+            File.WriteAllText(tempScript, script);
+
+            var psi = new ProcessStartInfo("diskpart", $"/s \"{tempScript}\"")
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc != null)
+            {
+                await Task.Run(() => proc.WaitForExit());
+                string output = await proc.StandardOutput.ReadToEndAsync();
+                Logger.Log($"[DiskPart Output]: {output}");
+            }
+            File.Delete(tempScript);
+
+            if (proc?.ExitCode != 0)
+            {
+                throw new Exception("Errore durante l'esecuzione dei comandi DiskPart.");
+            }
+        }
+    }
+
+    public class UsbDriveItem
+    {
+        public string DisplayName { get; set; } = "";
+        public string DeviceID { get; set; } = "";
+        public override string ToString() => DisplayName;
+    }
+}
