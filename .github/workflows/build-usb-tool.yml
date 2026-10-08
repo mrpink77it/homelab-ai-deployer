@@ -1,0 +1,31 @@
+name: Build Windows USB Creator GUI
+
+on:
+  push:
+    branches: [ main ]
+  release:
+    types: [ created ]
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Setup .NET 8
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore & Build Executable
+      run: |
+        cd iso-builder/win-gui
+        dotnet publish HomelabUSBBuilder.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o ../../output
+
+    - name: Upload Executable Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: HomelabUSBBuilder-Windows
+        path: output/HomelabUSBBuilder.exe
