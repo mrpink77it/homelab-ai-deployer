@@ -243,39 +243,39 @@ namespace HomelabUSBBuilder
             string cidr = radioDhcp.Checked ? "dhcp" : txtIp.Text;
             string gateway = radioDhcp.Checked ? "" : txtGateway.Text;
 
-            return \$\$"""
-[global]
-keyboard = "it"
-country = "it"
-timezone = "Europe/Rome"
-fqdn = "pve.homelab.local"
-mailto = "admin@homelab.local"
-root_password = "proxmox"
-reboot_mode = "reboot"
+            var sb = new StringBuilder();
+            sb.AppendLine("[global]");
+            sb.AppendLine("keyboard = \"it\"");
+            sb.AppendLine("country = \"it\"");
+            sb.AppendLine("timezone = \"Europe/Rome\"");
+            sb.AppendLine("fqdn = \"pve.homelab.local\"");
+            sb.AppendLine("mailto = \"admin@homelab.local\"");
+            sb.AppendLine("root_password = \"proxmox\"");
+            sb.AppendLine("reboot_mode = \"reboot\"");
+            sb.AppendLine();
+            sb.AppendLine("[network]");
+            sb.AppendLine("source = \"" + netSource + "\"");
+            sb.AppendLine("cidr = \"" + cidr + "\"");
+            sb.AppendLine("gateway = \"" + gateway + "\"");
+            sb.AppendLine("dns = \"1.1.1.1\"");
+            sb.AppendLine("dns2 = \"8.8.8.8\"");
+            sb.AppendLine();
+            sb.AppendLine("[disk_setup]");
+            sb.AppendLine("filesystem = \"zfs (RAID0)\"");
+            sb.AppendLine("disk_list = [\"filter:first_matched\"]");
+            sb.AppendLine();
+            sb.AppendLine("[prerun]");
+            sb.AppendLine("source = \"from-partition\"");
+            sb.AppendLine();
+            sb.AppendLine("[postrun]");
+            sb.AppendLine("source = \"from-partition\"");
 
-[network]
-source = "{{netSource}}"
-cidr = "{{cidr}}"
-gateway = "{{gateway}}"
-dns = "1.1.1.1"
-dns2 = "8.8.8.8"
-
-[disk_setup]
-filesystem = "zfs (RAID0)"
-disk_list = ["filter:first_matched"]
-
-[prerun]
-source = "from-partition"
-
-[postrun]
-source = "from-partition"
-""";
+            return sb.ToString();
         }
 
         private string BuildPostInstallScript()
         {
-            return """
-#!/bin/bash
+            return @"#!/bin/bash
 set -e
 exec > /var/log/homelab-firstboot.log 2>&1
 echo '=== INIZIO SETUP FIRST-BOOT PROXMOX + KDE ==='
@@ -309,7 +309,7 @@ cat << 'EOF' > /home/homelab/scripts/post-kde-deploy.sh
 #!/bin/bash
 echo 'Avvio procedura di configurazione guidata Homelab AI...'
 if [ -f /usr/bin/konsole ]; then
-    konsole -e bash -c 'echo "=== HOMELAB AI DEPLOYER ==="; sleep 2; sudo rm -rf /opt/homelab-ai-deployer && sudo git clone https://github.com/mrpink77it/homelab-ai-deployer.git /opt/homelab-ai-deployer && cd /opt/homelab-ai-deployer && sudo chmod +x install.sh && sudo ./install.sh; exec bash'
+    konsole -e bash -c 'echo ""=== HOMELAB AI DEPLOYER ===""; sleep 2; sudo rm -rf /opt/homelab-ai-deployer && sudo git clone https://github.com/mrpink77it/homelab-ai-deployer.git /opt/homelab-ai-deployer && cd /opt/homelab-ai-deployer && sudo chmod +x install.sh && sudo ./install.sh; exec bash'
 fi
 EOF
 
@@ -327,7 +327,7 @@ EOF
 chown -R homelab:homelab /home/homelab/.config
 systemctl set-default graphical.target
 echo '=== SETUP COMPLETATO CON SUCCESSO ==='
-""";
+";
         }
 
         private async Task DownloadIsoAsync(string url, string destination)
@@ -372,4 +372,67 @@ echo '=== SETUP COMPLETATO CON SUCCESSO ==='
             Logger.Log("Inizio Scrittura RAW Diretta (dd style) su: " + physicalDrive + " (Disco #" + diskNum + ")");
 
             // 1. Azzeramento preventivo delle partizioni con Diskpart (Risolve l'errore Win32: 5 Access Denied)
-            lblStatus.Text
+            lblStatus.Text = "Stato: Pulizia tabella partizioni e smontaggio volumi...";
+            progressBar.Value = 30;
+
+            string cleanScript = "select disk " + diskNum + "\r\nclean\r\nrescan\r\n";
+            await RunDiskpartScriptAsync(cleanScript);
+            await Task.Delay(1500);
+
+            // 2. Scrittura RAW Diretta (stile DD) tramite Win32 WriteFile
+            lblStatus.Text = "Stato: Scrittura RAW ISO in corso (dd streaming)...";
+            Logger.Log("Apertura handle nativo direct IO su " + physicalDrive + "...");
+
+            await Task.Run(() =>
+            {
+                using var isoStream = new FileStream(isoPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+                IntPtr handle = SafeNativeMethods.INVALID_HANDLE_VALUE;
+                int lastErr = 0;
+
+                for (int attempt = 1; attempt <= 5; attempt++)
+                {
+                    handle = SafeNativeMethods.CreateFile(
+                        physicalDrive,
+                        SafeNativeMethods.GENERIC_READ | SafeNativeMethods.GENERIC_WRITE,
+                        SafeNativeMethods.FILE_SHARE_READ | SafeNativeMethods.FILE_SHARE_WRITE,
+                        IntPtr.Zero,
+                        SafeNativeMethods.OPEN_EXISTING,
+                        0,
+                        IntPtr.Zero);
+
+                    if (handle != SafeNativeMethods.INVALID_HANDLE_VALUE) break;
+
+                    lastErr = Marshal.GetLastWin32Error();
+                    Logger.Log("Tentativo " + attempt + "/5 apertura handle fallito (Win32 Code: " + lastErr + "). Attesa 1s...");
+                    Thread.Sleep(1000);
+                }
+
+                if (handle == SafeNativeMethods.INVALID_HANDLE_VALUE)
+                {
+                    Logger.Log("ERRORE FATALE: Impossibile aprire handle fisico su " + physicalDrive + ". Codice Win32: " + lastErr);
+                    throw new Exception("Impossibile accedere al disco fisico. Codice Win32: " + lastErr);
+                }
+
+                Logger.Log("Handle disco aperto correttamente (Pointer: " + handle + "). Scrittura in corso...");
+
+                try
+                {
+                    const int sectorSize = 512;
+                    byte[] buffer = new byte[1024 * 1024]; // Buffer da 1 MB per massime prestazioni
+                    int bytesRead;
+                    long totalBytes = isoStream.Length;
+                    long bytesWritten = 0;
+
+                    while ((bytesRead = isoStream.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        int bytesToWrite = bytesRead;
+                        if (bytesToWrite % sectorSize != 0)
+                        {
+                            int remainder = bytesToWrite % sectorSize;
+                            int padding = sectorSize - remainder;
+                            bytesToWrite += padding;
+                            Array.Clear(buffer, bytesRead, padding);
+                        }
+
+                        bool success = SafeNativeMethods
