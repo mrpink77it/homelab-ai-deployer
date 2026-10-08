@@ -1,16 +1,27 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
+    <!-- Tipo di output applicazione Windows Forms -->
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
+    
+    <!-- Icona ed Embedding del Manifest per Richiesta UAC (Admin) -->
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>false</SelfContained>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Assicura il collegamento del file app.manifest -->
+    <None Include="app.manifest">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pacchetto NuGet necessario per la lettura delle periferiche USB via WMI -->
     <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
+
 </Project>
