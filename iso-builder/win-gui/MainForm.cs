@@ -83,7 +83,7 @@ namespace HomelabUSBBuilder
 
         private void InitializeComponentLayout()
         {
-            this.Text = "Proxmox AI Deployer - USB Creator v4.2";
+            this.Text = "Proxmox AI Deployer - USB Creator v4.3";
             this.Size = new System.Drawing.Size(540, 430);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -368,18 +368,19 @@ namespace HomelabUSBBuilder
 
             string physicalDrive = @"\\.\PhysicalDrive" + diskNum;
 
-            // 1. Porta il disco offline per rilasciare i blocchi di Windows
-            lblStatus.Text = "Stato: Sblocco e disconnessione disco USB...";
+            // 1. Assicura che il disco sia ONLINE e smonta tutti i volumi per sbloccarlo
+            lblStatus.Text = "Stato: Sblocco e dismissione volumi USB...";
             progressBar.Value = 30;
 
-            string preCleanScript = "Set-Disk -Number " + diskNum + " -IsOffline $true; " +
-                "Clear-Disk -Number " + diskNum + " -RemoveData -RemoveOEM -Confirm:$false; " +
-                "Set-Disk -Number " + diskNum + " -IsReadOnly $false";
+            string preCleanScript = "Set-Disk -Number " + diskNum + " -IsOffline $false; " +
+                "Get-Disk -Number " + diskNum + " | Get-Partition | Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { Dismount-Volume -DriveLetter $_.DriveLetter -Force -Confirm:$false -ErrorAction SilentlyContinue }; " +
+                "Set-Disk -Number " + diskNum + " -IsReadOnly $false; " +
+                "Clear-Disk -Number " + diskNum + " -RemoveData -RemoveOEM -Confirm:$false";
 
             await RunPowerShellAsync(preCleanScript);
             await Task.Delay(2000);
 
-            // 2. Scrittura RAW tramite API Win32 con GENERIC_READ | GENERIC_WRITE
+            // 2. Scrittura RAW tramite API Win32 con GENERIC_READ | GENERIC_WRITE (Disco online e volumi smontati)
             lblStatus.Text = "Stato: Scrittura RAW dell'immagine ISO Proxmox...";
             await Task.Run(() =>
             {
@@ -422,12 +423,11 @@ namespace HomelabUSBBuilder
                 diskStream.Flush();
             });
 
-            // 3. Riporta online il disco e crea la partizione PROXMOX-AIS
+            // 3. Creazione partizione PROXMOX-AIS
             lblStatus.Text = "Stato: Creazione partizione PROXMOX-AIS...";
             progressBar.Value = 75;
 
-            string psPartitionScript = "Set-Disk -Number " + diskNum + " -IsOffline $false; " +
-                "New-Partition -DiskNumber " + diskNum + " -UseMaximumSize -AssignDriveLetter | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'PROXMOX-AIS' -Confirm:$false";
+            string psPartitionScript = "New-Partition -DiskNumber " + diskNum + " -UseMaximumSize -AssignDriveLetter | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'PROXMOX-AIS' -Confirm:$false";
 
             await RunPowerShellAsync(psPartitionScript);
             await Task.Delay(3000);
