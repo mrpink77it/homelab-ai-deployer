@@ -177,7 +177,7 @@ namespace HomelabUSBBuilder
                 // Step 1: Download ISO
                 lblStatus.Text = "Stato: Download ISO Proxmox VE in corso...";
                 progressBar.Value = 20;
-                string isoUrl = "https://enterprise.proxmox.com/iso/proxmox-ve_8.1-1.iso";
+                string isoUrl = "https://enterprise.proxmox.com/iso/proxmox-ve_9.2-1.iso";
                 
                 Logger.Log($"Download ISO avviato da: {isoUrl}");
                 await DownloadIsoAsync(isoUrl, isoPath);
