@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Homelab AI Deployer - Main Dispatcher
+# Proxmox AI Deployer - Main Dispatcher
 # Repo: mrpink77it/homelab-ai-deployer
-# Version: V.1.1.9
+# Version: 2.0.0
 # ==============================================================================
 
 set -e
@@ -39,7 +39,7 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# RILEVAMENTO AMBIENTE WINDOWS (WSL)
+# RILEVAMENTO AMBIENTE E HARDWARE
 # ------------------------------------------------------------------------------
 is_wsl() {
     if grep -qi microsoft /proc/version 2>/dev/null || grep -qi wsl /proc/version 2>/dev/null; then
@@ -49,44 +49,40 @@ is_wsl() {
     fi
 }
 
-# ------------------------------------------------------------------------------
-# DIAGNOSTICA HARDWARE E AMBIENTE
-# ------------------------------------------------------------------------------
 if is_wsl; then
     VIRT_ENV="Windows WSL 2"
 elif grep -q "container=lxc" /proc/1/environ 2>/dev/null; then
-    VIRT_ENV="LXC (Proxmox)"
+    VIRT_ENV="LXC Container"
 else
-    VIRT_ENV="Bare-Metal / VM"
+    VIRT_ENV="Proxmox Host / Bare-Metal"
 fi
 
 HW_DETECTED="Nessuna GPU dedicata (Fallback CPU)"
-DEFAULT_ITEM="3"
+export GPU_TYPE="CPU" # Variabile esportata per gli script figli
 
 if lspci | grep -iq "NVIDIA" || [ -d "/proc/driver/nvidia" ] || command -v nvidia-smi &> /dev/null; then
-    HW_DETECTED="NVIDIA GPU"
-    DEFAULT_ITEM="1"
+    HW_DETECTED="NVIDIA GPU (CUDA)"
+    GPU_TYPE="NVIDIA"
 elif lspci | grep -i "vga\|3d\|display" | grep -iq "AMD\|Radeon" || [ -d "/sys/module/amdgpu" ]; then
-    HW_DETECTED="AMD GPU"
-    DEFAULT_ITEM="2"
+    HW_DETECTED="AMD GPU (ROCm)"
+    GPU_TYPE="AMD"
 fi
 
 # ------------------------------------------------------------------------------
-# BANNER INTRODUTTIVO OTTIMIZZATO (Debian/Ubuntu Fix)
+# BANNER INTRODUTTIVO OTTIMIZZATO
 # ------------------------------------------------------------------------------
 show_intro_banner() {
     local INFO_TEXT="
-                    HOMELAB AI DEPLOYER (V.1.1.9)
+                    PROXMOX AI DEPLOYER (V.2.0.0)
         --------------------------------------------------
-          Benvenuto nell'ecosistema di orchestrazione AI!
+          Benvenuto nella Fabbrica del Software Autonoma!
         --------------------------------------------------
 
-          Questo strumento analizza automaticamente il tuo hardware
-          e ti guida nella configurazione dello stack:
-
-            * Backend:  llama.cpp ottimizzato (NVIDIA/AMD/CPU)
-            * Frontend: Unsloth Studio, Open WebUI, JupyterLab
-            * Servizi:  Bare-Metal services via systemd
+          Questo strumento configurerà il tuo nodo Proxmox:
+          
+            * Dual Mode: Server Headless o AI Workstation (KDE)
+            * Orchestrazione LXC: LLM, Agenti Coder, RAG
+            * Ottimizzazione GPU: Condivisione VRAM Avanzata
 
         --------------------------------------------------
           Ambiente : $VIRT_ENV
@@ -95,7 +91,7 @@ show_intro_banner() {
 
           Premi <Ok> per procedere (avvio automatico tra 120s)."
 
-    timeout --foreground 120 whiptail --title " Homelab AI Deployer " --msgbox "$INFO_TEXT" 22 80 || true
+    timeout --foreground 120 whiptail --title " Proxmox AI Deployer " --msgbox "$INFO_TEXT" 22 80 || true
 }
 
 # ------------------------------------------------------------------------------
@@ -122,32 +118,17 @@ run_script() {
 }
 
 # ------------------------------------------------------------------------------
-# MENU GRAFICO PRINCIPALE
+# MENU GRAFICO PRINCIPALE (ROUTING)
 # ------------------------------------------------------------------------------
 show_menu() {
-    if is_wsl; then
-        CHOICE=$(whiptail --title "Homelab AI - Dispatcher Windows (WSL)" \
-            --default-item "$DEFAULT_ITEM" \
-            --menu "\nAmbiente: $VIRT_ENV\nHardware Rilevato: $HW_DETECTED\n\nScegli un'operazione per Windows:" 20 80 6 \
-            "1" "Ambiente NVIDIA WSL (manager-wsl-nvidia.sh)" \
-            "2" "Ambiente AMD WSL    (manager-wsl-amd.sh)" \
-            "3" "Ambiente CPU WSL    (manager-wsl-cpu.sh)" \
-            "4" "Modulo Fine-Tuning  (manager-finetuning.sh)" \
-            "5" "Disinstalla Servizi (uninstall.sh)" \
-            "6" "Purge Estremo       (purge-homelab-ai.sh)" \
-            3>&1 1>&2 2>&3)
-    else
-        CHOICE=$(whiptail --title "Homelab AI - Main Dispatcher" \
-            --default-item "$DEFAULT_ITEM" \
-            --menu "\nAmbiente: $VIRT_ENV\nHardware Rilevato: $HW_DETECTED\n\nScegli un'operazione:" 20 80 7 \
-            "1" "Ambiente NVIDIA     (manager-nvidia.sh)" \
-            "2" "Ambiente AMD         (manager-amd.sh)" \
-            "3" "Ambiente CPU-Only    (manager-cpu.sh)" \
-            "4" "Modulo Fine-Tuning   (manager-finetuning.sh)" \
-            "5" "Disinstalla Servizi  (uninstall.sh)" \
-            "6" "Purge Estremo        (purge-homelab-ai.sh)" \
-            3>&1 1>&2 2>&3)
-    fi
+    CHOICE=$(whiptail --title "Proxmox AI - Main Dispatcher" \
+        --menu "\nAmbiente: $VIRT_ENV\nHardware Rilevato: $HW_DETECTED\n\nScegli un'operazione per iniziare:" 21 80 6 \
+        "1" "🛠️  Prepara Server Edition (Host Headless)" \
+        "2" "🖥️  Prepara Workstation Edition (KDE + Drivers)" \
+        "3" "📦  Deploy Container AI (LXC Factory)" \
+        "4" "🧹  Menu Utility (Pulizia VRAM, Uninstall)" \
+        "5" "🚪  Esci" \
+        3>&1 1>&2 2>&3)
         
     if [ $? -ne 0 ]; then
         clear
@@ -163,23 +144,15 @@ show_intro_banner
 
 while true; do
     show_menu
-    if is_wsl; then
-        case $CHOICE in
-            1) run_script "manager-wsl-nvidia.sh" ;;
-            2) run_script "manager-wsl-amd.sh" ;;
-            3) run_script "manager-wsl-cpu.sh" ;;
-            4) run_script "manager-finetuning.sh" ;;
-            5) run_script "uninstall.sh" ;;
-            6) run_script "purge-homelab-ai.sh" ;;
-        esac
-    else
-        case $CHOICE in
-            1) run_script "manager-nvidia.sh" ;;
-            2) run_script "manager-amd.sh" ;;
-            3) run_script "manager-cpu.sh" ;;
-            4) run_script "manager-finetuning.sh" ;;
-            5) run_script "uninstall.sh" ;;
-            6) run_script "purge-homelab-ai.sh" ;;
-        esac
-    fi
+    case $CHOICE in
+        1) run_script "setup-server.sh" ;;
+        2) run_script "setup-workstation.sh" ;;
+        3) run_script "deploy-lxc-ai.sh" ;;
+        4) run_script "utility-menu.sh" ;;
+        5) 
+           clear
+           echo -e "\033[0;32mUscita. Esecuzione terminata.\033[0m"
+           exit 0 
+           ;;
+    esac
 done
