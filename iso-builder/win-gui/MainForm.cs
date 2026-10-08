@@ -369,10 +369,10 @@ namespace HomelabUSBBuilder
 
             string physicalDrive = @"\\.\PhysicalDrive" + diskNum;
 
-            // 1. Pulizia disco e messa OFFLINE tramite PowerShell (evita "Dispositivo non pronto")
-            lblStatus.Text = "Stato: Disattivazione volumi e sblocco disco USB...";
+            // 1. Pulizia tramite PowerShell Clear-Disk (supporta i drive rimovibili senza metterli offline)
+            lblStatus.Text = "Stato: Pulizia partizioni e sblocco disco USB...";
             progressBar.Value = 30;
-            await RunPowerShellAsync("Clear-Disk -Number " + diskNum + " -RemoveData -RemoveOEM -Confirm:$false; Set-Disk -Number " + diskNum + " -IsOffline $true");
+            await RunPowerShellAsync("Clear-Disk -Number " + diskNum + " -RemoveData -RemoveOEM -Confirm:$false; Set-Disk -Number " + diskNum + " -IsReadOnly $false");
 
             await Task.Delay(2000);
 
@@ -409,11 +409,11 @@ namespace HomelabUSBBuilder
                 await diskStream.FlushAsync();
             });
 
-            // 3. Ripristino ONLINE e creazione partizione PROXMOX-AIS con PowerShell
-            lblStatus.Text = "Stato: Ripristino disco e creazione partizione PROXMOX-AIS...";
+            // 3. Creazione partizione PROXMOX-AIS con PowerShell
+            lblStatus.Text = "Stato: Creazione partizione PROXMOX-AIS...";
             progressBar.Value = 75;
 
-            string psPartitionScript = "Set-Disk -Number " + diskNum + " -IsOffline $false; Set-Disk -Number " + diskNum + " -IsReadOnly $false; New-Partition -DiskNumber " + diskNum + " -UseMaximumSize -AssignDriveLetter | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'PROXMOX-AIS' -Confirm:$false";
+            string psPartitionScript = "New-Partition -DiskNumber " + diskNum + " -UseMaximumSize -AssignDriveLetter | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'PROXMOX-AIS' -Confirm:$false";
             await RunPowerShellAsync(psPartitionScript);
 
             await Task.Delay(3000);
