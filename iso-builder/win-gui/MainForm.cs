@@ -195,12 +195,27 @@ namespace HomelabUSBBuilder
 
         private async Task DownloadIsoAsync(string url, string destination)
         {
-            if (File.Exists(destination)) return;
-            using var client = new HttpClient();
+            // Se la ISO esiste già ed è di dimensioni coerenti (es. > 500 MB), salta il download
+            if (File.Exists(destination) && new FileInfo(destination).Length > 500 * 1024 * 1024)
+            {
+                return;
+            }
+
+            var handler = new HttpClientHandler
+            {
+                AllowAutoRedirect = true
+            };
+
+            using var client = new HttpClient(handler);
+            
+            // Imposta uno User-Agent per evitare il blocco da parte dei web server Proxmox
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+
             using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
             response.EnsureSuccessStatusCode();
+
             using var streamToRead = await response.Content.ReadAsStreamAsync();
-            using var streamToWrite = File.Create(destination);
+            using var streamToWrite = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
             await streamToRead.CopyToAsync(streamToWrite);
         }
 
