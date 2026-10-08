@@ -294,4 +294,139 @@ namespace HomelabUSBBuilder
 
             sb.AppendLine("echo '3. Configurazione Autologin SDDM...'");
             sb.AppendLine("mkdir -p /etc/sddm.conf.d");
-            sb.AppendLine("cat << 'EOF
+            sb.AppendLine("cat << 'EOF' > /etc/sddm.conf.d/autologin.conf");
+            sb.AppendLine("[Autologin]");
+            sb.AppendLine("User=homelab");
+            sb.AppendLine("Session=plasma");
+            sb.AppendLine("EOF");
+
+            sb.AppendLine("echo '4. Configurazione Autostart KDE...'");
+            sb.AppendLine("mkdir -p /home/homelab/.config/autostart");
+            sb.AppendLine("mkdir -p /home/homelab/scripts");
+
+            sb.AppendLine("cat << 'EOF' > /home/homelab/scripts/post-kde-deploy.sh");
+            sb.AppendLine("#!/bin/bash");
+            sb.AppendLine("echo 'Avvio procedura di configurazione guidata Homelab AI...'");
+            sb.AppendLine("if [ -f /usr/bin/konsole ]; then");
+            sb.AppendLine("    konsole -e bash -c 'echo \"=== HOMELAB AI DEPLOYER ===\"; sleep 2; sudo rm -rf /opt/homelab-ai-deployer && sudo git clone https://github.com/mrpink77it/homelab-ai-deployer.git /opt/homelab-ai-deployer && cd /opt/homelab-ai-deployer && sudo chmod +x install.sh && sudo ./install.sh; exec bash'");
+            sb.AppendLine("fi");
+            sb.AppendLine("EOF");
+
+            sb.AppendLine("chmod +x /home/homelab/scripts/post-kde-deploy.sh");
+            sb.AppendLine("chown -R homelab:homelab /home/homelab/");
+
+            sb.AppendLine("cat << 'EOF' > /home/homelab/.config/autostart/homelab-ai.desktop");
+            sb.AppendLine("[Desktop Entry]");
+            sb.AppendLine("Type=Application");
+            sb.AppendLine("Name=Homelab AI Deployer");
+            sb.AppendLine("Exec=/home/homelab/scripts/post-kde-deploy.sh");
+            sb.AppendLine("X-GNOME-Autostart-enabled=true");
+            sb.AppendLine("EOF");
+
+            sb.AppendLine("chown -R homelab:homelab /home/homelab/.config");
+            sb.AppendLine("systemctl set-default graphical.target");
+            sb.AppendLine("echo '=== SETUP COMPLETATO CON SUCCESSO ==='");
+            return sb.ToString();
+        }
+
+        private async Task DownloadIsoAsync(string url, string destination)
+        {
+            if (File.Exists(destination))
+            {
+                long length = new FileInfo(destination).Length;
+                if (length > 500 * 1024 * 1024)
+                {
+                    Logger.Log("File ISO gia presente e valido (" + length + " byte).");
+                    return;
+                }
+                File.Delete(destination);
+            }
+            await DownloadFileAsync(url, destination);
+        }
+
+        private async Task DownloadFileAsync(string url, string destination)
+        {
+            var handler = new HttpClientHandler { AllowAutoRedirect = true };
+            using var client = new HttpClient(handler);
+            client.Timeout = TimeSpan.FromMinutes(20);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+
+            using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
+
+            using var streamToRead = await response.Content.ReadAsStreamAsync();
+            using var streamToWrite = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
+            await streamToRead.CopyToAsync(streamToWrite);
+        }
+
+        private async Task FlashToUsbRawAsync(string deviceId, string answerPath, string isoPath, string prerunPath, string postrunPath)
+        {
+            string diskNum = Regex.Match(deviceId, @"\d+").Value;
+            if (string.IsNullOrEmpty(diskNum))
+            {
+                throw new Exception("Impossibile estrarre il numero di disco da DeviceID: " + deviceId);
+            }
+
+            string physicalDrive = @"\\.\PhysicalDrive" + diskNum;
+
+            // 1. Smontaggio forzato dei volumi e pulizia tramite PowerShell
+            lblStatus.Text = "Stato: Smontaggio volumi e sblocco disco USB...";
+            progressBar.Value = 30;
+
+            string preCleanScript = "Get-Disk -Number " + diskNum + 
+                " | Get-Partition | Get-Volume | Where-Object { \$_.DriveLetter } | ForEach-Object { Dismount-Volume -DriveLetter $_.DriveLetter -Force -Confirm:$false -ErrorAction SilentlyContinue }; " +
+                "Clear-Disk -Number " + diskNum + " -RemoveData -RemoveOEM -Confirm:\$false; " +
+                "Set-Disk -Number " + diskNum + " -IsReadOnly \$false";
+
+            await RunPowerShellAsync(preCleanScript);
+
+            await Task.Delay(2000);
+
+            // 2. Scrittura RAW tramite API Win32 (Bypassa UnauthorizedAccessException su PhysicalDrive)
+            lblStatus.Text = "Stato: Scrittura RAW dell'immagine ISO Proxmox...";
+            await Task.Run(() =>
+            {
+                using var isoStream = new FileStream(isoPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+                IntPtr handle = SafeNativeMethods.CreateFile(
+                    physicalDrive,
+                    SafeNativeMethods.GENERIC_WRITE,
+                    SafeNativeMethods.FILE_SHARE_READ | SafeNativeMethods.FILE_SHARE_WRITE,
+                    IntPtr.Zero,
+                    SafeNativeMethods.OPEN_EXISTING,
+                    SafeNativeMethods.FILE_FLAG_WRITE_THROUGH,
+                    IntPtr.Zero);
+
+                if (handle == SafeNativeMethods.INVALID_HANDLE_VALUE)
+                {
+                    int errCode = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                    throw new Exception("Impossibile aprire l'handle del disco fisico. Codice errore Win32: " + errCode);
+                }
+
+                using var diskStream = new FileStream(new Microsoft.Win32.SafeHandles.SafeFileHandle(handle, true), FileAccess.Write, 1024 * 1024, true);
+
+                byte[] buffer = new byte[1024 * 1024];
+                int bytesRead;
+                long totalBytes = isoStream.Length;
+                long bytesWritten = 0;
+
+                while ((bytesRead = isoStream.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    diskStream.Write(buffer, 0, bytesRead);
+                    bytesWritten += bytesRead;
+                    int pct = 30 + (int)((bytesWritten * 40) / totalBytes);
+
+                    this.Invoke(new Action(() =>
+                    {
+                        progressBar.Value = Math.Min(70, pct);
+                        lblStatus.Text = "Stato: Scrittura RAW ISO in corso... (" + (bytesWritten / (1024 * 1024)) + " MB / " + (totalBytes / (1024 * 1024)) + " MB)";
+                    }));
+                }
+                diskStream.Flush();
+            });
+
+            // 3. Creazione partizione PROXMOX-AIS con PowerShell
+            lblStatus.Text = "Stato: Creazione partizione PROXMOX-AIS...";
+            progressBar.Value = 75;
+
+            string psPartitionScript = "New-Partition -DiskNumber " + diskNum
