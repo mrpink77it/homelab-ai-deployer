@@ -77,7 +77,7 @@ namespace HomelabUSBBuilder
 
         private void InitializeComponentLayout()
         {
-            this.Text = "Proxmox AI Deployer - USB Creator v2.4";
+            this.Text = "Proxmox AI Deployer - USB Creator v2.6";
             this.Size = new System.Drawing.Size(520, 420);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -186,7 +186,7 @@ namespace HomelabUSBBuilder
 
                 // Step 1: Download ISO Proxmox VE 9.2-1
                 lblStatus.Text = "Stato: Verifica e Download ISO Proxmox VE...";
-                progressBar.Value = 20;
+                progressBar.Value = 10;
                 string isoUrl = "https://enterprise.proxmox.com/iso/proxmox-ve_9.2-1.iso";
                 
                 Logger.Log($"Verifica / Download ISO da: {isoUrl}");
@@ -194,26 +194,24 @@ namespace HomelabUSBBuilder
 
                 // Step 2: Generazione del file answer.toml
                 lblStatus.Text = "Stato: Generazione file di risposta (answer.toml)...";
-                progressBar.Value = 40;
+                progressBar.Value = 20;
                 string answerToml = BuildAnswerToml();
                 File.WriteAllText(answerPath, answerToml, Encoding.UTF8);
                 Logger.Log($"File answer.toml creato in: {answerPath}");
                 Logger.Log($"Contenuto answer.toml:\n{answerToml}");
 
-                // Step 3: Formattazione USB GPT, montaggio ISO, copia dei file dell'installer e answer.toml
-                lblStatus.Text = "Stato: Formattazione USB GPT, copia dei file ISO e risposta automatica...";
-                progressBar.Value = 60;
+                // Step 3: Formattazione USB, Copia ISO, Risposta e Verifica
                 await FlashToUsbAsync(targetUsb.DeviceID, answerPath, isoPath);
 
                 progressBar.Value = 100;
-                lblStatus.Text = "Stato: OPERAZIONE COMPLETATA CON SUCCESSO!";
-                Logger.Log("=== OPERAZIONE COMPLETATA CON SUCCESSO ===");
-                MessageBox.Show("Chiavetta USB creata e configurata con successo!\n\nI dettagli sono stati salvati nel file app.log.", "Completato", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                lblStatus.Text = "Stato: OPERAZIONE E VERIFICA COMPLETATE CON SUCCESSO!";
+                Logger.Log("=== OPERAZIONE E VERIFICA COMPLETATE CON SUCCESSO ===");
+                MessageBox.Show("Chiavetta USB creata, configurata e verificata con successo!\n\nI dettagli sono stati salvati nel file app.log.", "Completato", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
                 Logger.Log($"ERRORE FATALE durante il processo: {ex}");
-                MessageBox.Show($"Errore durante la creazione: {ex.Message}\n\nConsulta 'app.log' per maggiori dettagli.", "Errore Fatale", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Errore durante il processo: {ex.Message}\n\nConsulta 'app.log' per maggiori dettagli.", "Errore Fatale", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 lblStatus.Text = "Stato: Errore riscontrato.";
             }
             finally
@@ -305,7 +303,8 @@ namespace HomelabUSBBuilder
                 sb.AppendLine($"$answer = \"{escapedAnswerPath}\"");
                 sb.AppendLine($"$iso = \"{escapedIsoPath}\"");
 
-                // Step 1: Formattazione GPT / FAT32 con etichetta PROXMOXAID
+                // Step 1: Formattazione GPT / FAT32
+                sb.AppendLine("Write-Host 'STATUS:25:Formattazione disco USB in formato GPT/FAT32...'");
                 sb.AppendLine("$diskpartScript = @\"");
                 sb.AppendLine("select disk $diskNum");
                 sb.AppendLine("clean");
@@ -316,8 +315,6 @@ namespace HomelabUSBBuilder
                 sb.AppendLine("\"@");
 
                 sb.AppendLine("$dpOutput = $diskpartScript | diskpart");
-                sb.AppendLine("Write-Host $dpOutput");
-
                 sb.AppendLine("if ($dpOutput -match 'Errore del servizio Dischi virtuali' -or $dpOutput -match 'Error') {");
                 sb.AppendLine("    throw 'Errore durante la formattazione con DiskPart.'");
                 sb.AppendLine("}");
@@ -331,23 +328,63 @@ namespace HomelabUSBBuilder
                 sb.AppendLine("}");
 
                 sb.AppendLine("$driveLetter = $vol.DriveLetter.ToString().Trim()");
-                sb.AppendLine("Write-Host \"Lettera unità assegnata: '$driveLetter'\"");
 
                 // Step 3: Montaggio ISO e copia file installer sulla USB
-                sb.AppendLine("Write-Host 'Montaggio ISO Proxmox ed estrazione dei file sulla chiavetta...'");
+                sb.AppendLine("Write-Host 'STATUS:35:Montaggio ISO Proxmox ed estrazione dei file sulla chiavetta...'");
                 sb.AppendLine("$isoMount = Mount-DiskImage -ImagePath $iso -PassThru");
                 sb.AppendLine("$isoVol = $isoMount | Get-Volume");
                 sb.AppendLine("$isoDrive = $isoVol.DriveLetter");
 
                 sb.AppendLine("if (-not $isoDrive) { throw 'Impossibile montare il file ISO per la copia.' }");
 
+                sb.AppendLine("Write-Host 'STATUS:40:Copia dei file dell installer ISO sulla USB in corso...'");
                 sb.AppendLine("Copy-Item -Path \"${isoDrive}:\\*\" -Destination \"${driveLetter}:\\\" -Recurse -Force -ErrorAction Stop");
-                sb.AppendLine("Dismount-DiskImage -ImagePath $iso");
-                sb.AppendLine("Write-Host 'Copia file ISO completata.'");
 
                 // Step 4: Copia del file answer.toml nella radice della USB
+                sb.AppendLine("Write-Host 'STATUS:65:Copia del file answer.toml sulla radice USB...'");
                 sb.AppendLine("Copy-Item -Path $answer -Destination \"${driveLetter}:\\answer.toml\" -Force -ErrorAction Stop");
-                sb.AppendLine("Write-Host 'Copia answer.toml completata con successo.'");
+
+                // Step 5: VERIFICA DI COERENZA DEI DATI SCRITTI CON PERCENTUALE E NOME FILE
+                sb.AppendLine("Write-Host 'STATUS:70:Avvio verifica di coerenza dei dati sulla USB...'");
+                sb.AppendLine("$isoFiles = Get-ChildItem -Path \"${isoDrive}:\\\" -Recurse -File");
+                sb.AppendLine("$totalFiles = $isoFiles.Count");
+                sb.AppendLine("$currentIndex = 0");
+                sb.AppendLine("$corruptCount = 0");
+
+                sb.AppendLine("foreach ($file in $isoFiles) {");
+                sb.AppendLine("    $currentIndex++");
+                // Mappa l'avanzamento della verifica tra il 70% e il 98%
+                sb.AppendLine("    $pct = 70 + [math]::Round(($currentIndex / $totalFiles) * 28)");
+                sb.AppendLine("    $relativePath = $file.FullName.Substring(3)");
+                
+                sb.AppendLine("    Write-Host \"STATUS:${pct}:Verifica [$currentIndex/$totalFiles]: $relativePath\"");
+
+                sb.AppendLine("    $targetPath = Join-Path \"${driveLetter}:\\\" $relativePath");
+                sb.AppendLine("    if (-not (Test-Path $targetPath)) {");
+                sb.AppendLine("        Write-Host \"ERRORE VERIFICA: File mancante -> $relativePath\"");
+                sb.AppendLine("        $corruptCount++");
+                sb.AppendLine("        break");
+                sb.AppendLine("    }");
+                sb.AppendLine("    $targetFile = Get-Item $targetPath");
+                sb.AppendLine("    if ($file.Length -ne $targetFile.Length) {");
+                sb.AppendLine("        Write-Host \"ERRORE VERIFICA: Dimensione non corrispondente -> $relativePath\"");
+                sb.AppendLine("        $corruptCount++");
+                sb.AppendLine("        break");
+                sb.AppendLine("    }");
+                sb.AppendLine("}");
+
+                sb.AppendLine("if (-not (Test-Path \"${driveLetter}:\\answer.toml\")) {");
+                sb.AppendLine("    Write-Host 'ERRORE VERIFICA: File answer.toml mancante sulla USB!'");
+                sb.AppendLine("    $corruptCount++");
+                sb.AppendLine("}");
+
+                sb.AppendLine("Dismount-DiskImage -ImagePath $iso");
+
+                sb.AppendLine("if ($corruptCount -gt 0) {");
+                sb.AppendLine("    throw 'Verifica dati fallita: discrepanze rilevate tra ISO e chiavetta USB.'");
+                sb.AppendLine("} else {");
+                sb.AppendLine("    Write-Host 'STATUS:99:Verifica dati completata con successo.'");
+                sb.AppendLine("}");
 
                 var psi = new ProcessStartInfo("powershell")
                 {
@@ -362,28 +399,53 @@ namespace HomelabUSBBuilder
                 psi.ArgumentList.Add("-Command");
                 psi.ArgumentList.Add(sb.ToString());
 
-                Logger.Log("Esecuzione dello script PowerShell (Formattazione GPT, Copia ISO e Risposta)...");
-                using var proc = Process.Start(psi);
-                if (proc != null)
-                {
-                    string output = proc.StandardOutput.ReadToEnd();
-                    string error = proc.StandardError.ReadToEnd();
-                    proc.WaitForExit();
+                Logger.Log("Esecuzione dello script PowerShell con tracciamento avanzamento...");
+                
+                using var proc = new Process { StartInfo = psi };
+                bool hasErrors = false;
 
-                    Logger.Log($"[PowerShell Output]:\n{output}");
-                    if (!string.IsNullOrWhiteSpace(error))
-                    {
-                        Logger.Log($"[PowerShell Errore]:\n{error}");
-                    }
-
-                    if (proc.ExitCode != 0 || output.Contains("throw"))
-                    {
-                        throw new Exception("La creazione della chiavetta è fallita. Verifica app.log.");
-                    }
-                }
-                else
+                proc.OutputDataReceived += (s, e) =>
                 {
-                    throw new Exception("Impossibile avviare il processo PowerShell.");
+                    if (string.IsNullOrWhiteSpace(e.Data)) return;
+
+                    Logger.Log($"[PowerShell]: {e.Data}");
+
+                    if (e.Data.StartsWith("STATUS:"))
+                    {
+                        var parts = e.Data.Split(new[] { ':' }, 3);
+                        if (parts.Length >= 3 && int.TryParse(parts[1], out int pct))
+                        {
+                            string msg = parts[2];
+                            this.Invoke(new Action(() =>
+                            {
+                                progressBar.Value = Math.Min(100, Math.Max(0, pct));
+                                lblStatus.Text = $"Stato: {msg}";
+                            }));
+                        }
+                    }
+                    else if (e.Data.Contains("ERRORE VERIFICA") || e.Data.Contains("throw"))
+                    {
+                        hasErrors = true;
+                    }
+                };
+
+                proc.ErrorDataReceived += (s, e) =>
+                {
+                    if (!string.IsNullOrWhiteSpace(e.Data))
+                    {
+                        Logger.Log($"[PowerShell Errore]: {e.Data}");
+                        hasErrors = true;
+                    }
+                };
+
+                proc.Start();
+                proc.BeginOutputReadLine();
+                proc.BeginErrorReadLine();
+                proc.WaitForExit();
+
+                if (proc.ExitCode != 0 || hasErrors)
+                {
+                    throw new Exception("La creazione o la verifica della chiavetta USB è fallita. Consulta app.log per maggiori dettagli.");
                 }
             });
         }
