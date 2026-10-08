@@ -83,7 +83,7 @@ namespace HomelabUSBBuilder
 
         private void InitializeComponentLayout()
         {
-            this.Text = "Proxmox AI Deployer - USB Creator v3.7 (RAW + OFFLINE LOCK FIX)";
+            this.Text = "Proxmox AI Deployer - USB Creator v3.8";
             this.Size = new System.Drawing.Size(540, 430);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -116,7 +116,7 @@ namespace HomelabUSBBuilder
             btnCreate.Click += async (s, e) => await StartProcessAsync();
 
             progressBar = new ProgressBar { Left = 20, Top = 300, Width = 480, Height = 20 };
-            lblStatus = new Label { Text = "Stato: Seleziona l'unità USB e avvia il processo.", Left = 20, Top = 330, Width = 480 };
+            lblStatus = new Label { Text = "Stato: Seleziona l'unita' USB e avvia il processo.", Left = 20, Top = 330, Width = 480 };
 
             this.Controls.Add(lblUsb);
             this.Controls.Add(comboUsb);
@@ -132,7 +132,8 @@ namespace HomelabUSBBuilder
             Logger.Log("Ricerca chiavette USB collegate...");
             try
             {
-                var searcher = new ManagementObjectSearcher(@"SELECT * FROM Win32_DiskDrive WHERE InterfaceType='USB'");
+                string wmiQuery = "SELECT * FROM Win32_DiskDrive WHERE InterfaceType='USB'";
+                var searcher = new ManagementObjectSearcher(wmiQuery);
                 foreach (ManagementObject drive in searcher.Get())
                 {
                     string model = drive["Model"]?.ToString() ?? "USB Drive";
@@ -183,7 +184,7 @@ namespace HomelabUSBBuilder
 
             try
             {
-                Logger.Log(\$"Inizio processo RAW per l'unità: {targetUsb.DisplayName} ({targetUsb.DeviceID})");
+                Logger.Log(\$"Inizio processo RAW per l'unita': {targetUsb.DisplayName} ({targetUsb.DeviceID})");
 
                 string tempDir = Path.Combine(Path.GetTempPath(), "proxmox-builder");
                 Directory.CreateDirectory(tempDir);
@@ -219,7 +220,7 @@ namespace HomelabUSBBuilder
                 progressBar.Value = 100;
                 lblStatus.Text = "Stato: CREAZIONE E VERIFICA COMPLETATE CON SUCCESSO!";
                 Logger.Log("=== CREAZIONE E VERIFICA COMPLETATE CON SUCCESSO ===");
-                MessageBox.Show("Chiavetta USB Proxmox + KDE autologin creata con successo in modalità RAW Autoinstall!", "Completato", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("Chiavetta USB Proxmox + KDE autologin creata con successo in modalita' RAW Autoinstall!", "Completato", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
@@ -333,4 +334,96 @@ namespace HomelabUSBBuilder
             if (File.Exists(destination))
             {
                 long length = new FileInfo(destination).Length;
-                if (length > 500 * 1024 * 102
+                if (length > 500 * 1024 * 1024)
+                {
+                    Logger.Log(\$"File ISO gia' presente e valido ({length} byte).");
+                    return;
+                }
+                File.Delete(destination);
+            }
+            await DownloadFileAsync(url, destination);
+        }
+
+        private async Task DownloadFileAsync(string url, string destination)
+        {
+            var handler = new HttpClientHandler { AllowAutoRedirect = true };
+            using var client = new HttpClient(handler);
+            client.Timeout = TimeSpan.FromMinutes(20);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+
+            using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
+
+            using var streamToRead = await response.Content.ReadAsStreamAsync();
+            using var streamToWrite = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
+            await streamToRead.CopyToAsync(streamToWrite);
+        }
+
+        private async Task FlashToUsbRawAsync(string deviceId, string answerPath, string isoPath, string prerunPath, string postrunPath)
+        {
+            string diskNum = Regex.Match(deviceId, @"\d+").Value;
+            if (string.IsNullOrEmpty(diskNum))
+            {
+                throw new Exception(\$"Impossibile estrarre il numero di disco da DeviceID: {deviceId}");
+            }
+
+            string physicalDrive = @"\\.\PhysicalDrive" + diskNum;
+
+            // 1. Pulizia disco e messa OFFLINE
+            lblStatus.Text = "Stato: Disattivazione volumi e sblocco disco USB...";
+            progressBar.Value = 30;
+            await RunDiskPartAsync(\$"select disk {diskNum}\nclean\noffline disk\nrescan\n");
+
+            await Task.Delay(2000);
+
+            // 2. Scrittura RAW (DD)
+            lblStatus.Text = "Stato: Scrittura RAW dell'immagine ISO Proxmox...";
+            await Task.Run(async () =>
+            {
+                using var isoStream = new FileStream(isoPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using var diskStream = new FileStream(
+                    physicalDrive,
+                    FileMode.Open,
+                    FileAccess.Write,
+                    FileShare.ReadWrite | FileShare.Delete,
+                    1024 * 1024,
+                    FileOptions.WriteThrough | FileOptions.Asynchronous);
+
+                byte[] buffer = new byte[1024 * 1024];
+                int bytesRead;
+                long totalBytes = isoStream.Length;
+                long bytesWritten = 0;
+
+                while ((bytesRead = await isoStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                {
+                    await diskStream.WriteAsync(buffer, 0, bytesRead);
+                    bytesWritten += bytesRead;
+                    int pct = 30 + (int)((bytesWritten * 40) / totalBytes);
+
+                    this.Invoke(new Action(() =>
+                    {
+                        progressBar.Value = Math.Min(70, pct);
+                        lblStatus.Text = \$"Stato: Scrittura RAW ISO in corso... ({bytesWritten / (1024 * 1024)} MB / {totalBytes / (1024 * 1024)} MB)";
+                    }));
+                }
+                await diskStream.FlushAsync();
+            });
+
+            // 3. Ripristino ONLINE e creazione partizione PROXMOX-AIS
+            lblStatus.Text = "Stato: Ripristino disco e creazione partizione PROXMOX-AIS...";
+            progressBar.Value = 75;
+
+            string onlineScript = \$"select disk {diskNum}\nonline disk\nattributes disk clear readonly\nrescan\ncreate partition primary\nformat fs=fat32 quick label=\"PROXMOX-AIS\"\nassign\n";
+            await RunDiskPartAsync(onlineScript);
+
+            await Task.Delay(3000);
+
+            // 4. Copia file di configurazione
+            lblStatus.Text = "Stato: Iniezione file answer.toml, prerun.sh e postrun.sh...";
+            progressBar.Value = 85;
+
+            string? driveLetter = null;
+            for (int i = 0; i < 10; i++)
+            {
+                driveLetter = DriveInfo.GetDrives()
+                    .FirstOrDefault(d => d.IsReady && string.Equals(d.VolumeLabel, "PROXMO
