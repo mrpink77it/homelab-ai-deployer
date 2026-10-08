@@ -84,7 +84,7 @@ namespace HomelabUSBBuilder
 
         private void InitializeComponentLayout()
         {
-            this.Text = "Proxmox AI Deployer - USB Creator v4.5 (Native Write)";
+            this.Text = "Proxmox AI Deployer - USB Creator v4.6 (Strict Native Write)";
             this.Size = new System.Drawing.Size(540, 430);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -385,7 +385,7 @@ namespace HomelabUSBBuilder
             await RunPowerShellAsync(preCleanScript);
             await Task.Delay(2000);
 
-            // 2. Scrittura RAW tramite API Win32 (CreateFile + DeviceIoControl Lock/Dismount + WriteFile nativo)
+            // 2. Scrittura RAW tramite API Win32 pure (CreateFile + DeviceIoControl Lock/Dismount + WriteFile)
             lblStatus.Text = "Stato: Scrittura RAW dell'immagine ISO Proxmox...";
             Logger.Log("Tentativo di apertura handle nativo su " + physicalDrive + " con CreateFile...");
 
@@ -399,7 +399,7 @@ namespace HomelabUSBBuilder
                     SafeNativeMethods.FILE_SHARE_READ | SafeNativeMethods.FILE_SHARE_WRITE,
                     IntPtr.Zero,
                     SafeNativeMethods.OPEN_EXISTING,
-                    SafeNativeMethods.FILE_FLAG_WRITE_THROUGH,
+                    0,
                     IntPtr.Zero);
 
                 if (handle == SafeNativeMethods.INVALID_HANDLE_VALUE)
@@ -409,11 +409,11 @@ namespace HomelabUSBBuilder
                     throw new Exception("Impossibile aprire l'handle del disco fisico. Codice errore Win32: " + errCode);
                 }
 
-                Logger.Log("Handle nativo aperto con successo (Handle pointer: " + handle + "). Blocco volume e scrittura nativa...");
+                Logger.Log("Handle nativo aperto con successo (Handle pointer: " + handle + "). Blocco volume e scrittura nativa pura...");
 
                 try
                 {
-                    // Blocca e smonta il volume a livello driver per evitare accessi negati di Windows
+                    // Blocca e smonta il volume a livello driver
                     SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_LOCK_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
                     SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_DISMOUNT_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
 
@@ -530,7 +530,6 @@ namespace HomelabUSBBuilder
         public const uint FILE_SHARE_READ = 0x00000001;
         public const uint FILE_SHARE_WRITE = 0x00000002;
         public const uint OPEN_EXISTING = 3;
-        public const uint FILE_FLAG_WRITE_THROUGH = 0x80000000;
         public static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
 
         public const uint FSCTL_LOCK_VOLUME = 0x00090018;
