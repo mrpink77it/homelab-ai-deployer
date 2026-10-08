@@ -190,17 +190,20 @@ disk_list = [""filter:first_matched""]
         {
             await Task.Run(() =>
             {
-                // Esecuzione pulizia e scrittura raw tramite PowerShell e Rufus CLI / Diskpart
                 string diskNum = deviceId.Replace(@"\\.\PHYSICALDRIVE", "");
-                string psScript = $@"
-$DiskpartScript = ""select disk {diskNum}`nclean`nconvert mbr`nactive""
-\$DiskpartScript | diskpart
-";
-                var psi = new ProcessStartInfo("powershell", \$"-NoProfile -ExecutionPolicy Bypass -Command \"{psScript}\"")
+                string scriptContent = "$DiskpartScript = \"select disk " + diskNum + "`nclean`nconvert mbr`nactive\"\n\$DiskpartScript | diskpart";
+
+                var psi = new ProcessStartInfo("powershell")
                 {
                     CreateNoWindow = true,
                     UseShellExecute = false
                 };
+                psi.ArgumentList.Add("-NoProfile");
+                psi.ArgumentList.Add("-ExecutionPolicy");
+                psi.ArgumentList.Add("Bypass");
+                psi.ArgumentList.Add("-Command");
+                psi.ArgumentList.Add(scriptContent);
+
                 using var proc = Process.Start(psi);
                 proc?.WaitForExit();
             });
