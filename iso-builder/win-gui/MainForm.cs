@@ -117,6 +117,7 @@ namespace HomelabUSBBuilder
                 string tempDir = Path.Combine(Path.GetTempPath(), "proxmox-builder");
                 Directory.CreateDirectory(tempDir);
                 string isoPath = Path.Combine(tempDir, "proxmox-ve-latest.iso");
+                string answerPath = Path.Combine(tempDir, "answer.toml");
 
                 lblStatus.Text = "Stato: Download ISO Proxmox VE in corso...";
                 progressBar.Value = 20;
@@ -125,15 +126,15 @@ namespace HomelabUSBBuilder
                 lblStatus.Text = "Stato: Generazione configurazione automatica (answer.toml)...";
                 progressBar.Value = 60;
                 string answerToml = BuildAnswerToml();
-                File.WriteAllText(Path.Combine(tempDir, "answer.toml"), answerToml, Encoding.UTF8);
+                File.WriteAllText(answerPath, answerToml, Encoding.UTF8);
 
-                lblStatus.Text = "Stato: Scrittura immagine sulla USB in corso...";
+                lblStatus.Text = "Stato: Scrittura immagine e configurazione sulla USB...";
                 progressBar.Value = 80;
-                await FlashToUsbAsync(targetUsb.DeviceID, isoPath, tempDir);
+                await FlashToUsbAsync(targetUsb.DeviceID, isoPath, answerPath);
 
                 progressBar.Value = 100;
                 lblStatus.Text = "Stato: OPERAZIONE COMPLETATA CON SUCCESSO!";
-                MessageBox.Show("Chiavetta USB creata con successo!\n\nInserisci la USB nel computer/server di destinazione e fai il boot da USB per avviare l'installazione automatica.", "Completato", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("Chiavetta USB creata con successo!\n\nInserisci la USB nel computer/server di destinazione e fai il boot per avviare l'installazione automatica.", "Completato", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
@@ -180,19 +181,40 @@ namespace HomelabUSBBuilder
         {
             if (File.Exists(destination)) return;
             using var client = new HttpClient();
-            var data = await client.GetByteArrayAsync(url);
-            await File.WriteAllBytesAsync(destination, data);
+            using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
+            using var streamToRead = await response.Content.ReadAsStreamAsync();
+            using var streamToWrite = File.Create(destination);
+            await streamToRead.CopyToAsync(streamToWrite);
         }
 
-        private async Task FlashToUsbAsync(string deviceId, string isoPath, string tempDir)
+        private async Task FlashToUsbAsync(string deviceId, string isoPath, string answerPath)
         {
             await Task.Run(() =>
             {
                 string diskNum = Regex.Match(deviceId, @"\d+").Value;
 
                 string scriptContent = $"""
-                $DiskpartScript = "select disk {diskNum}`nclean`nconvert mbr`nactive"
-                \$DiskpartScript | diskpart
+                $diskNum = "{diskNum}"
+                $answer = "{answerPath}"
+
+                $diskpartCmd = @"
+                select disk $diskNum
+                clean
+                convert mbr
+                create partition primary
+                format fs=fat32 quick label="PROXMOX-ANSWER"
+                active
+                assign
+                "@
+                $diskpartCmd | diskpart
+
+                Start-Sleep -Seconds 2
+                $driveLetter = (Get-Partition -DiskNumber $diskNum | Get-Volume).DriveLetter
+
+                if ($driveLetter) {
+                    Copy-Item -Path $answer -Destination "$($driveLetter):\answer.toml" -Force
+                }
                 """;
 
                 var psi = new ProcessStartInfo("powershell")
