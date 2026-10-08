@@ -83,7 +83,7 @@ namespace HomelabUSBBuilder
 
         private void InitializeComponentLayout()
         {
-            this.Text = "Proxmox AI Deployer - USB Creator v4.1";
+            this.Text = "Proxmox AI Deployer - USB Creator v4.2";
             this.Size = new System.Drawing.Size(540, 430);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -368,20 +368,18 @@ namespace HomelabUSBBuilder
 
             string physicalDrive = @"\\.\PhysicalDrive" + diskNum;
 
-            // 1. Smontaggio forzato dei volumi e pulizia tramite PowerShell
-            lblStatus.Text = "Stato: Smontaggio volumi e sblocco disco USB...";
+            // 1. Porta il disco offline per rilasciare i blocchi di Windows
+            lblStatus.Text = "Stato: Sblocco e disconnessione disco USB...";
             progressBar.Value = 30;
 
-            string preCleanScript = "Get-Disk -Number " + diskNum + 
-                " | Get-Partition | Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { Dismount-Volume -DriveLetter $_.DriveLetter -Force -Confirm:$false -ErrorAction SilentlyContinue }; " +
+            string preCleanScript = "Set-Disk -Number " + diskNum + " -IsOffline $true; " +
                 "Clear-Disk -Number " + diskNum + " -RemoveData -RemoveOEM -Confirm:$false; " +
                 "Set-Disk -Number " + diskNum + " -IsReadOnly $false";
 
             await RunPowerShellAsync(preCleanScript);
-
             await Task.Delay(2000);
 
-            // 2. Scrittura RAW tramite API Win32 (Bypassa UnauthorizedAccessException su PhysicalDrive)
+            // 2. Scrittura RAW tramite API Win32 con GENERIC_READ | GENERIC_WRITE
             lblStatus.Text = "Stato: Scrittura RAW dell'immagine ISO Proxmox...";
             await Task.Run(() =>
             {
@@ -389,7 +387,7 @@ namespace HomelabUSBBuilder
 
                 IntPtr handle = SafeNativeMethods.CreateFile(
                     physicalDrive,
-                    SafeNativeMethods.GENERIC_WRITE,
+                    SafeNativeMethods.GENERIC_READ | SafeNativeMethods.GENERIC_WRITE,
                     SafeNativeMethods.FILE_SHARE_READ | SafeNativeMethods.FILE_SHARE_WRITE,
                     IntPtr.Zero,
                     SafeNativeMethods.OPEN_EXISTING,
@@ -402,7 +400,6 @@ namespace HomelabUSBBuilder
                     throw new Exception("Impossibile aprire l'handle del disco fisico. Codice errore Win32: " + errCode);
                 }
 
-                // CORRETTO: isAsync impostato a false perche l'handle e sincrono
                 using var diskStream = new FileStream(new Microsoft.Win32.SafeHandles.SafeFileHandle(handle, true), FileAccess.Write, 1024 * 1024, false);
 
                 byte[] buffer = new byte[1024 * 1024];
@@ -425,13 +422,14 @@ namespace HomelabUSBBuilder
                 diskStream.Flush();
             });
 
-            // 3. Creazione partizione PROXMOX-AIS con PowerShell
+            // 3. Riporta online il disco e crea la partizione PROXMOX-AIS
             lblStatus.Text = "Stato: Creazione partizione PROXMOX-AIS...";
             progressBar.Value = 75;
 
-            string psPartitionScript = "New-Partition -DiskNumber " + diskNum + " -UseMaximumSize -AssignDriveLetter | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'PROXMOX-AIS' -Confirm:$false";
-            await RunPowerShellAsync(psPartitionScript);
+            string psPartitionScript = "Set-Disk -Number " + diskNum + " -IsOffline $false; " +
+                "New-Partition -DiskNumber " + diskNum + " -UseMaximumSize -AssignDriveLetter | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'PROXMOX-AIS' -Confirm:$false";
 
+            await RunPowerShellAsync(psPartitionScript);
             await Task.Delay(3000);
 
             // 4. Copia file di configurazione
@@ -493,6 +491,7 @@ namespace HomelabUSBBuilder
 
     internal static class SafeNativeMethods
     {
+        public const uint GENERIC_READ = 0x80000000;
         public const uint GENERIC_WRITE = 0x40000000;
         public const uint FILE_SHARE_READ = 0x00000001;
         public const uint FILE_SHARE_WRITE = 0x00000002;
