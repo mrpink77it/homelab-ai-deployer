@@ -166,7 +166,7 @@ namespace HomelabUSBBuilder
 
             string msgConfirm = "ATTENZIONE: TUTTI I DATI sulla chiavetta:" + Environment.NewLine + Environment.NewLine +
                                 targetUsb.DisplayName + Environment.NewLine + Environment.NewLine +
-                                "VERRANNO CANCELLATI E LA CHIAVETTA VERRÀ FORMATTATA!" + Environment.NewLine + Environment.NewLine +
+                                "VERRANNO CANCELLATI E LA CHIAVETTA VERRÀ FORMATTATA IN GPT/FAT32!" + Environment.NewLine + Environment.NewLine +
                                 "Vuoi continuare?";
 
             var confirm = MessageBox.Show(msgConfirm, "Conferma Formattazione USB", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
@@ -186,7 +186,7 @@ namespace HomelabUSBBuilder
 
                 // Step 1: Download ISO Proxmox VE 9.2-1
                 lblStatus.Text = "Stato: Verifica e Download ISO Proxmox VE...";
-                progressBar.Value = 25;
+                progressBar.Value = 20;
                 string isoUrl = "https://enterprise.proxmox.com/iso/proxmox-ve_9.2-1.iso";
                 
                 Logger.Log($"Verifica / Download ISO da: {isoUrl}");
@@ -194,21 +194,21 @@ namespace HomelabUSBBuilder
 
                 // Step 2: Generazione del file answer.toml
                 lblStatus.Text = "Stato: Generazione file di risposta (answer.toml)...";
-                progressBar.Value = 50;
+                progressBar.Value = 40;
                 string answerToml = BuildAnswerToml();
                 File.WriteAllText(answerPath, answerToml, Encoding.UTF8);
                 Logger.Log($"File answer.toml creato in: {answerPath}");
                 Logger.Log($"Contenuto answer.toml:\n{answerToml}");
 
-                // Step 3: Formattazione USB e scrittura answer.toml
-                lblStatus.Text = "Stato: Formattazione USB e scrittura risposta automatica...";
-                progressBar.Value = 75;
-                await FlashToUsbAsync(targetUsb.DeviceID, answerPath);
+                // Step 3: Formattazione USB GPT, montaggio ISO, copia dei file dell'installer e answer.toml
+                lblStatus.Text = "Stato: Formattazione USB GPT, copia dei file ISO e risposta automatica...";
+                progressBar.Value = 60;
+                await FlashToUsbAsync(targetUsb.DeviceID, answerPath, isoPath);
 
                 progressBar.Value = 100;
                 lblStatus.Text = "Stato: OPERAZIONE COMPLETATA CON SUCCESSO!";
                 Logger.Log("=== OPERAZIONE COMPLETATA CON SUCCESSO ===");
-                MessageBox.Show("Chiavetta USB configurata con successo!\n\nI dettagli sono stati salvati nel file app.log.", "Completato", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("Chiavetta USB creata e configurata con successo!\n\nI dettagli sono stati salvati nel file app.log.", "Completato", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
@@ -285,7 +285,7 @@ namespace HomelabUSBBuilder
             Logger.Log("Download ISO completato con successo.");
         }
 
-        private async Task FlashToUsbAsync(string deviceId, string answerPath)
+        private async Task FlashToUsbAsync(string deviceId, string answerPath, string isoPath)
         {
             await Task.Run(() =>
             {
@@ -298,46 +298,56 @@ namespace HomelabUSBBuilder
                 Logger.Log($"Numero disco identificato per diskpart: {diskNum}");
 
                 string escapedAnswerPath = answerPath.Replace("\\", "\\\\");
+                string escapedIsoPath = isoPath.Replace("\\", "\\\\");
 
                 var sb = new StringBuilder();
                 sb.AppendLine($"$diskNum = \"{diskNum}\"");
                 sb.AppendLine($"$answer = \"{escapedAnswerPath}\"");
-                
-                // Script diskpart con etichetta PROXMOXAID (senza caratteri speciali per evitare errori FAT32)
+                sb.AppendLine($"$iso = \"{escapedIsoPath}\"");
+
+                // Step 1: Formattazione GPT / FAT32 con etichetta PROXMOXAID
                 sb.AppendLine("$diskpartScript = @\"");
                 sb.AppendLine("select disk $diskNum");
                 sb.AppendLine("clean");
-                sb.AppendLine("convert mbr");
+                sb.AppendLine("convert gpt");
                 sb.AppendLine("create partition primary");
                 sb.AppendLine("format fs=fat32 quick label=\"PROXMOXAID\"");
-                sb.AppendLine("active");
                 sb.AppendLine("assign");
                 sb.AppendLine("\"@");
 
                 sb.AppendLine("$dpOutput = $diskpartScript | diskpart");
                 sb.AppendLine("Write-Host $dpOutput");
 
-                // Controllo immediato di eventuali errori generati da diskpart
                 sb.AppendLine("if ($dpOutput -match 'Errore del servizio Dischi virtuali' -or $dpOutput -match 'Error') {");
                 sb.AppendLine("    throw 'Errore durante la formattazione con DiskPart.'");
                 sb.AppendLine("}");
 
-                sb.AppendLine("Start-Sleep -Seconds 4");
+                sb.AppendLine("Start-Sleep -Seconds 3");
 
-                // Estrazione e pulizia della lettera di unità
+                // Step 2: Identificazione lettera di unità
                 sb.AppendLine("$vol = Get-Partition -DiskNumber $diskNum | Get-Volume");
-                sb.AppendLine("if ($vol -and $vol.DriveLetter) {");
-                sb.AppendLine("    $driveLetter = $vol.DriveLetter.ToString().Trim()");
-                sb.AppendLine("    Write-Host \"Lettera unità assegnata: '$driveLetter'\"");
-                sb.AppendLine("    if (Test-Path \"${driveLetter}:\") {");
-                sb.AppendLine("        Copy-Item -Path $answer -Destination \"${driveLetter}:\\answer.toml\" -Force -ErrorAction Stop");
-                sb.AppendLine("        Write-Host \"Copia answer.toml completata con successo.\"");
-                sb.AppendLine("    } else {");
-                sb.AppendLine("        throw \"Impossibile accedere all unità formattata (${driveLetter}:).\"");
-                sb.AppendLine("    }");
-                sb.AppendLine("} else {");
-                sb.AppendLine("    throw \"Impossibile identificare la lettera di unità assegnata alla USB.\"");
+                sb.AppendLine("if (-not ($vol -and $vol.DriveLetter)) {");
+                sb.AppendLine("    throw 'Impossibile identificare la lettera di unità assegnata alla USB.'");
                 sb.AppendLine("}");
+
+                sb.AppendLine("$driveLetter = $vol.DriveLetter.ToString().Trim()");
+                sb.AppendLine("Write-Host \"Lettera unità assegnata: '$driveLetter'\"");
+
+                // Step 3: Montaggio ISO e copia file installer sulla USB
+                sb.AppendLine("Write-Host 'Montaggio ISO Proxmox ed estrazione dei file sulla chiavetta...'");
+                sb.AppendLine("$isoMount = Mount-DiskImage -ImagePath $iso -PassThru");
+                sb.AppendLine("$isoVol = $isoMount | Get-Volume");
+                sb.AppendLine("$isoDrive = $isoVol.DriveLetter");
+
+                sb.AppendLine("if (-not $isoDrive) { throw 'Impossibile montare il file ISO per la copia.' }");
+
+                sb.AppendLine("Copy-Item -Path \"${isoDrive}:\\*\" -Destination \"${driveLetter}:\\\" -Recurse -Force -ErrorAction Stop");
+                sb.AppendLine("Dismount-DiskImage -ImagePath $iso");
+                sb.AppendLine("Write-Host 'Copia file ISO completata.'");
+
+                // Step 4: Copia del file answer.toml nella radice della USB
+                sb.AppendLine("Copy-Item -Path $answer -Destination \"${driveLetter}:\\answer.toml\" -Force -ErrorAction Stop");
+                sb.AppendLine("Write-Host 'Copia answer.toml completata con successo.'");
 
                 var psi = new ProcessStartInfo("powershell")
                 {
@@ -352,7 +362,7 @@ namespace HomelabUSBBuilder
                 psi.ArgumentList.Add("-Command");
                 psi.ArgumentList.Add(sb.ToString());
 
-                Logger.Log("Esecuzione dello script PowerShell per Formattazione e Scrittura...");
+                Logger.Log("Esecuzione dello script PowerShell (Formattazione GPT, Copia ISO e Risposta)...");
                 using var proc = Process.Start(psi);
                 if (proc != null)
                 {
@@ -366,9 +376,9 @@ namespace HomelabUSBBuilder
                         Logger.Log($"[PowerShell Errore]:\n{error}");
                     }
 
-                    if (proc.ExitCode != 0 || output.Contains("Errore del servizio Dischi virtuali") || output.Contains("throw"))
+                    if (proc.ExitCode != 0 || output.Contains("throw"))
                     {
-                        throw new Exception("La formattazione USB o la copia del file answer.toml è fallita. Verifica app.log.");
+                        throw new Exception("La creazione della chiavetta è fallita. Verifica app.log.");
                     }
                 }
                 else
