@@ -83,7 +83,7 @@ namespace HomelabUSBBuilder
 
         private void InitializeComponentLayout()
         {
-            this.Text = "Proxmox AI Deployer - USB Creator v3.9";
+            this.Text = "Proxmox AI Deployer - USB Creator v4.0";
             this.Size = new System.Drawing.Size(540, 430);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -241,92 +241,91 @@ namespace HomelabUSBBuilder
             string cidr = radioDhcp.Checked ? "dhcp" : txtIp.Text;
             string gateway = radioDhcp.Checked ? "" : txtGateway.Text;
 
-            var sb = new StringBuilder();
-            sb.AppendLine("[global]");
-            sb.AppendLine("keyboard = \"it\"");
-            sb.AppendLine("country = \"it\"");
-            sb.AppendLine("timezone = \"Europe/Rome\"");
-            sb.AppendLine("fqdn = \"pve.homelab.local\"");
-            sb.AppendLine("mailto = \"admin@homelab.local\"");
-            sb.AppendLine("root_password = \"proxmox\"");
-            sb.AppendLine("reboot_mode = \"reboot\"");
-            sb.AppendLine();
-            sb.AppendLine("[network]");
-            sb.AppendLine("source = \"" + netSource + "\"");
-            sb.AppendLine("cidr = \"" + cidr + "\"");
-            sb.AppendLine("gateway = \"" + gateway + "\"");
-            sb.AppendLine("dns = \"1.1.1.1\"");
-            sb.AppendLine("dns2 = \"8.8.8.8\"");
-            sb.AppendLine();
-            sb.AppendLine("[disk_setup]");
-            sb.AppendLine("filesystem = \"zfs (RAID0)\"");
-            sb.AppendLine("disk_list = [\"filter:first_matched\"]");
-            sb.AppendLine();
-            sb.AppendLine("[prerun]");
-            sb.AppendLine("source = \"from-partition\"");
-            sb.AppendLine();
-            sb.AppendLine("[postrun]");
-            sb.AppendLine("source = \"from-partition\"");
+            return $"""
+            [global]
+            keyboard = "it"
+            country = "it"
+            timezone = "Europe/Rome"
+            fqdn = "pve.homelab.local"
+            mailto = "admin@homelab.local"
+            root_password = "proxmox"
+            reboot_mode = "reboot"
 
-            return sb.ToString();
+            [network]
+            source = "{netSource}"
+            cidr = "{cidr}"
+            gateway = "{gateway}"
+            dns = "1.1.1.1"
+            dns2 = "8.8.8.8"
+
+            [disk_setup]
+            filesystem = "zfs (RAID0)"
+            disk_list = ["filter:first_matched"]
+
+            [prerun]
+            source = "from-partition"
+
+            [postrun]
+            source = "from-partition"
+            """;
         }
 
         private string BuildPostInstallScript()
         {
-            var sb = new StringBuilder();
-            sb.AppendLine("#!/bin/bash");
-            sb.AppendLine("set -e");
-            sb.AppendLine("exec > /var/log/homelab-firstboot.log 2>&1");
-            sb.AppendLine("echo '=== INIZIO SETUP FIRST-BOOT PROXMOX + KDE ==='");
+            return """
+            #!/bin/bash
+            set -e
+            exec > /var/log/homelab-firstboot.log 2>&1
+            echo '=== INIZIO SETUP FIRST-BOOT PROXMOX + KDE ==='
 
-            sb.AppendLine("echo '1. Creazione utente homelab con privilegi sudo senza password...'");
-            sb.AppendLine("if ! id -u homelab >/dev/null 2>&1; then");
-            sb.AppendLine("    useradd -m -s /bin/bash -G sudo homelab");
-            sb.AppendLine("    echo 'homelab:proxmox' | chpasswd");
-            sb.AppendLine("    echo 'homelab ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/homelab");
-            sb.AppendLine("    chmod 0440 /etc/sudoers.d/homelab");
-            sb.AppendLine("fi");
+            echo '1. Creazione utente homelab con privilegi sudo senza password...'
+            if ! id -u homelab >/dev/null 2>&1; then
+                useradd -m -s /bin/bash -G sudo homelab
+                echo 'homelab:proxmox' | chpasswd
+                echo 'homelab ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/homelab
+                chmod 0440 /etc/sudoers.d/homelab
+            fi
 
-            sb.AppendLine("echo '2. Installazione KDE Plasma e SDDM...'");
-            sb.AppendLine("export DEBIAN_FRONTEND=noninteractive");
-            sb.AppendLine("apt-get update");
-            sb.AppendLine("apt-get install -y kde-plasma-desktop sddm xorg curl git build-essential");
+            echo '2. Installazione KDE Plasma e SDDM...'
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get install -y kde-plasma-desktop sddm xorg curl git build-essential
 
-            sb.AppendLine("echo '3. Configurazione Autologin SDDM...'");
-            sb.AppendLine("mkdir -p /etc/sddm.conf.d");
-            sb.AppendLine("cat << 'EOF' > /etc/sddm.conf.d/autologin.conf");
-            sb.AppendLine("[Autologin]");
-            sb.AppendLine("User=homelab");
-            sb.AppendLine("Session=plasma");
-            sb.AppendLine("EOF");
+            echo '3. Configurazione Autologin SDDM...'
+            mkdir -p /etc/sddm.conf.d
+            cat << 'EOF' > /etc/sddm.conf.d/autologin.conf
+            [Autologin]
+            User=homelab
+            Session=plasma
+            EOF
 
-            sb.AppendLine("echo '4. Configurazione Autostart KDE...'");
-            sb.AppendLine("mkdir -p /home/homelab/.config/autostart");
-            sb.AppendLine("mkdir -p /home/homelab/scripts");
+            echo '4. Configurazione Autostart KDE...'
+            mkdir -p /home/homelab/.config/autostart
+            mkdir -p /home/homelab/scripts
 
-            sb.AppendLine("cat << 'EOF' > /home/homelab/scripts/post-kde-deploy.sh");
-            sb.AppendLine("#!/bin/bash");
-            sb.AppendLine("echo 'Avvio procedura di configurazione guidata Homelab AI...'");
-            sb.AppendLine("if [ -f /usr/bin/konsole ]; then");
-            sb.AppendLine("    konsole -e bash -c 'echo \"=== HOMELAB AI DEPLOYER ===\"; sleep 2; sudo rm -rf /opt/homelab-ai-deployer && sudo git clone https://github.com/mrpink77it/homelab-ai-deployer.git /opt/homelab-ai-deployer && cd /opt/homelab-ai-deployer && sudo chmod +x install.sh && sudo ./install.sh; exec bash'");
-            sb.AppendLine("fi");
-            sb.AppendLine("EOF");
+            cat << 'EOF' > /home/homelab/scripts/post-kde-deploy.sh
+            #!/bin/bash
+            echo 'Avvio procedura di configurazione guidata Homelab AI...'
+            if [ -f /usr/bin/konsole ]; then
+                konsole -e bash -c 'echo "=== HOMELAB AI DEPLOYER ==="; sleep 2; sudo rm -rf /opt/homelab-ai-deployer && sudo git clone https://github.com/mrpink77it/homelab-ai-deployer.git /opt/homelab-ai-deployer && cd /opt/homelab-ai-deployer && sudo chmod +x install.sh && sudo ./install.sh; exec bash'
+            fi
+            EOF
 
-            sb.AppendLine("chmod +x /home/homelab/scripts/post-kde-deploy.sh");
-            sb.AppendLine("chown -R homelab:homelab /home/homelab/");
+            chmod +x /home/homelab/scripts/post-kde-deploy.sh
+            chown -R homelab:homelab /home/homelab/
 
-            sb.AppendLine("cat << 'EOF' > /home/homelab/.config/autostart/homelab-ai.desktop");
-            sb.AppendLine("[Desktop Entry]");
-            sb.AppendLine("Type=Application");
-            sb.AppendLine("Name=Homelab AI Deployer");
-            sb.AppendLine("Exec=/home/homelab/scripts/post-kde-deploy.sh");
-            sb.AppendLine("X-GNOME-Autostart-enabled=true");
-            sb.AppendLine("EOF");
+            cat << 'EOF' > /home/homelab/.config/autostart/homelab-ai.desktop
+            [Desktop Entry]
+            Type=Application
+            Name=Homelab AI Deployer
+            Exec=/home/homelab/scripts/post-kde-deploy.sh
+            X-GNOME-Autostart-enabled=true
+            EOF
 
-            sb.AppendLine("chown -R homelab:homelab /home/homelab/.config");
-            sb.AppendLine("systemctl set-default graphical.target");
-            sb.AppendLine("echo '=== SETUP COMPLETATO CON SUCCESSO ==='");
-            return sb.ToString();
+            chown -R homelab:homelab /home/homelab/.config
+            systemctl set-default graphical.target
+            echo '=== SETUP COMPLETATO CON SUCCESSO ==='
+            """;
         }
 
         private async Task DownloadIsoAsync(string url, string destination)
@@ -374,9 +373,9 @@ namespace HomelabUSBBuilder
             progressBar.Value = 30;
 
             string preCleanScript = "Get-Disk -Number " + diskNum + 
-                " | Get-Partition | Get-Volume | Where-Object { \$_.DriveLetter } | ForEach-Object { Dismount-Volume -DriveLetter $_.DriveLetter -Force -Confirm:$false -ErrorAction SilentlyContinue }; " +
-                "Clear-Disk -Number " + diskNum + " -RemoveData -RemoveOEM -Confirm:\$false; " +
-                "Set-Disk -Number " + diskNum + " -IsReadOnly \$false";
+                " | Get-Partition | Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { Dismount-Volume -DriveLetter $_.DriveLetter -Force -Confirm:$false -ErrorAction SilentlyContinue }; " +
+                "Clear-Disk -Number " + diskNum + " -RemoveData -RemoveOEM -Confirm:$false; " +
+                "Set-Disk -Number " + diskNum + " -IsReadOnly $false";
 
             await RunPowerShellAsync(preCleanScript);
 
@@ -429,4 +428,92 @@ namespace HomelabUSBBuilder
             lblStatus.Text = "Stato: Creazione partizione PROXMOX-AIS...";
             progressBar.Value = 75;
 
-            string psPartitionScript = "New-Partition -DiskNumber " + diskNum
+            string psPartitionScript = "New-Partition -DiskNumber " + diskNum + " -UseMaximumSize -AssignDriveLetter | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'PROXMOX-AIS' -Confirm:$false";
+            await RunPowerShellAsync(psPartitionScript);
+
+            await Task.Delay(3000);
+
+            // 4. Copia file di configurazione
+            lblStatus.Text = "Stato: Iniezione file answer.toml, prerun.sh e postrun.sh...";
+            progressBar.Value = 85;
+
+            string? driveLetter = null;
+            for (int i = 0; i < 10; i++)
+            {
+                driveLetter = DriveInfo.GetDrives()
+                    .FirstOrDefault(d => d.IsReady && string.Equals(d.VolumeLabel, "PROXMOX-AIS", StringComparison.OrdinalIgnoreCase))
+                    ?.Name;
+
+                if (!string.IsNullOrEmpty(driveLetter)) break;
+                await Task.Delay(1000);
+            }
+
+            if (string.IsNullOrEmpty(driveLetter))
+            {
+                throw new Exception("Impossibile individuare la partizione PROXMOX-AIS creata.");
+            }
+
+            File.Copy(answerPath, Path.Combine(driveLetter, "answer.toml"), true);
+            File.Copy(prerunPath, Path.Combine(driveLetter, "prerun.sh"), true);
+            File.Copy(postrunPath, Path.Combine(driveLetter, "postrun.sh"), true);
+
+            Logger.Log("Copia completata con successo su " + driveLetter + " (PROXMOX-AIS)");
+        }
+
+        private async Task RunPowerShellAsync(string command)
+        {
+            var psi = new ProcessStartInfo("powershell", "-NoProfile -ExecutionPolicy Bypass -Command \"" + command + "\"")
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc != null)
+            {
+                await Task.Run(() => proc.WaitForExit());
+                string output = await proc.StandardOutput.ReadToEndAsync();
+                string error = await proc.StandardError.ReadToEndAsync();
+                Logger.Log("[PowerShell Output]: " + output);
+                if (!string.IsNullOrEmpty(error))
+                {
+                    Logger.Log("[PowerShell Error]: " + error);
+                }
+
+                if (proc.ExitCode != 0)
+                {
+                    throw new Exception("Errore esecuzione comando PowerShell: " + error);
+                }
+            }
+        }
+    }
+
+    internal static class SafeNativeMethods
+    {
+        public const uint GENERIC_WRITE = 0x40000000;
+        public const uint FILE_SHARE_READ = 0x00000001;
+        public const uint FILE_SHARE_WRITE = 0x00000002;
+        public const uint OPEN_EXISTING = 3;
+        public const uint FILE_FLAG_WRITE_THROUGH = 0x80000000;
+        public static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+        public static extern IntPtr CreateFile(
+            string lpFileName,
+            uint dwDesiredAccess,
+            uint dwShareMode,
+            IntPtr lpSecurityAttributes,
+            uint dwCreationDisposition,
+            uint dwFlagsAndAttributes,
+            IntPtr hTemplateFile);
+    }
+
+    public class UsbDriveItem
+    {
+        public string DisplayName { get; set; } = "";
+        public string DeviceID { get; set; } = "";
+        public override string ToString() => DisplayName;
+    }
+}
