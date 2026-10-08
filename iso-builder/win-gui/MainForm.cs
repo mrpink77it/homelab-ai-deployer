@@ -77,7 +77,7 @@ namespace HomelabUSBBuilder
 
         private void InitializeComponentLayout()
         {
-            this.Text = "Proxmox AI Deployer - USB Creator v2.3";
+            this.Text = "Proxmox AI Deployer - USB Creator v2.4";
             this.Size = new System.Drawing.Size(520, 420);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -184,7 +184,7 @@ namespace HomelabUSBBuilder
                 string isoPath = Path.Combine(tempDir, "proxmox-ve-latest.iso");
                 string answerPath = Path.Combine(tempDir, "answer.toml");
 
-                // Step 1: Download ISO Proxmox VE
+                // Step 1: Download ISO Proxmox VE 9.2-1
                 lblStatus.Text = "Stato: Verifica e Download ISO Proxmox VE...";
                 progressBar.Value = 25;
                 string isoUrl = "https://enterprise.proxmox.com/iso/proxmox-ve_9.2-1.iso";
@@ -200,7 +200,7 @@ namespace HomelabUSBBuilder
                 Logger.Log($"File answer.toml creato in: {answerPath}");
                 Logger.Log($"Contenuto answer.toml:\n{answerToml}");
 
-                // Step 3: Formattazione USB, creazione partizione e copia di answer.toml
+                // Step 3: Formattazione USB e scrittura answer.toml
                 lblStatus.Text = "Stato: Formattazione USB e scrittura risposta automatica...";
                 progressBar.Value = 75;
                 await FlashToUsbAsync(targetUsb.DeviceID, answerPath);
@@ -277,20 +277,7 @@ namespace HomelabUSBBuilder
 
             using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
             Logger.Log($"Risposta HTTP Download ISO: {response.StatusCode}");
-            
-            if (!response.IsSuccessStatusCode)
-            {
-                // Fallback URL per la versione stabile ufficialmente disponibile
-                string fallbackUrl = "https://enterprise.proxmox.com/iso/proxmox-ve_8.2-1.iso";
-                Logger.Log($"Tentativo di download dal link di fallback: {fallbackUrl}");
-                using var fallbackResp = await client.GetAsync(fallbackUrl, HttpCompletionOption.ResponseHeadersRead);
-                fallbackResp.EnsureSuccessStatusCode();
-                
-                using var fStreamRead = await fallbackResp.Content.ReadAsStreamAsync();
-                using var fStreamWrite = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
-                await fStreamRead.CopyToAsync(fStreamWrite);
-                return;
-            }
+            response.EnsureSuccessStatusCode();
 
             using var streamToRead = await response.Content.ReadAsStreamAsync();
             using var streamToWrite = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
@@ -316,7 +303,7 @@ namespace HomelabUSBBuilder
                 sb.AppendLine($"$diskNum = \"{diskNum}\"");
                 sb.AppendLine($"$answer = \"{escapedAnswerPath}\"");
                 
-                // Generazione script diskpart con etichetta PROXMOXAID (senza trattini, esattamente 10 caratteri)
+                // Script diskpart con etichetta PROXMOXAID (senza caratteri speciali per evitare errori FAT32)
                 sb.AppendLine("$diskpartScript = @\"");
                 sb.AppendLine("select disk $diskNum");
                 sb.AppendLine("clean");
@@ -330,14 +317,14 @@ namespace HomelabUSBBuilder
                 sb.AppendLine("$dpOutput = $diskpartScript | diskpart");
                 sb.AppendLine("Write-Host $dpOutput");
 
-                // Gestione e intercettazione errori da diskpart
-                sb.AppendLine("if ($dpOutput -match 'Errore' -or $dpOutput -match 'Error') {");
-                sb.AppendLine("    throw 'Diskpart ha riscontrato un errore durante la formattazione.'");
+                // Controllo immediato di eventuali errori generati da diskpart
+                sb.AppendLine("if ($dpOutput -match 'Errore del servizio Dischi virtuali' -or $dpOutput -match 'Error') {");
+                sb.AppendLine("    throw 'Errore durante la formattazione con DiskPart.'");
                 sb.AppendLine("}");
 
                 sb.AppendLine("Start-Sleep -Seconds 4");
 
-                // Lettura pulita e rigida della lettera di unità (.Trim() elimina spazi vuoti spuri)
+                // Estrazione e pulizia della lettera di unità
                 sb.AppendLine("$vol = Get-Partition -DiskNumber $diskNum | Get-Volume");
                 sb.AppendLine("if ($vol -and $vol.DriveLetter) {");
                 sb.AppendLine("    $driveLetter = $vol.DriveLetter.ToString().Trim()");
@@ -381,7 +368,7 @@ namespace HomelabUSBBuilder
 
                     if (proc.ExitCode != 0 || output.Contains("Errore del servizio Dischi virtuali") || output.Contains("throw"))
                     {
-                        throw new Exception("La formattazione USB o la copia del file answer.toml è fallita. Verifica i dettagli in app.log.");
+                        throw new Exception("La formattazione USB o la copia del file answer.toml è fallita. Verifica app.log.");
                     }
                 }
                 else
