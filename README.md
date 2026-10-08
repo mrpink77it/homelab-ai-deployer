@@ -32,12 +32,7 @@ La Fabbrica del Software è divisa in ruoli specifici altamente isolati:
 ## ⚙️ Come Iniziare
 
 ### Metodo 1: Script TUI (Per installazioni Proxmox esistenti)
-Esegui lo script principale direttamente dal tuo nodo Proxmox (richiede privilegi di root):
-```bash
-git clone [https://github.com/mrpink77it/homelab-ai-deployer.git](https://github.com/mrpink77it/homelab-ai-deployer.git)
-cd homelab-ai-deployer
-chmod +x install.sh
-./install.sh
+Esegui lo script principale direttamente dal tuo nodo Proxmox
 
 
 ### Metodo 2: Workstation Auto-ISO (Per nuove installazioni)
