@@ -194,9 +194,9 @@ namespace HomelabUSBBuilder
             {
                 string diskNum = Regex.Match(deviceId, @"\d+").Value;
 
-                string scriptContent = $"""
-                $diskNum = "{diskNum}"
-                $answer = "{answerPath}"
+                string scriptTemplate = """
+                $diskNum = "__DISK_NUM__"
+                $answer = "__ANSWER_PATH__"
 
                 $diskpartCmd = @"
                 select disk $diskNum
@@ -213,9 +213,13 @@ namespace HomelabUSBBuilder
                 $driveLetter = (Get-Partition -DiskNumber $diskNum | Get-Volume).DriveLetter
 
                 if ($driveLetter) {
-                    Copy-Item -Path $answer -Destination "$($driveLetter):\answer.toml" -Force
+                    Copy-Item -Path $answer -Destination "${driveLetter}:\answer.toml" -Force
                 }
                 """;
+
+                string scriptContent = scriptTemplate
+                    .Replace("__DISK_NUM__", diskNum)
+                    .Replace("__ANSWER_PATH__", answerPath);
 
                 var psi = new ProcessStartInfo("powershell")
                 {
