@@ -136,7 +136,7 @@ namespace HomelabUSBBuilder
 
                 lblStatus.Text = "Stato: Download ISO Proxmox VE in corso...";
                 progressBar.Value = 20;
-                await DownloadIsoAsync("https://enterprise.proxmox.com/iso/proxmox-ve_8.2-1.iso", isoPath);
+                await DownloadIsoAsync("https://enterprise.proxmox.com/iso/proxmox-ve_9.2-1.iso", isoPath);
 
                 lblStatus.Text = "Stato: Generazione configurazione automatica (answer.toml)...";
                 progressBar.Value = 60;
