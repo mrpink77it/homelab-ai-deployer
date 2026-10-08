@@ -85,7 +85,7 @@ namespace HomelabUSBBuilder
 
         private void InitializeComponentLayout()
         {
-            this.Text = "Proxmox AI Deployer - USB Creator v4.9 (Direct RAW Write)";
+            this.Text = "Proxmox AI Deployer - USB ISO Customizer v5.0";
             this.Size = new System.Drawing.Size(540, 430);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -114,7 +114,7 @@ namespace HomelabUSBBuilder
             groupNet.Controls.Add(lblGw);
             groupNet.Controls.Add(txtGateway);
 
-            btnCreate = new Button() { Text = "CREA CHIAVETTA AUTOMATICA PROXMOX + KDE", Left = 20, Top = 240, Width = 480, Height = 45, FlatStyle = FlatStyle.System };
+            btnCreate = new Button() { Text = "CREA ISO CUSTOM E SCRIVI SU USB", Left = 20, Top = 240, Width = 480, Height = 45, FlatStyle = FlatStyle.System };
             btnCreate.Click += async (s, e) => await StartProcessAsync();
 
             progressBar = new ProgressBar() { Left = 20, Top = 300, Width = 480, Height = 20 };
@@ -186,43 +186,57 @@ namespace HomelabUSBBuilder
 
             try
             {
-                Logger.Log("Inizio processo RAW (dd-style) per l unita: " + targetUsb.DisplayName + " (" + targetUsb.DeviceID + ")");
+                Logger.Log("Inizio processo di personalizzazione ISO e Scrittura RAW su: " + targetUsb.DisplayName + " (" + targetUsb.DeviceID + ")");
 
                 string tempDir = Path.Combine(Path.GetTempPath(), "proxmox-builder");
+                string extractedIsoDir = Path.Combine(tempDir, "extracted-iso");
                 Directory.CreateDirectory(tempDir);
+                if (Directory.Exists(extractedIsoDir))
+                {
+                    Directory.Delete(extractedIsoDir, true);
+                }
+                Directory.CreateDirectory(extractedIsoDir);
 
-                string isoPath = Path.Combine(tempDir, "proxmox-ve-latest.iso");
-                string answerPath = Path.Combine(tempDir, "answer.toml");
-                string prerunPath = Path.Combine(tempDir, "prerun.sh");
-                string postrunPath = Path.Combine(tempDir, "postrun.sh");
+                string originalIsoPath = Path.Combine(tempDir, "proxmox-ve-latest.iso");
+                string customIsoPath = Path.Combine(tempDir, "proxmox-ve-custom.iso");
 
                 // Step 1: Download ISO Proxmox
                 lblStatus.Text = "Stato: Verifica e Download ISO Proxmox VE...";
                 progressBar.Value = 10;
-                await DownloadIsoAsync("https://enterprise.proxmox.com/iso/proxmox-ve_8.2-1.iso", isoPath);
+                await DownloadIsoAsync("https://enterprise.proxmox.com/iso/proxmox-ve_8.2-1.iso", originalIsoPath);
 
-                // Step 2: Download prerun.sh da GitHub
-                lblStatus.Text = "Stato: Download script prerun.sh...";
-                progressBar.Value = 15;
+                // Step 2: Estrazione ISO in cartella temporanea
+                lblStatus.Text = "Stato: Estrazione contenuto ISO Proxmox in corso...";
+                progressBar.Value = 20;
+                await ExtractIsoAsync(originalIsoPath, extractedIsoDir);
+
+                // Step 3: Iniezione file di personalizzazione nella root dell'ISO estratta
+                lblStatus.Text = "Stato: Iniezione answer.toml, prerun.sh e postrun.sh nell ISO...";
+                progressBar.Value = 40;
+
+                string prerunPath = Path.Combine(extractedIsoDir, "prerun.sh");
                 await DownloadFileAsync("https://raw.githubusercontent.com/mrpink77it/homelab-ai-deployer/main/iso-builder/pre-install-check.sh", prerunPath);
 
-                // Step 3: Generazione answer.toml
-                lblStatus.Text = "Stato: Generazione answer.toml...";
-                progressBar.Value = 20;
+                string answerPath = Path.Combine(extractedIsoDir, "answer.toml");
                 File.WriteAllText(answerPath, BuildAnswerToml(), Encoding.UTF8);
 
-                // Step 4: Generazione postrun.sh
-                lblStatus.Text = "Stato: Generazione script postrun.sh (KDE + Autologin)...";
-                progressBar.Value = 25;
+                string postrunPath = Path.Combine(extractedIsoDir, "postrun.sh");
                 File.WriteAllText(postrunPath, BuildPostInstallScript(), new UTF8Encoding(false));
 
-                // Step 5: Scrittura RAW ISO e Configurazione Partizione PROXMOX-AIS
-                await FlashToUsbRawAsync(targetUsb.DeviceID, answerPath, isoPath, prerunPath, postrunPath);
+                // Step 4: Ricostruzione ISO Ibrida Bootabile
+                lblStatus.Text = "Stato: Ricreazione immagine ISO bootabile custom...";
+                progressBar.Value = 55;
+                await BuildCustomIsoAsync(extractedIsoDir, customIsoPath);
+
+                // Step 5: Scrittura RAW Diretta (dd style) della ISO Modificata sulla USB
+                lblStatus.Text = "Stato: Scrittura RAW della ISO Custom su USB...";
+                progressBar.Value = 70;
+                await FlashIsoToUsbRawAsync(targetUsb.DeviceID, customIsoPath);
 
                 progressBar.Value = 100;
-                lblStatus.Text = "Stato: CREAZIONE E VERIFICA COMPLETATE CON SUCCESSO!";
-                Logger.Log("=== CREAZIONE E VERIFICA COMPLETATE CON SUCCESSO ===");
-                MessageBox.Show("Chiavetta USB Proxmox + KDE autologin creata con successo in modalita RAW Autoinstall!", "Completato", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                lblStatus.Text = "Stato: CREAZIONE E SCRITTURA COMPLETATE CON SUCCESSO!";
+                Logger.Log("=== CREAZIONE E SCRITTURA COMPLETATE CON SUCCESSO ===");
+                MessageBox.Show("Chiavetta USB Proxmox Custom creata con successo!", "Completato", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
@@ -265,10 +279,10 @@ namespace HomelabUSBBuilder
             sb.AppendLine("disk_list = [\"filter:first_matched\"]");
             sb.AppendLine();
             sb.AppendLine("[prerun]");
-            sb.AppendLine("source = \"from-partition\"");
+            sb.AppendLine("source = \"from-iso\"");
             sb.AppendLine();
             sb.AppendLine("[postrun]");
-            sb.AppendLine("source = \"from-partition\"");
+            sb.AppendLine("source = \"from-iso\"");
 
             return sb.ToString();
         }
@@ -360,7 +374,38 @@ echo '=== SETUP COMPLETATO CON SUCCESSO ==='
             await streamToRead.CopyToAsync(streamToWrite);
         }
 
-        private async Task FlashToUsbRawAsync(string deviceId, string answerPath, string isoPath, string prerunPath, string postrunPath)
+        private async Task ExtractIsoAsync(string isoPath, string outputDir)
+        {
+            Logger.Log("Mount ed estrazione ISO tramite PowerShell/7-Zip...");
+            string psCmd = "$iso = '" + isoPath + "'; $out = '" + outputDir + "'; " +
+                           "Mount-DiskImage -ImagePath $iso; " +
+                           "$vol = (Get-DiskImage -ImagePath $iso | Get-Volume).DriveLetter; " +
+                           "Copy-Item -Path \"$($vol):\*\" -Destination $out -Recurse -Force; " +
+                           "Dismount-DiskImage -ImagePath $iso";
+            
+            await RunPowerShellAsync(psCmd);
+        }
+
+        private async Task BuildCustomIsoAsync(string sourceDir, string outputIsoPath)
+        {
+            Logger.Log("Ricostruzione ISO bootabile...");
+            string psCmd = "$src = '" + sourceDir + "'; $out = '" + outputIsoPath + "'; " +
+                           "if (Get-Command oscimagetool -ErrorAction SilentlyContinue) { " +
+                           "  oscimagetool -n -m -b\"$src/boot/grub/efi.img\" \"$src\" \"$out\" " +
+                           "} else { " +
+                           "  Write-Output 'oscimagetool non trovato, utilizzo fallback PowerShell'; " +
+                           "  New-Item -Path $out -ItemType File -Force " +
+                           "}";
+
+            await RunPowerShellAsync(psCmd);
+
+            if (!File.Exists(outputIsoPath) || new FileInfo(outputIsoPath).Length == 0)
+            {
+                throw new Exception("Impossibile generare la nuova ISO custom. Verificare i requisiti di sistema per la creazione di ISO bootabili.");
+            }
+        }
+
+        private async Task FlashIsoToUsbRawAsync(string deviceId, string isoPath)
         {
             string diskNum = Regex.Match(deviceId, @"\d+").Value;
             if (string.IsNullOrEmpty(diskNum))
@@ -371,17 +416,10 @@ echo '=== SETUP COMPLETATO CON SUCCESSO ==='
             string physicalDrive = @"\\.\PhysicalDrive" + diskNum;
             Logger.Log("Inizio Scrittura RAW Diretta (dd style) su: " + physicalDrive + " (Disco #" + diskNum + ")");
 
-            // 1. Azzeramento preventivo delle partizioni con Diskpart (Risolve l'errore Win32: 5 Access Denied)
-            lblStatus.Text = "Stato: Pulizia tabella partizioni e smontaggio volumi...";
-            progressBar.Value = 30;
-
+            lblStatus.Text = "Stato: Pulizia tabella partizioni...";
             string cleanScript = "select disk " + diskNum + "\r\nclean\r\nrescan\r\n";
             await RunDiskpartScriptAsync(cleanScript);
             await Task.Delay(1500);
-
-            // 2. Scrittura RAW Diretta (stile DD) tramite Win32 WriteFile
-            lblStatus.Text = "Stato: Scrittura RAW ISO in corso (dd streaming)...";
-            Logger.Log("Apertura handle nativo direct IO su " + physicalDrive + "...");
 
             await Task.Run(() =>
             {
@@ -414,12 +452,10 @@ echo '=== SETUP COMPLETATO CON SUCCESSO ==='
                     throw new Exception("Impossibile accedere al disco fisico. Codice Win32: " + lastErr);
                 }
 
-                Logger.Log("Handle disco aperto correttamente (Pointer: " + handle + "). Scrittura in corso...");
-
                 try
                 {
                     const int sectorSize = 512;
-                    byte[] buffer = new byte[1024 * 1024]; // Buffer da 1 MB per massime prestazioni
+                    byte[] buffer = new byte[1024 * 1024];
                     int bytesRead;
                     long totalBytes = isoStream.Length;
                     long bytesWritten = 0;
@@ -435,4 +471,158 @@ echo '=== SETUP COMPLETATO CON SUCCESSO ==='
                             Array.Clear(buffer, bytesRead, padding);
                         }
 
-                        bool success = SafeNativeMethods
+                        bool success = SafeNativeMethods.WriteFile(handle, buffer, (uint)bytesToWrite, out _, IntPtr.Zero);
+                        if (!success)
+                        {
+                            int errCode = Marshal.GetLastWin32Error();
+                            Logger.Log("ERRORE CRITICO: Scrittura blocco fallita a byte " + bytesWritten + ". Codice Win32: " + errCode);
+                            throw new Exception("Errore durante la scrittura RAW dei settori sul disco. Codice Win32: " + errCode);
+                        }
+
+                        bytesWritten += bytesRead;
+                        int pct = 70 + (int)((bytesWritten * 30) / totalBytes);
+
+                        this.Invoke(new Action(() =>
+                        {
+                            progressBar.Value = Math.Min(100, pct);
+                            lblStatus.Text = "Stato: Scrittura RAW ISO Custom in corso... (" + (bytesWritten / (1024 * 1024)) + " MB / " + (totalBytes / (1024 * 1024)) + " MB)";
+                        }));
+                    }
+
+                    Logger.Log("Scrittura RAW completata con successo. Byte scritti: " + bytesWritten);
+                    SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.IOCTL_DISK_UPDATE_PROPERTIES, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+                }
+                finally
+                {
+                    SafeNativeMethods.CloseHandle(handle);
+                }
+            });
+        }
+
+        private async Task RunDiskpartScriptAsync(string commands)
+        {
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dp_" + Guid.NewGuid().ToString("N") + ".txt");
+            try
+            {
+                await File.WriteAllTextAsync(scriptPath, commands, Encoding.ASCII);
+                Logger.Log("Esecuzione Script DiskPart:\n" + commands.Trim());
+
+                var psi = new ProcessStartInfo("diskpart.exe", "/s \"" + scriptPath + "\"")
+                {
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                using var proc = Process.Start(psi);
+                if (proc != null)
+                {
+                    await proc.WaitForExitAsync();
+                    string output = await proc.StandardOutput.ReadToEndAsync();
+                    string error = await proc.StandardError.ReadToEndAsync();
+                    if (!string.IsNullOrWhiteSpace(output))
+                    {
+                        Logger.Log("[DiskPart Output]:\n" + output.Trim());
+                    }
+                    if (!string.IsNullOrWhiteSpace(error))
+                    {
+                        Logger.Log("[DiskPart Error]:\n" + error.Trim());
+                    }
+                }
+            }
+            finally
+            {
+                try { if (File.Exists(scriptPath)) File.Delete(scriptPath); } catch { }
+            }
+        }
+
+        private async Task RunPowerShellAsync(string command)
+        {
+            Logger.Log("Esecuzione comando PowerShell: " + command);
+            
+            string encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
+
+            var psi = new ProcessStartInfo("powershell", "-NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encodedCommand)
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc != null)
+            {
+                await Task.Run(() => proc.WaitForExit());
+                string output = await proc.StandardOutput.ReadToEndAsync();
+                string error = await proc.StandardError.ReadToEndAsync();
+                
+                if (!string.IsNullOrWhiteSpace(output))
+                {
+                    Logger.Log("[PowerShell Output]: " + output.Trim());
+                }
+                if (!string.IsNullOrWhiteSpace(error))
+                {
+                    Logger.Log("[PowerShell Error]: " + error.Trim());
+                }
+
+                if (proc.ExitCode != 0)
+                {
+                    Logger.Log("ATTENZIONE: PowerShell exit code " + proc.ExitCode);
+                }
+            }
+        }
+    }
+
+    internal static class SafeNativeMethods
+    {
+        public const uint GENERIC_READ = 0x80000000;
+        public const uint GENERIC_WRITE = 0x40000000;
+        public const uint FILE_SHARE_READ = 0x00000001;
+        public const uint FILE_SHARE_WRITE = 0x00000002;
+        public const uint OPEN_EXISTING = 3;
+        public static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
+
+        public const uint IOCTL_DISK_UPDATE_PROPERTIES = 0x00070050;
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        public static extern IntPtr CreateFile(
+            string lpFileName,
+            uint dwDesiredAccess,
+            uint dwShareMode,
+            IntPtr lpSecurityAttributes,
+            uint dwCreationDisposition,
+            uint dwFlagsAndAttributes,
+            IntPtr hTemplateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool DeviceIoControl(
+            IntPtr hDevice,
+            uint dwIoControlCode,
+            IntPtr lpInBuffer,
+            uint nInBufferSize,
+            IntPtr lpOutBuffer,
+            uint nOutBufferSize,
+            out uint lpBytesReturned,
+            IntPtr lpOverlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool WriteFile(
+            IntPtr hFile,
+            byte[] lpBuffer,
+            uint nNumberOfBytesToWrite,
+            out uint lpNumberOfBytesWritten,
+            IntPtr lpOverlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool CloseHandle(IntPtr hObject);
+    }
+
+    public class UsbDriveItem
+    {
+        public string DisplayName { get; set; } = "";
+        public string DeviceID { get; set; } = "";
+        public override string ToString() => DisplayName;
+    }
+}
