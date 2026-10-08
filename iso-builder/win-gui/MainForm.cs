@@ -84,7 +84,7 @@ namespace HomelabUSBBuilder
 
         private void InitializeComponentLayout()
         {
-            this.Text = "Proxmox AI Deployer - USB Creator v4.6 (Strict Native Write)";
+            this.Text = "Proxmox AI Deployer - USB Creator v4.7 (DASD Unlocked)";
             this.Size = new System.Drawing.Size(540, 430);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -242,7 +242,7 @@ namespace HomelabUSBBuilder
             string cidr = radioDhcp.Checked ? "dhcp" : txtIp.Text;
             string gateway = radioDhcp.Checked ? "" : txtGateway.Text;
 
-            return \$"""
+            return $"""
             [global]
             keyboard = "it"
             country = "it"
@@ -346,4 +346,253 @@ namespace HomelabUSBBuilder
 
         private async Task DownloadFileAsync(string url, string destination)
         {
-            var
+            var handler = new HttpClientHandler { AllowAutoRedirect = true };
+            using var client = new HttpClient(handler);
+            client.Timeout = TimeSpan.FromMinutes(20);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+
+            using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
+
+            using var streamToRead = await response.Content.ReadAsStreamAsync();
+            using var streamToWrite = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
+            await streamToRead.CopyToAsync(streamToWrite);
+        }
+
+        private async Task FlashToUsbRawAsync(string deviceId, string answerPath, string isoPath, string prerunPath, string postrunPath)
+        {
+            string diskNum = Regex.Match(deviceId, @"\d+").Value;
+            if (string.IsNullOrEmpty(diskNum))
+            {
+                throw new Exception("Impossibile estrarre il numero di disco da DeviceID: " + deviceId);
+            }
+
+            string physicalDrive = @"\\.\PhysicalDrive" + diskNum;
+            Logger.Log("Inizio FlashToUsbRawAsync sul disco fisico: " + physicalDrive + " (Numero disco: " + diskNum + ")");
+
+            // 1. Pulizia e messa OFFLINE del disco tramite PowerShell
+            lblStatus.Text = "Stato: Sblocco, pulizia e isolamento (Offline) disco USB...";
+            progressBar.Value = 30;
+
+            string preCleanScript = "Set-Disk -Number " + diskNum + " -IsOffline $false; " +
+                "Get-Disk -Number " + diskNum + " | Get-Partition | Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { " +
+                "  Dismount-Volume -DriveLetter $_.DriveLetter -Force -Confirm:$false -ErrorAction SilentlyContinue; " +
+                "}; " +
+                "Set-Disk -Number " + diskNum + " -IsReadOnly $false; " +
+                "Clear-Disk -Number " + diskNum + " -RemoveData -RemoveOEM -Confirm:$false; " +
+                "Set-Disk -Number " + diskNum + " -IsOffline $true; " +
+                "Write-Output 'Pulizia completata e disco messo OFFLINE'";
+
+            await RunPowerShellAsync(preCleanScript);
+            await Task.Delay(3000);
+
+            // 2. Scrittura RAW tramite API Win32 pure con DASD IO e No-Buffering
+            lblStatus.Text = "Stato: Scrittura RAW dell'immagine ISO Proxmox...";
+            Logger.Log("Tentativo di apertura handle nativo su " + physicalDrive + " con CreateFile e flag No-Buffering...");
+
+            await Task.Run(() =>
+            {
+                using var isoStream = new FileStream(isoPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+                IntPtr handle = SafeNativeMethods.CreateFile(
+                    physicalDrive,
+                    SafeNativeMethods.GENERIC_READ | SafeNativeMethods.GENERIC_WRITE,
+                    SafeNativeMethods.FILE_SHARE_READ | SafeNativeMethods.FILE_SHARE_WRITE,
+                    IntPtr.Zero,
+                    SafeNativeMethods.OPEN_EXISTING,
+                    SafeNativeMethods.FILE_FLAG_NO_BUFFERING | SafeNativeMethods.FILE_FLAG_WRITE_THROUGH,
+                    IntPtr.Zero);
+
+                if (handle == SafeNativeMethods.INVALID_HANDLE_VALUE)
+                {
+                    int errCode = Marshal.GetLastWin32Error();
+                    Logger.Log("ERRORE CRITICO: CreateFile ha restituito INVALID_HANDLE_VALUE. Codice errore Win32: " + errCode);
+                    throw new Exception("Impossibile aprire l'handle del disco fisico. Codice errore Win32: " + errCode);
+                }
+
+                Logger.Log("Handle nativo aperto con successo (Handle pointer: " + handle + "). Richiesta permessi DASD estesi in corso...");
+
+                try
+                {
+                    bool dasdOk = SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_ALLOW_EXTENDED_DASD_IO, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+                    bool lockOk = SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_LOCK_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+                    
+                    Logger.Log($"Esito DASD_IO: {dasdOk}, Esito Lock: {lockOk} (Win32 Error: {Marshal.GetLastWin32Error()})");
+
+                    const int sectorSize = 512;
+                    byte[] buffer = new byte[1024 * 1024]; // 1MB buffer
+                    int bytesRead;
+                    long totalBytes = isoStream.Length;
+                    long bytesWritten = 0;
+
+                    while ((bytesRead = isoStream.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        int bytesToWrite = bytesRead;
+                        if (bytesToWrite % sectorSize != 0)
+                        {
+                            int remainder = bytesToWrite % sectorSize;
+                            int padding = sectorSize - remainder;
+                            bytesToWrite += padding;
+                            Array.Clear(buffer, bytesRead, padding);
+                        }
+
+                        bool success = SafeNativeMethods.WriteFile(handle, buffer, (uint)bytesToWrite, out _, IntPtr.Zero);
+                        if (!success)
+                        {
+                            int errCode = Marshal.GetLastWin32Error();
+                            Logger.Log("ERRORE CRITICO: WriteFile fallito. Codice Win32: " + errCode);
+                            throw new Exception("Errore scrittura RAW sul disco fisico tramite WriteFile. Codice Win32: " + errCode);
+                        }
+
+                        bytesWritten += bytesRead;
+                        int pct = 30 + (int)((bytesWritten * 40) / totalBytes);
+
+                        this.Invoke(new Action(() =>
+                        {
+                            progressBar.Value = Math.Min(70, pct);
+                            lblStatus.Text = "Stato: Scrittura RAW ISO in corso... (" + (bytesWritten / (1024 * 1024)) + " MB / " + (totalBytes / (1024 * 1024)) + " MB)";
+                        }));
+                    }
+                    Logger.Log("Scrittura RAW completata con successo. Byte scritti: " + bytesWritten);
+                }
+                finally
+                {
+                    SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.FSCTL_UNLOCK_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+                    SafeNativeMethods.CloseHandle(handle);
+                }
+            });
+
+            // 3. Rimessa ONLINE e creazione partizione PROXMOX-AIS
+            lblStatus.Text = "Stato: Ripristino stato disco e creazione partizione PROXMOX-AIS...";
+            progressBar.Value = 75;
+
+            string psPartitionScript = "Set-Disk -Number " + diskNum + " -IsOffline $false; " +
+                                       "Start-Sleep -Seconds 2; " +
+                                       "New-Partition -DiskNumber " + diskNum + " -UseMaximumSize -AssignDriveLetter | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'PROXMOX-AIS' -Confirm:$false; " +
+                                       "Write-Output 'Partizione creata'";
+
+            await RunPowerShellAsync(psPartitionScript);
+            await Task.Delay(4000);
+
+            // 4. Copia file di configurazione
+            lblStatus.Text = "Stato: Iniezione file answer.toml, prerun.sh e postrun.sh...";
+            progressBar.Value = 85;
+
+            string? driveLetter = null;
+            for (int i = 0; i < 15; i++)
+            {
+                driveLetter = DriveInfo.GetDrives()
+                    .FirstOrDefault(d => d.IsReady && string.Equals(d.VolumeLabel, "PROXMOX-AIS", StringComparison.OrdinalIgnoreCase))
+                    ?.Name;
+
+                if (!string.IsNullOrEmpty(driveLetter)) break;
+                await Task.Delay(1000);
+            }
+
+            if (string.IsNullOrEmpty(driveLetter))
+            {
+                Logger.Log("ERRORE: Impossibile individuare la lettera di unità per PROXMOX-AIS dopo vari tentativi.");
+                throw new Exception("Impossibile individuare la partizione PROXMOX-AIS creata. Verifica in 'Questo PC'.");
+            }
+
+            Logger.Log("Unità PROXMOX-AIS trovata su: " + driveLetter + ". Copia file in corso...");
+            File.Copy(answerPath, Path.Combine(driveLetter, "answer.toml"), true);
+            File.Copy(prerunPath, Path.Combine(driveLetter, "prerun.sh"), true);
+            File.Copy(postrunPath, Path.Combine(driveLetter, "postrun.sh"), true);
+
+            Logger.Log("Copia file di configurazione completata con successo su " + driveLetter);
+        }
+
+        private async Task RunPowerShellAsync(string command)
+        {
+            Logger.Log("Esecuzione comando PowerShell: " + command);
+            var psi = new ProcessStartInfo("powershell", "-NoProfile -ExecutionPolicy Bypass -Command \"" + command + "\"")
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc != null)
+            {
+                await Task.Run(() => proc.WaitForExit());
+                string output = await proc.StandardOutput.ReadToEndAsync();
+                string error = await proc.StandardError.ReadToEndAsync();
+                
+                if (!string.IsNullOrWhiteSpace(output))
+                {
+                    Logger.Log("[PowerShell Output]: " + output.Trim());
+                }
+                if (!string.IsNullOrWhiteSpace(error))
+                {
+                    Logger.Log("[PowerShell Error]: " + error.Trim());
+                }
+
+                if (proc.ExitCode != 0)
+                {
+                    Logger.Log("ERRORE: PowerShell ha restituito exit code " + proc.ExitCode);
+                    throw new Exception("Errore esecuzione comando PowerShell: " + error);
+                }
+            }
+        }
+    }
+
+    internal static class SafeNativeMethods
+    {
+        public const uint GENERIC_READ = 0x80000000;
+        public const uint GENERIC_WRITE = 0x40000000;
+        public const uint FILE_SHARE_READ = 0x00000001;
+        public const uint FILE_SHARE_WRITE = 0x00000002;
+        public const uint OPEN_EXISTING = 3;
+        public static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
+
+        public const uint FILE_FLAG_NO_BUFFERING = 0x20000000;
+        public const uint FILE_FLAG_WRITE_THROUGH = 0x80000000;
+
+        public const uint FSCTL_LOCK_VOLUME = 0x00090018;
+        public const uint FSCTL_DISMOUNT_VOLUME = 0x00090020;
+        public const uint FSCTL_UNLOCK_VOLUME = 0x0009001C;
+        public const uint FSCTL_ALLOW_EXTENDED_DASD_IO = 0x00090083;
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        public static extern IntPtr CreateFile(
+            string lpFileName,
+            uint dwDesiredAccess,
+            uint dwShareMode,
+            IntPtr lpSecurityAttributes,
+            uint dwCreationDisposition,
+            uint dwFlagsAndAttributes,
+            IntPtr hTemplateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool DeviceIoControl(
+            IntPtr hDevice,
+            uint dwIoControlCode,
+            IntPtr lpInBuffer,
+            uint nInBufferSize,
+            IntPtr lpOutBuffer,
+            uint nOutBufferSize,
+            out uint lpBytesReturned,
+            IntPtr lpOverlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool WriteFile(
+            IntPtr hFile,
+            byte[] lpBuffer,
+            uint nNumberOfBytesToWrite,
+            out uint lpNumberOfBytesWritten,
+            IntPtr lpOverlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool CloseHandle(IntPtr hObject);
+    }
+
+    public class UsbDriveItem
+    {
+        public string DisplayName { get; set; } = "";
+        public string DeviceID { get; set; } = "";
+        public override string ToString() => DisplayName;
+    }
+}
