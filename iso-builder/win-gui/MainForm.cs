@@ -399,8 +399,6 @@ namespace HomelabUSBBuilder
                 sb.AppendLine("$isoVol = $isoMount | Get-Volume");
                 sb.AppendLine("$isoDrive = $isoVol.DriveLetter");
 
-                if (string.IsNullOrEmpty(sb.ToString())) throw new Exception("Impossibile montare ISO.");
-
                 sb.AppendLine("Write-Host 'STATUS:50:Copia dei file ISO sulla chiavetta USB...'");
                 sb.AppendLine("Copy-Item -Path \"${isoDrive}:\\*\" -Destination \"${driveLetter}:\\\" -Recurse -Force -ErrorAction Stop");
 
@@ -410,13 +408,15 @@ namespace HomelabUSBBuilder
                 sb.AppendLine("Copy-Item -Path $preCheck -Destination \"${driveLetter}:\\pre-install-check.sh\" -Force");
                 sb.AppendLine("Copy-Item -Path $postInstall -Destination \"${driveLetter}:\\post-install.sh\" -Force");
 
-                // Step 5: Patch GRUB Bootloader per invocare la verifica e l'hook post-installazione
+                // Step 5: Patch GRUB Bootloader (MODIFICATO PER GESTIRE SBLOCCO READ-ONLY E SCRITTURA FORZATA)
                 sb.AppendLine("Write-Host 'STATUS:70:Modifica configurazione GRUB bootloader sulla USB...'");
                 sb.AppendLine("$grubCfg = \"${driveLetter}:\\boot\\grub\\grub.cfg\"");
                 sb.AppendLine("if (Test-Path $grubCfg) {");
-                sb.AppendLine("    $content = Get-Content $grubCfg -Raw");
+                sb.AppendLine("    $fileObj = Get-Item -Path $grubCfg");
+                sb.AppendLine("    if ($fileObj.IsReadOnly) { $fileObj.IsReadOnly = $false }");
+                sb.AppendLine("    $content = Get-Content -Path $grubCfg -Raw -Encoding UTF8");
                 sb.AppendLine("    $content = $content -replace 'linux /boot/linux26', 'linux /boot/linux26 proxmox-start-script=/game/pre-install-check.sh proxmox-post-hook=/game/post-install.sh'");
-                sb.AppendLine("    Set-Content -Path $grubCfg -Value $content -Encoding UTF8");
+                sb.AppendLine("    Set-Content -Path $grubCfg -Value $content -Encoding UTF8 -Force -ErrorAction Stop");
                 sb.AppendLine("}");
 
                 // Step 6: VERIFICA INTEGRITA E COERENZA DEI FILE SCRITTI
