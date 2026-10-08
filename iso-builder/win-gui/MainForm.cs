@@ -377,12 +377,13 @@ echo '=== SETUP COMPLETATO CON SUCCESSO ==='
         private async Task ExtractIsoAsync(string isoPath, string outputDir)
         {
             Logger.Log("Mount ed estrazione ISO tramite PowerShell/7-Zip...");
-            string psCmd = \$@"
-$iso = '{isoPath}';$out = '{outputDir}';
-Mount-DiskImage -ImagePath \$iso;
-$vol = (Get-DiskImage -ImagePath$iso | Get-Volume).DriveLetter;
-Copy-Item -Path ""\$($vol):\*"" -Destination $out -Recurse -Force;
-Dismount-DiskImage -ImagePath \$iso;
+            string psCmd = $@"
+$iso = '{isoPath}';
+$out = '{outputDir}';
+Mount-DiskImage -ImagePath $iso;
+$vol = (Get-DiskImage -ImagePath $iso | Get-Volume).DriveLetter;
+Copy-Item -Path ""$($vol):\*"" -Destination $out -Recurse -Force;
+Dismount-DiskImage -ImagePath $iso;
 ";
             
             await RunPowerShellAsync(psCmd);
@@ -391,13 +392,14 @@ Dismount-DiskImage -ImagePath \$iso;
         private async Task BuildCustomIsoAsync(string sourceDir, string outputIsoPath)
         {
             Logger.Log("Ricostruzione ISO bootabile...");
-            string psCmd = \$@"
-$src = '{sourceDir}';$out = '{outputIsoPath}';
+            string psCmd = $@"
+$src = '{sourceDir}';
+$out = '{outputIsoPath}';
 if (Get-Command oscimagetool -ErrorAction SilentlyContinue) {{
-    oscimagetool -n -m -b""\$src/boot/grub/efi.img"" ""$src"" ""$out""
+    oscimagetool -n -m -b""$src/boot/grub/efi.img"" ""$src"" ""$out""
 }} else {{
     Write-Output 'oscimagetool non trovato, utilizzo fallback PowerShell';
-    New-Item -Path \$out -ItemType File -Force
+    New-Item -Path $out -ItemType File -Force
 }}
 ";
 
@@ -418,4 +420,215 @@ if (Get-Command oscimagetool -ErrorAction SilentlyContinue) {{
             }
 
             string physicalDrive = @"\\.\PhysicalDrive" + diskNum;
-            Logger.Log("Inizio Scrittura RAW Diretta (dd style) su: " + physicalDrive +
+            Logger.Log("Inizio Scrittura RAW Diretta (dd style) su: " + physicalDrive + " (Disco #" + diskNum + ")");
+
+            lblStatus.Text = "Stato: Pulizia tabella partizioni...";
+            string cleanScript = "select disk " + diskNum + "\r\nclean\r\nrescan\r\n";
+            await RunDiskpartScriptAsync(cleanScript);
+            await Task.Delay(1500);
+
+            await Task.Run(() =>
+            {
+                using var isoStream = new FileStream(isoPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+                IntPtr handle = SafeNativeMethods.INVALID_HANDLE_VALUE;
+                int lastErr = 0;
+
+                for (int attempt = 1; attempt <= 5; attempt++)
+                {
+                    handle = SafeNativeMethods.CreateFile(
+                        physicalDrive,
+                        SafeNativeMethods.GENERIC_READ | SafeNativeMethods.GENERIC_WRITE,
+                        SafeNativeMethods.FILE_SHARE_READ | SafeNativeMethods.FILE_SHARE_WRITE,
+                        IntPtr.Zero,
+                        SafeNativeMethods.OPEN_EXISTING,
+                        0,
+                        IntPtr.Zero);
+
+                    if (handle != SafeNativeMethods.INVALID_HANDLE_VALUE) break;
+
+                    lastErr = Marshal.GetLastWin32Error();
+                    Logger.Log("Tentativo " + attempt + "/5 apertura handle fallito (Win32 Code: " + lastErr + "). Attesa 1s...");
+                    Thread.Sleep(1000);
+                }
+
+                if (handle == SafeNativeMethods.INVALID_HANDLE_VALUE)
+                {
+                    Logger.Log("ERRORE FATALE: Impossibile aprire handle fisico su " + physicalDrive + ". Codice Win32: " + lastErr);
+                    throw new Exception("Impossibile accedere al disco fisico. Codice Win32: " + lastErr);
+                }
+
+                try
+                {
+                    const int sectorSize = 512;
+                    byte[] buffer = new byte[1024 * 1024];
+                    int bytesRead;
+                    long totalBytes = isoStream.Length;
+                    long bytesWritten = 0;
+
+                    while ((bytesRead = isoStream.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        int bytesToWrite = bytesRead;
+                        if (bytesToWrite % sectorSize != 0)
+                        {
+                            int remainder = bytesToWrite % sectorSize;
+                            int padding = sectorSize - remainder;
+                            bytesToWrite += padding;
+                            Array.Clear(buffer, bytesRead, padding);
+                        }
+
+                        bool success = SafeNativeMethods.WriteFile(handle, buffer, (uint)bytesToWrite, out _, IntPtr.Zero);
+                        if (!success)
+                        {
+                            int errCode = Marshal.GetLastWin32Error();
+                            Logger.Log("ERRORE CRITICO: Scrittura blocco fallita a byte " + bytesWritten + ". Codice Win32: " + errCode);
+                            throw new Exception("Errore durante la scrittura RAW dei settori sul disco. Codice Win32: " + errCode);
+                        }
+
+                        bytesWritten += bytesRead;
+                        int pct = 70 + (int)((bytesWritten * 30) / totalBytes);
+
+                        this.Invoke(new Action(() =>
+                        {
+                            progressBar.Value = Math.Min(100, pct);
+                            lblStatus.Text = "Stato: Scrittura RAW ISO Custom in corso... (" + (bytesWritten / (1024 * 1024)) + " MB / " + (totalBytes / (1024 * 1024)) + " MB)";
+                        }));
+                    }
+
+                    Logger.Log("Scrittura RAW completata con successo. Byte scritti: " + bytesWritten);
+                    SafeNativeMethods.DeviceIoControl(handle, SafeNativeMethods.IOCTL_DISK_UPDATE_PROPERTIES, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+                }
+                finally
+                {
+                    SafeNativeMethods.CloseHandle(handle);
+                }
+            });
+        }
+
+        private async Task RunDiskpartScriptAsync(string commands)
+        {
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dp_" + Guid.NewGuid().ToString("N") + ".txt");
+            try
+            {
+                await File.WriteAllTextAsync(scriptPath, commands, Encoding.ASCII);
+                Logger.Log("Esecuzione Script DiskPart:\n" + commands.Trim());
+
+                var psi = new ProcessStartInfo("diskpart.exe", "/s \"" + scriptPath + "\"")
+                {
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                using var proc = Process.Start(psi);
+                if (proc != null)
+                {
+                    await proc.WaitForExitAsync();
+                    string output = await proc.StandardOutput.ReadToEndAsync();
+                    string error = await proc.StandardError.ReadToEndAsync();
+                    if (!string.IsNullOrWhiteSpace(output))
+                    {
+                        Logger.Log("[DiskPart Output]:\n" + output.Trim());
+                    }
+                    if (!string.IsNullOrWhiteSpace(error))
+                    {
+                        Logger.Log("[DiskPart Error]:\n" + error.Trim());
+                    }
+                }
+            }
+            finally
+            {
+                try { if (File.Exists(scriptPath)) File.Delete(scriptPath); } catch { }
+            }
+        }
+
+        private async Task RunPowerShellAsync(string command)
+        {
+            Logger.Log("Esecuzione comando PowerShell: " + command);
+            
+            string encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
+
+            var psi = new ProcessStartInfo("powershell", "-NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encodedCommand)
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc != null)
+            {
+                await proc.WaitForExitAsync();
+                string output = await proc.StandardOutput.ReadToEndAsync();
+                string error = await proc.StandardError.ReadToEndAsync();
+                
+                if (!string.IsNullOrWhiteSpace(output))
+                {
+                    Logger.Log("[PowerShell Output]: " + output.Trim());
+                }
+                if (!string.IsNullOrWhiteSpace(error))
+                {
+                    Logger.Log("[PowerShell Error]: " + error.Trim());
+                }
+
+                if (proc.ExitCode != 0)
+                {
+                    Logger.Log("ATTENZIONE: PowerShell exit code " + proc.ExitCode);
+                }
+            }
+        }
+    }
+
+    internal static class SafeNativeMethods
+    {
+        public const uint GENERIC_READ = 0x80000000;
+        public const uint GENERIC_WRITE = 0x40000000;
+        public const uint FILE_SHARE_READ = 0x00000001;
+        public const uint FILE_SHARE_WRITE = 0x00000002;
+        public const uint OPEN_EXISTING = 3;
+        public static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
+
+        public const uint IOCTL_DISK_UPDATE_PROPERTIES = 0x00070050;
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        public static extern IntPtr CreateFile(
+            string lpFileName,
+            uint dwDesiredAccess,
+            uint dwShareMode,
+            IntPtr lpSecurityAttributes,
+            uint dwCreationDisposition,
+            uint dwFlagsAndAttributes,
+            IntPtr hTemplateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool DeviceIoControl(
+            IntPtr hDevice,
+            uint dwIoControlCode,
+            IntPtr lpInBuffer,
+            uint nInBufferSize,
+            IntPtr lpOutBuffer,
+            uint nOutBufferSize,
+            out uint lpBytesReturned,
+            IntPtr lpOverlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool WriteFile(
+            IntPtr hFile,
+            byte[] lpBuffer,
+            uint nNumberOfBytesToWrite,
+            out uint lpNumberOfBytesWritten,
+            IntPtr lpOverlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool CloseHandle(IntPtr hObject);
+    }
+
+    public class UsbDriveItem
+    {
+        public string DisplayName { get; set; } = "";
+        public string DeviceID { get; set; } = "";
+        public override string ToString() => DisplayName;
+    }
+}
