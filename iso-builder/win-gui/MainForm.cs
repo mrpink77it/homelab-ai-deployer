@@ -23,7 +23,7 @@ namespace HomelabUSBBuilder
 
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
             {
-                Logger.Log(\$"CRASH NON GESTITO: {e.ExceptionObject}");
+                Logger.Log($"CRASH NON GESTITO: {e.ExceptionObject}");
             };
 
             Application.Run(new MainForm());
@@ -38,7 +38,7 @@ namespace HomelabUSBBuilder
         {
             try
             {
-                string logLine = \$"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
+                string logLine = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
                 File.AppendAllText(LogFilePath, logLine, Encoding.UTF8);
             }
             catch
@@ -124,9 +124,9 @@ namespace HomelabUSBBuilder
                     ulong sizeBytes = Convert.ToUInt64(drive["Size"]);
                     double sizeGb = Math.Round((double)sizeBytes / (1024 * 1024 * 1024), 1);
 
-                    var usbItem = new UsbDriveItem { DisplayName = \$"{model} ({sizeGb} GB)", DeviceID = deviceId };
+                    var usbItem = new UsbDriveItem { DisplayName = $"{model} ({sizeGb} GB)", DeviceID = deviceId };
                     comboUsb.Items.Add(usbItem);
-                    Logger.Log(\$"Trovata USB: {usbItem.DisplayName} [DeviceID: {deviceId}]");
+                    Logger.Log($"Trovata USB: {usbItem.DisplayName} [DeviceID: {deviceId}]");
                 }
 
                 if (comboUsb.Items.Count > 0)
@@ -141,8 +141,8 @@ namespace HomelabUSBBuilder
             }
             catch (Exception ex)
             {
-                Logger.Log(\$"ERRORE durante la lettura delle USB: {ex}");
-                MessageBox.Show(\$"Errore lettura USB: {ex.Message}", "Errore", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Logger.Log($"ERRORE durante la lettura delle USB: {ex}");
+                MessageBox.Show($"Errore lettura USB: {ex.Message}", "Errore", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -167,7 +167,7 @@ namespace HomelabUSBBuilder
 
             try
             {
-                Logger.Log(\$"Inizio processo per l'unità: {targetUsb.DisplayName} ({targetUsb.DeviceID})");
+                Logger.Log($"Inizio processo per l'unità: {targetUsb.DisplayName} ({targetUsb.DeviceID})");
 
                 string tempDir = Path.Combine(Path.GetTempPath(), "proxmox-builder");
                 Directory.CreateDirectory(tempDir);
@@ -179,17 +179,17 @@ namespace HomelabUSBBuilder
                 progressBar.Value = 20;
                 string isoUrl = "https://enterprise.proxmox.com/iso/proxmox-ve_8.1-1.iso";
                 
-                Logger.Log(\$"Download ISO avviato da: {isoUrl}");
+                Logger.Log($"Download ISO avviato da: {isoUrl}");
                 await DownloadIsoAsync(isoUrl, isoPath);
-                Logger.Log(\$"Download ISO completato. File salvato in: {isoPath}");
+                Logger.Log($"Download ISO completato. File salvato in: {isoPath}");
 
                 // Step 2: Build answer.toml
                 lblStatus.Text = "Stato: Generazione configurazione automatica (answer.toml)...";
                 progressBar.Value = 60;
                 string answerToml = BuildAnswerToml();
                 File.WriteAllText(answerPath, answerToml, Encoding.UTF8);
-                Logger.Log(\$"File answer.toml creato con successo in: {answerPath}");
-                Logger.Log(\$"Contenuto answer.toml:\n{answerToml}");
+                Logger.Log($"File answer.toml creato con successo in: {answerPath}");
+                Logger.Log($"Contenuto answer.toml:\n{answerToml}");
 
                 // Step 3: Format & Copy
                 lblStatus.Text = "Stato: Scrittura immagine e configurazione sulla USB...";
@@ -203,8 +203,8 @@ namespace HomelabUSBBuilder
             }
             catch (Exception ex)
             {
-                Logger.Log(\$"ERRORE FATALE durante il processo: {ex}");
-                MessageBox.Show(\$"Errore durante la creazione: {ex.Message}\n\nConsulta il file 'app.log' nella cartella del programma per maggiori dettagli.", "Errore Fatale", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Logger.Log($"ERRORE FATALE durante il processo: {ex}");
+                MessageBox.Show($"Errore durante la creazione: {ex.Message}\n\nConsulta il file 'app.log' nella cartella del programma per maggiori dettagli.", "Errore Fatale", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 lblStatus.Text = "Stato: Errore riscontrato.";
             }
             finally
@@ -231,9 +231,9 @@ namespace HomelabUSBBuilder
             sb.AppendLine("reboot_mode = \"reboot\"");
             sb.AppendLine();
             sb.AppendLine("[network]");
-            sb.AppendLine(\$"source = \"{netSource}\"");
-            sb.AppendLine(\$"cidr = \"{cidr}\"");
-            sb.AppendLine(\$"gateway = \"{gateway}\"");
+            sb.AppendLine($"source = \"{netSource}\"");
+            sb.AppendLine($"cidr = \"{cidr}\"");
+            sb.AppendLine($"gateway = \"{gateway}\"");
             sb.AppendLine("dns = \"1.1.1.1\"");
             sb.AppendLine("dns2 = \"8.8.8.8\"");
             sb.AppendLine();
@@ -251,12 +251,12 @@ namespace HomelabUSBBuilder
                 long length = new FileInfo(destination).Length;
                 if (length > 500 * 1024 * 1024)
                 {
-                    Logger.Log(\$"File ISO già presente e valido ({length} byte). Download saltato.");
+                    Logger.Log($"File ISO già presente e valido ({length} byte). Download saltato.");
                     return;
                 }
                 else
                 {
-                    Logger.Log(\$"File ISO esistente ma incompleto ({length} byte). Eliminazione e ri-download.");
+                    Logger.Log($"File ISO esistente ma incompleto ({length} byte). Eliminazione e ri-download.");
                     File.Delete(destination);
                 }
             }
@@ -271,7 +271,7 @@ namespace HomelabUSBBuilder
             client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 
             using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
-            Logger.Log(\$"Risposta HTTP Download ISO: {response.StatusCode}");
+            Logger.Log($"Risposta HTTP Download ISO: {response.StatusCode}");
             response.EnsureSuccessStatusCode();
 
             using var streamToRead = await response.Content.ReadAsStreamAsync();
@@ -286,12 +286,80 @@ namespace HomelabUSBBuilder
                 string diskNum = Regex.Match(deviceId, @"\d+").Value;
                 if (string.IsNullOrEmpty(diskNum))
                 {
-                    throw new Exception(\$"Impossibile estrarre il numero di disco da DeviceID: {deviceId}");
+                    throw new Exception($"Impossibile estrarre il numero di disco da DeviceID: {deviceId}");
                 }
 
-                Logger.Log(\$"Numero disco identificato per diskpart: {diskNum}");
+                Logger.Log($"Numero disco identificato per diskpart: {diskNum}");
 
                 string escapedAnswerPath = answerPath.Replace("\\", "\\\\");
 
                 var sb = new StringBuilder();
-                sb.AppendLine(\$"
+                sb.AppendLine($"$diskNum = \"{diskNum}\"");
+                sb.AppendLine($"$answer = \"{escapedAnswerPath}\"");
+                sb.AppendLine("$diskpartScript = @\"");
+                sb.AppendLine("select disk $diskNum");
+                sb.AppendLine("clean");
+                sb.AppendLine("convert mbr");
+                sb.AppendLine("create partition primary");
+                sb.AppendLine("format fs=fat32 quick label=\"PROXMOX-ANSWER\"");
+                sb.AppendLine("active");
+                sb.AppendLine("assign");
+                sb.AppendLine("\"@");
+                sb.AppendLine("$diskpartScript | diskpart");
+                sb.AppendLine("Start-Sleep -Seconds 3");
+                sb.AppendLine("$driveLetter = (Get-Partition -DiskNumber $diskNum | Get-Volume).DriveLetter");
+                sb.AppendLine("Write-Host \"Lettera unità assegnata: $driveLetter\"");
+                sb.AppendLine("if ($driveLetter) {");
+                sb.AppendLine("    Copy-Item -Path $answer -Destination \"${driveLetter}:\\answer.toml\" -Force");
+                sb.AppendLine("    Write-Host \"Copia answer.toml completata con successo.\"");
+                sb.AppendLine("} else {");
+                sb.AppendLine("    Write-Error \"Impossibile determinare la lettera di unità assegnata alla USB.\"");
+                sb.AppendLine("}");
+
+                var psi = new ProcessStartInfo("powershell")
+                {
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                psi.ArgumentList.Add("-NoProfile");
+                psi.ArgumentList.Add("-ExecutionPolicy");
+                psi.ArgumentList.Add("Bypass");
+                psi.ArgumentList.Add("-Command");
+                psi.ArgumentList.Add(sb.ToString());
+
+                Logger.Log("Esecuzione dello script PowerShell per Formattazione e Scrittura...");
+                using var proc = Process.Start(psi);
+                if (proc != null)
+                {
+                    string output = proc.StandardOutput.ReadToEnd();
+                    string error = proc.StandardError.ReadToEnd();
+                    proc.WaitForExit();
+
+                    Logger.Log($"[PowerShell Output]:\n{output}");
+                    if (!string.IsNullOrWhiteSpace(error))
+                    {
+                        Logger.Log($"[PowerShell Error]:\n{error}");
+                    }
+
+                    if (proc.ExitCode != 0)
+                    {
+                        throw new Exception($"Lo script di formattazione USB è fallito con codice di uscita {proc.ExitCode}. Leggi app.log per i dettagli.");
+                    }
+                }
+                else
+                {
+                    throw new Exception("Impossibile avviare il processo PowerShell.");
+                }
+            });
+        }
+    }
+
+    public class UsbDriveItem
+    {
+        public string DisplayName { get; set; } = "";
+        public string DeviceID { get; set; } = "";
+        public override string ToString() => DisplayName;
+    }
+}
