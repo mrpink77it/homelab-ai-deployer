@@ -17,25 +17,43 @@ for search_dir in "." "$HOME" "$HOME/Downloads" "/root" "/root/Downloads"; do
 done
 
 # ------------------------------------------------------------------------------
+# GESTIONE SIMULAZIONE (DEBUG MODE)
+# ------------------------------------------------------------------------------
+DRY_RUN=false
+if [[ "$1" == "--simulate" ]]; then
+    DRY_RUN=true
+    echo -e "\033[0;33m[DEBUG] Modalità SIMULAZIONE attiva. Nessun comando di sistema verrà eseguito.\033[0m"
+    sleep 2
+fi
+
+# ------------------------------------------------------------------------------
 # CONTROLLI PRELIMINARI DI SISTEMA
 # ------------------------------------------------------------------------------
-if [ "$EUID" -ne 0 ]; then
+if [ "$EUID" -ne 0 ] && [ "$DRY_RUN" = false ]; then
   echo -e "\033[0;31m[ERROR] Questo script deve essere eseguito come root!\033[0m"
   exit 1
 fi
 
 if ! command -v whiptail &> /dev/null; then
-    echo "Installazione dipendenze interfaccia (whiptail) in corso..."
-    apt-get update -qq && apt-get install -y whiptail -qq
+    if [ "$DRY_RUN" = false ]; then
+        echo "Installazione dipendenze interfaccia (whiptail) in corso..."
+        apt-get update -qq && apt-get install -y whiptail -qq
+    else
+        echo "[SIMULAZIONE] Would install whiptail (apt-get update && apt-get install whiptail)"
+    fi
 fi
 
 # ------------------------------------------------------------------------------
 # RISOLUZIONE PERMESSI NELLA CARTELLA 'script'
 # ------------------------------------------------------------------------------
-if [ -d "script" ]; then
-    find script/ -type f -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
+if [ "$DRY_RUN" = false ]; then
+    if [ -d "script" ]; then
+        find script/ -type f -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
+    else
+        find . -maxdepth 1 -type f -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
+    fi
 else
-    find . -maxdepth 1 -type f -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
+    echo "[SIMULAZIONE] Would run: chmod +x script/*.sh"
 fi
 
 # ------------------------------------------------------------------------------
@@ -141,10 +159,17 @@ run_script() {
     fi
 
     if [ -n "$script_path" ]; then
-        clear
-        echo -e "\033[0;36mAvvio di $script_path in corso...\033[0m\n"
-        sleep 1
-        exec "$script_path"
+        if [ "$DRY_RUN" = true ]; then
+            clear
+            echo -e "\033[0;33m[SIMULAZIONE] Would execute: $script_path\033[0m\n"
+            echo "Premi un tasto per tornare al menu principale..."
+            read -n 1
+        else
+            clear
+            echo -e "\033[0;36mAvvio di $script_path in corso...\033[0m\n"
+            sleep 1
+            exec "$script_path"
+        fi
     else
         whiptail --title "Errore" --msgbox "File '$target_script' non trovato!\n\nAssicurati che il file esista all'interno della cartella 'script/'." 10 60
     fi
