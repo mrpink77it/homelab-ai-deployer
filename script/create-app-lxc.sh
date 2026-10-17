@@ -114,7 +114,7 @@ else
     pct set "$CTID" -nameserver "$DNS_SERVERS"
     
     # Applicazione corretta della rete per Ubuntu 24.04 (Netplan / systemd-networkd)
-    pct exec "$CTID" -- netplan apply || pct exec "$CTID" -- systemctl restart systemd-networkd || true
+    #pct exec "$CTID" -- netplan apply || pct exec "$CTID" -- systemctl restart systemd-networkd || true
     echo "-> Rete configurata in modo statico con successo."
 fi
 
