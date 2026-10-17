@@ -4,15 +4,15 @@
 set -e
 
 # --- CONFIGURAZIONE ---
-TEMPLATE_STORAGE="local"       # Storage dove risiedono i template (es. local)
-CONTAINER_STORAGE="local-lvm"  # Storage per i dischi dei container (es. local-lvm)
+TEMPLATE_STORAGE="local-zfs"   # Storage ZFS per i template LXC
+CONTAINER_STORAGE="local-zfs"  # Storage ZFS per i dischi dei container
 OSTYPE="ubuntu"                # ubuntu o debian
 OS_VERSION="24.04"             # 24.04 per Ubuntu / 13 per Debian 13
-ROOT_PASSWORD="proxmox"        # Password di root fissa richiesta
+ROOT_PASSWORD="proxmox"        # Password di root fissa
 DNS_SERVERS="1.1.1.1 9.9.9.9 8.8.8.8"
 BRIDGE="vmbr0"                 # Bridge di rete predefinito
 
-echo "=== Avvio creazione automatica Container LXC ==="
+echo "=== Avvio creazione automatica Container LXC su local-zfs ==="
 
 # 1. Trova il primo ID disponibile a partire da 300
 VMS=$(pct list | awk 'NR>1 {print $1}')
@@ -29,7 +29,7 @@ if [ -z "$LAST_APP_NAME" ]; then
     NEXT_NUM=1
     echo "-> Nessun container APP esistente trovato. Partiamo da APP1."
 else
-    # Estrae il numero numerico dopo 'APP'
+    # Estrae il numero dopo 'APP'
     LAST_NUM=$(echo "$LAST_APP_NAME" | sed 's/APP//')
     NEXT_NUM=$((LAST_NUM + 1))
     echo "-> Ultimo container trovato: $LAST_APP_NAME. Assegnato il successivo."
@@ -44,7 +44,7 @@ done
 
 echo "-> Nome finale del container: $HOSTNAME"
 
-# 3. Gestione e download del Template LXC se non presente
+# 3. Gestione e download del Template LXC
 pveam update > /dev/null 2>&1
 TEMPLATE_FILE=$(pveam available -section system | grep -E "${OSTYPE}-${OS_VERSION}" | tail -n 1 | awk '{print $2}')
 
@@ -54,18 +54,15 @@ if [ -z "$TEMPLATE_FILE" ]; then
 fi
 
 if ! pveam list "$TEMPLATE_STORAGE" | grep -q "$TEMPLATE_FILE"; then
-    echo "-> Download del template $TEMPLATE_FILE in corso..."
+    echo "-> Download del template $TEMPLATE_FILE su $TEMPLATE_STORAGE in corso..."
     pveam download "$TEMPLATE_STORAGE" "$TEMPLATE_FILE"
 else
-    echo "-> Template $TEMPLATE_FILE già presente nello storage."
+    echo "-> Template $TEMPLATE_FILE già presente su $TEMPLATE_STORAGE."
 fi
 
-# Percorso completo del template tar.gz
-TEMPLATE_PATH="/var/lib/vz/template/cache/$TEMPLATE_FILE"
-
-# 4. Creazione del Container LXC con rete temporanea in DHCP
-echo "-> Creazione del container in corso..."
-pct create "$CTID" "$TEMPLATE_PATH" \
+# 4. Creazione del Container LXC su ZFS con rete temporanea in DHCP
+echo "-> Creazione del container su ZFS in corso..."
+pct create "$CTID" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE_FILE}" \
     -storage "$CONTAINER_STORAGE" \
     -hostname "$HOSTNAME" \
     -ostype "$OSTYPE" \
@@ -81,7 +78,7 @@ pct create "$CTID" "$TEMPLATE_PATH" \
 echo "-> Attesa acquisizione indirizzo IP DHCP..."
 sleep 5
 
-# 5. Recupero dell'IP DHCP assegnato e trasformazione in IP Statico + SLAAC
+# 5. Recupero dell'IP DHCP e trasformazione in IP Statico + SLAAC
 CONTAINER_IP=""
 for i in {1..10}; do
     CONTAINER_IP=$(pct exec "$CTID" -- hostname -I 2>/dev/null | awk '{print $1}')
@@ -96,10 +93,7 @@ if [ -z "$CONTAINER_IP" ]; then
 else
     echo "-> IP DHCP rilevato: $CONTAINER_IP"
     
-    # Ricaviamo il gateway attuale dal container
     GATEWAY_IP=$(pct exec "$CTID" -- ip route show default | awk '{print $3}')
-    
-    # Determiniamo la subnet mask corrente (assumiamo /24 se non specificata, o ricaviamo il CIDR)
     CIDR_MASK=$(pct exec "$CTID" -- ip -o -4 addr show eth0 | awk '{print $4}')
     
     if [ -z "$CIDR_MASK" ]; then
@@ -108,24 +102,22 @@ else
 
     echo "-> Conversione della configurazione di rete in IP Statico ($CIDR_MASK) e IPv6 SLAAC..."
     
-    # Modifica la configurazione di rete su Proxmox per renderla statica + IPv6 auto (SLAAC)
     if [ -n "$GATEWAY_IP" ]; then
         pct set "$CTID" -net0 "name=eth0,bridge=${BRIDGE},firewall=1,ip=${CIDR_MASK},gw=${GATEWAY_IP},ip6=auto"
     else
         pct set "$CTID" -net0 "name=eth0,bridge=${BRIDGE},firewall=1,ip=${CIDR_MASK},ip6=auto"
     fi
 
-    # Impostazione dei DNS richiesti
     pct set "$CTID" -nameserver "$DNS_SERVERS"
     
-    # Riavvio della rete all'interno del container per applicare i cambiamenti
     pct exec "$CTID" -- systemctl restart networking || pct exec "$CTID" -- systemctl restart systemd-networkd || true
     echo "-> Rete configurata in modo statico con successo."
 fi
 
-echo "================ Evaluated Successfully ================"
+echo "========================================================"
 echo "Container ID:   $CTID"
 echo "Nome Host:      $HOSTNAME"
+echo "Storage:        $CONTAINER_STORAGE"
 echo "IP Statico:     $CONTAINER_IP"
 echo "Password Root:  $ROOT_PASSWORD"
 echo "========================================================"
