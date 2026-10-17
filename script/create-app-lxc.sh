@@ -71,6 +71,7 @@ pct create "$CTID" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE_FILE}" \
     -net0 "name=eth0,bridge=${BRIDGE},firewall=1,ip=dhcp,ip6=auto" \
     -password "$ROOT_PASSWORD" \
     -unprivileged 1 \
+    -features nesting=1 \
     -start 1
 
 # 5. Abilitazione forzata del Nesting post-creazione
