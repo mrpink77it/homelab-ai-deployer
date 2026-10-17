@@ -4,7 +4,7 @@
 set -e
 
 # --- CONFIGURAZIONE ---
-TEMPLATE_STORAGE="local-zfs"   # Storage ZFS per i template LXC
+TEMPLATE_STORAGE="local"       # Storage standard per i template LXC
 CONTAINER_STORAGE="local-zfs"  # Storage ZFS per i dischi dei container
 OSTYPE="ubuntu"                # ubuntu o debian
 OS_VERSION="24.04"             # 24.04 per Ubuntu / 13 per Debian 13
@@ -12,7 +12,7 @@ ROOT_PASSWORD="proxmox"        # Password di root fissa
 DNS_SERVERS="1.1.1.1 9.9.9.9 8.8.8.8"
 BRIDGE="vmbr0"                 # Bridge di rete predefinito
 
-echo "=== Avvio creazione automatica Container LXC su local-zfs ==="
+echo "=== Avvio creazione automatica Container LXC ==="
 
 # 1. Trova il primo ID disponibile a partire da 300
 VMS=$(pct list | awk 'NR>1 {print $1}')
@@ -44,7 +44,7 @@ done
 
 echo "-> Nome finale del container: $HOSTNAME"
 
-# 3. Gestione e download del Template LXC
+# 3. Gestione e download del Template LXC su 'local'
 pveam update > /dev/null 2>&1
 TEMPLATE_FILE=$(pveam available -section system | grep -E "${OSTYPE}-${OS_VERSION}" | tail -n 1 | awk '{print $2}')
 
@@ -54,14 +54,14 @@ if [ -z "$TEMPLATE_FILE" ]; then
 fi
 
 if ! pveam list "$TEMPLATE_STORAGE" | grep -q "$TEMPLATE_FILE"; then
-    echo "-> Download del template $TEMPLATE_FILE su $TEMPLATE_STORAGE in corso..."
+    echo "-> Download del template $TEMPLATE_FILE su storage '$TEMPLATE_STORAGE' in corso..."
     pveam download "$TEMPLATE_STORAGE" "$TEMPLATE_FILE"
 else
-    echo "-> Template $TEMPLATE_FILE già presente su $TEMPLATE_STORAGE."
+    echo "-> Template $TEMPLATE_FILE già presente su '$TEMPLATE_STORAGE'."
 fi
 
-# 4. Creazione del Container LXC su ZFS con rete temporanea in DHCP
-echo "-> Creazione del container su ZFS in corso..."
+# 4. Creazione del Container LXC su local-zfs con rete temporanea in DHCP
+echo "-> Creazione del container su $CONTAINER_STORAGE in corso..."
 pct create "$CTID" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE_FILE}" \
     -storage "$CONTAINER_STORAGE" \
     -hostname "$HOSTNAME" \
@@ -117,7 +117,8 @@ fi
 echo "========================================================"
 echo "Container ID:   $CTID"
 echo "Nome Host:      $HOSTNAME"
-echo "Storage:        $CONTAINER_STORAGE"
+echo "Template Storage: local"
+echo "Disk Storage:   $CONTAINER_STORAGE"
 echo "IP Statico:     $CONTAINER_IP"
 echo "Password Root:  $ROOT_PASSWORD"
 echo "========================================================"
