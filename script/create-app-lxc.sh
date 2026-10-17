@@ -12,7 +12,7 @@ ROOT_PASSWORD="proxmox"        # Password di root fissa
 DNS_SERVERS="1.1.1.1 9.9.9.9 8.8.8.8"
 BRIDGE="vmbr0"                 # Bridge di rete predefinito
 
-echo "=== Avvio creazione automatica Container LXC ==="
+echo "=== Avvio creazione automatica Container LXC con Nesting ==="
 
 # 1. Trova il primo ID disponibile a partire da 300
 VMS=$(pct list | awk 'NR>1 {print $1}')
@@ -60,8 +60,8 @@ else
     echo "-> Template $TEMPLATE_FILE già presente su '$TEMPLATE_STORAGE'."
 fi
 
-# 4. Creazione del Container LXC su local-zfs con rete temporanea in DHCP
-echo "-> Creazione del container su $CONTAINER_STORAGE in corso..."
+# 4. Creazione del Container LXC su local-zfs con NESTING abilitato e rete temporanea in DHCP
+echo "-> Creazione del container su $CONTAINER_STORAGE con nesting=1 in corso..."
 pct create "$CTID" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE_FILE}" \
     -storage "$CONTAINER_STORAGE" \
     -hostname "$HOSTNAME" \
@@ -73,6 +73,7 @@ pct create "$CTID" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE_FILE}" \
     -net0 "name=eth0,bridge=${BRIDGE},firewall=1,ip=dhcp,ip6=auto" \
     -password "$ROOT_PASSWORD" \
     -unprivileged 1 \
+    -features nesting=1 \
     -start 1
 
 echo "-> Attesa acquisizione indirizzo IP DHCP..."
@@ -117,8 +118,7 @@ fi
 echo "========================================================"
 echo "Container ID:   $CTID"
 echo "Nome Host:      $HOSTNAME"
-echo "Template Storage: local"
-echo "Disk Storage:   $CONTAINER_STORAGE"
+echo "Features:       nesting=1"
 echo "IP Statico:     $CONTAINER_IP"
 echo "Password Root:  $ROOT_PASSWORD"
 echo "========================================================"
