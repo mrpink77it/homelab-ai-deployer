@@ -12,7 +12,7 @@ ROOT_PASSWORD="proxmox"        # Password di root fissa
 DNS_SERVERS="1.1.1.1 9.9.9.9 8.8.8.8"
 BRIDGE="vmbr0"                 # Bridge di rete predefinito
 
-echo "=== Avvio creazione automatica Container LXC con Nesting ==="
+echo "=== Avvio creazione automatica Container LXC con Nesting Forzato ==="
 
 # 1. Trova il primo ID disponibile a partire da 300
 VMS=$(pct list | awk 'NR>1 {print $1}')
@@ -29,13 +29,11 @@ if [ -z "$LAST_APP_NAME" ]; then
     NEXT_NUM=1
     echo "-> Nessun container APP esistente trovato. Partiamo da APP1."
 else
-    # Estrae il numero dopo 'APP'
     LAST_NUM=$(echo "$LAST_APP_NAME" | sed 's/APP//')
     NEXT_NUM=$((LAST_NUM + 1))
     echo "-> Ultimo container trovato: $LAST_APP_NAME. Assegnato il successivo."
 fi
 
-# Verifica la disponibilità del nome e incrementa finché non è libero
 HOSTNAME="APP${NEXT_NUM}"
 while pct list | awk 'NR>1 {print $3}' | grep -q "^${HOSTNAME}$"; do
     NEXT_NUM=$((NEXT_NUM + 1))
@@ -60,8 +58,8 @@ else
     echo "-> Template $TEMPLATE_FILE già presente su '$TEMPLATE_STORAGE'."
 fi
 
-# 4. Creazione del Container LXC su local-zfs con NESTING abilitato e rete temporanea in DHCP
-echo "-> Creazione del container su $CONTAINER_STORAGE con nesting=1 in corso..."
+# 4. Creazione del Container LXC su local-zfs con rete temporanea in DHCP
+echo "-> Creazione del container su $CONTAINER_STORAGE in corso..."
 pct create "$CTID" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE_FILE}" \
     -storage "$CONTAINER_STORAGE" \
     -hostname "$HOSTNAME" \
@@ -73,13 +71,16 @@ pct create "$CTID" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE_FILE}" \
     -net0 "name=eth0,bridge=${BRIDGE},firewall=1,ip=dhcp,ip6=auto" \
     -password "$ROOT_PASSWORD" \
     -unprivileged 1 \
-    -features nesting=1 \
     -start 1
+
+# 5. Abilitazione forzata del Nesting post-creazione
+echo "-> Abilitazione esplicita del Nesting (nesting=1)..."
+pct set "$CTID" -features nesting=1
 
 echo "-> Attesa acquisizione indirizzo IP DHCP..."
 sleep 5
 
-# 5. Recupero dell'IP DHCP e trasformazione in IP Statico + SLAAC
+# 6. Recupero dell'IP DHCP e trasformazione in IP Statico + SLAAC
 CONTAINER_IP=""
 for i in {1..10}; do
     CONTAINER_IP=$(pct exec "$CTID" -- hostname -I 2>/dev/null | awk '{print $1}')
@@ -110,15 +111,16 @@ else
     fi
 
     pct set "$CTID" -nameserver "$DNS_SERVERS"
-    pct exec "$CTID" -- netplan apply || pct exec "$CTID" -- systemctl restart systemd-networkd || true
     
+    # Applicazione corretta della rete per Ubuntu 24.04 (Netplan / systemd-networkd)
+    pct exec "$CTID" -- netplan apply || pct exec "$CTID" -- systemctl restart systemd-networkd || true
     echo "-> Rete configurata in modo statico con successo."
 fi
 
 echo "========================================================"
 echo "Container ID:   $CTID"
 echo "Nome Host:      $HOSTNAME"
-echo "Features:       nesting=1"
+echo "Features:       nesting=1 (Attivo)"
 echo "IP Statico:     $CONTAINER_IP"
 echo "Password Root:  $ROOT_PASSWORD"
 echo "========================================================"
