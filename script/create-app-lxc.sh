@@ -110,8 +110,8 @@ else
     fi
 
     pct set "$CTID" -nameserver "$DNS_SERVERS"
+    pct exec "$CTID" -- netplan apply || pct exec "$CTID" -- systemctl restart systemd-networkd || true
     
-    pct exec "$CTID" -- systemctl restart networking || pct exec "$CTID" -- systemctl restart systemd-networkd || true
     echo "-> Rete configurata in modo statico con successo."
 fi
 
