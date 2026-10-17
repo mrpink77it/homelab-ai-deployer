@@ -6,8 +6,8 @@ set -e
 # --- CONFIGURAZIONE ---
 TEMPLATE_STORAGE="local"       # Storage standard per i template LXC
 CONTAINER_STORAGE="local-zfs"  # Storage ZFS per i dischi dei container
-OSTYPE="ubuntu"                # ubuntu o debian
-OS_VERSION="24.04"             # 24.04 per Ubuntu / 13 per Debian 13
+OSTYPE="debian"                # ubuntu o debian
+OS_VERSION="13"             # 24.04 per Ubuntu / 13 per Debian 13
 ROOT_PASSWORD="proxmox"        # Password di root fissa
 DNS_SERVERS="1.1.1.1 9.9.9.9 8.8.8.8"
 BRIDGE="vmbr0"                 # Bridge di rete predefinito
