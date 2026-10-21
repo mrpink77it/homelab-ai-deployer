@@ -2,7 +2,7 @@
 # ==============================================================================
 # manager.sh - Dual-GPU Homelab AI Deployer & Manager
 # Ambiente: Ubuntu 24.04 / Debian 13 (Baremetal / LXC)
-# Versione: 2.5.5 (NVIDIA Driver 595.104.02 .run with --no-x-check)
+# Versione: 2.5.6 (Auto Unload NVIDIA Kernel Modules & Driver 595.104.02 .run)
 # ==============================================================================
 set -e
 
@@ -63,6 +63,9 @@ fase_1_dipendenze() {
 
     echo -e "\n\033[32m[+] Installazione driver e strumenti Vulkan (per AMD RX 5700 XT)...\033[0m"
     apt-get install -y mesa-vulkan-drivers libvulkan1 vulkan-tools libvulkan-dev glslang-tools
+
+    echo -e "\n\033[32m[+] Scaricamento preventivo dei moduli kernel NVIDIA residui...\033[0m"
+    rmmod nvidia_drm nvidia_modeset nvidia_uvm nvidia 2>/dev/null || true
 
     echo -e "\n\033[32m[+] Download e installazione Driver NVIDIA v595.104.02 (.run)...\033[0m"
     local driver_version="595.104.02"
@@ -282,7 +285,7 @@ purge_all() {
 while true; do
     clear
     echo -e "\033[36m==================================================\033[0m"
-    echo -e "\033[1;37m    DUAL-GPU HOMELAB AI MANAGER (v2.5.5)          \033[0m"
+    echo -e "\033[1;37m    DUAL-GPU HOMELAB AI MANAGER (v2.5.6)          \033[0m"
     echo -e "\033[36m==================================================\033[0m"
     echo -e " Ambiente rilevato: \033[33m$VIRT_TYPE\033[0m"
     echo -e " Modelli GGUF:      \033[33m/home/alex/llama_models\033[0m"
