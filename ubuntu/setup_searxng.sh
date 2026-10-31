@@ -1,94 +1,97 @@
 #!/usr/bin/env bash
+# ==============================================================================
+# Script di Installazione Locale di SearXNG (Home: /usr/local/searxng)
+# Compatibile con Ubuntu / Debian
+# ==============================================================================
+
 set -euo pipefail
 
-==============================================================================
-
-Homelab AI Deployer - SearXNG Local Search Setup Script
-
-==============================================================================
-
-export LANG="${LANG:-C.UTF-8}"
-export LC_ALL="${LC_ALL:-C.UTF-8}"
-export PYTHONIOENCODING="utf-8"
-
-echo "=== [1/7] Controllo privilegi di root ==="
+# 1. Verifica che lo script sia eseguito con i privilegi di root
 if [ "$EUID" -ne 0 ]; then
-echo "[-] Errore: Esegui questo script con sudo o come root."
-exit 1
+  echo "[-] Errore: Esegui questo script con sudo o come utente root." >&2
+  exit 1
 fi
 
-export DEBIAN_FRONTEND=noninteractive
+echo "[*] Avvio installazione di SearXNG..."
 
-echo "=== [2/7] Installazione dipendenze di sistema ==="
+# 2. Installazione delle dipendenze di sistema
+echo "[*] Aggiornamento indici e installazione pacchetti di sistema..."
 apt-get update -qq
-apt-get install -y -qq 
+apt-get install -y -qq \
+    python3-dev python3-babel python3-venv python-is-python3 \
+    uwsgi uwsgi-plugin-python3 \
+    git build-essential libxslt1-dev zlib1g-dev libffi-dev libssl-dev
 
-python3-dev python3-babel python3-venv python-is-python3 
-
-uwsgi uwsgi-plugin-python3 
-
-git build-essential libxslt-dev zlib1g-dev libffi-dev libssl-dev 
-
-locales
-
-locale-gen en_US.UTF-8 C.UTF-8 >/dev/null 2>&1 || true
-update-locale LANG=C.UTF-8 LC_ALL=C.UTF-8 >/dev/null 2>&1 || true
-
-echo "=== [3/7] Creazione utente di sistema 'searxng' ==="
-if ! id -u searxng &>/dev/null; then
-useradd --shell /bin/bash --system 
-
---home-dir "/usr/local/searxng" 
-
---comment 'Privacy-respecting metasearch engine' 
-
-searxng
-echo "[+] Utente searxng creato."
+# 3. Creazione dell'utente di sistema per SearXNG (se non esiste già)
+if ! id "searxng" &>/dev/null; then
+    echo "[*] Creazione utente di sistema 'searxng'..."
+    useradd --shell /bin/bash --system \
+        --home-dir "/usr/local/searxng" \
+        --comment 'Privacy-respecting metasearch engine' \
+        searxng
 else
-echo "[*] Utente searxng già esistente."
+    echo "[*] Utente 'searxng' già esistente."
 fi
 
-echo "=== [4/7] Preparazione directory di lavoro ==="
+# 4. Creazione e configurazione permessi directory home
+echo "[*] Preparazione directory /usr/local/searxng..."
 mkdir -p "/usr/local/searxng"
 chown -R "searxng:searxng" "/usr/local/searxng"
 
-echo "=== [5/7] Clonazione del repository SearXNG ==="
-if [ ! -d "/usr/local/searxng/searxng-src" ]; then
-sudo -H -u searxng git clone "https://github.com/searxng/searxng" "/usr/local/searxng/searxng-src"
+# 5. Download e setup del Virtual Environment tramite utente searxng
+echo "[*] Download del repository e configurazione Virtual Environment..."
+su - searxng -c '
+set -e
+SEARXNG_DIR="/usr/local/searxng"
+SRC_DIR="$SEARXNG_DIR/searxng-src"
+VENV_DIR="$SEARXNG_DIR/searx-pyenv"
+
+if [ ! -d "$SRC_DIR" ]; then
+    git clone "https://github.com/searxng/searxng.git" "$SRC_DIR"
 else
-echo "[*] Repository searxng già presente, eseguo pull..."
-sudo -H -u searxng git -C "/usr/local/searxng/searxng-src" pull || true
+    echo "[*] Repository già clonata. Aggiornamento codice..."
+    git -C "$SRC_DIR" pull
 fi
 
-echo "=== [6/7] Configurazione Python Virtual Environment & Dipendenze ==="
-if [ ! -d "/usr/local/searxng/searx-pyenv" ]; then
-sudo -H -u searxng python3 -m venv "/usr/local/searxng/searx-pyenv"
+if [ ! -d "$VENV_DIR" ]; then
+    python3 -m venv "$VENV_DIR"
 fi
 
-if ! grep -q "searx-pyenv/bin/activate" "/usr/local/searxng/.profile" 2>/dev/null; then
-echo ". /usr/local/searxng/searx-pyenv/bin/activate" >> "/usr/local/searxng/.profile"
+if ! grep -q "searx-pyenv/bin/activate" "$SEARXNG_DIR/.profile" 2>/dev/null; then
+    echo ". $VENV_DIR/bin/activate" >> "$SEARXNG_DIR/.profile"
 fi
 
-sudo -H -u searxng bash << 'EOF'
-. /usr/local/searxng/searx-pyenv/bin/activate
-pip install -U pip setuptools wheel
-pip install -U pyyaml msgspec typing-extensions pybind11
-cd "/usr/local/searxng/searxng-src"
+# Attivazione VENV e installazione dipendenze Python
+source "$VENV_DIR/bin/activate"
+
+pip install -U --quiet pip setuptools wheel
+pip install -U --quiet pyyaml msgspec typing-extensions pybind11
+
+cd "$SRC_DIR"
 pip install --use-pep517 --no-build-isolation -e .
-EOF
+'
 
-echo "=== [7/7] Configurazione file di impostazioni ==="
+# 6. Configurazione iniziale del file settings.yml
+echo "[*] Configurazione dei file di configurazione in /etc/searxng..."
 mkdir -p "/etc/searxng"
-if [ -f "/usr/local/searxng/searxng-src/utils/templates/etc/searxng/settings.yml" ]; then
-cp "/usr/local/searxng/searxng-src/utils/templates/etc/searxng/settings.yml" "/etc/searxng/settings.yml"
-echo "[+] File settings.yml copiato in /etc/searxng/settings.yml"
+
+if [ ! -f "/etc/searxng/settings.yml" ]; then
+    cp "/usr/local/searxng/searxng-src/utils/templates/etc/searxng/settings.yml" "/etc/searxng/settings.yml"
+    echo "[*] File /etc/searxng/settings.yml creato dal template."
+else
+    echo "[*] File /etc/searxng/settings.yml già presente, salto sovrascrittura."
 fi
 
-echo ""
-echo "[OK] SearXNG installato con successo!"
-echo " Per avviare manualmente in ambiente virtuale:"
+# Assegnazione permessi corretti alla cartella di configurazione
+chown -R "searxng:searxng" "/etc/searxng"
+
+echo "=============================================================================="
+echo "[OK] Installazione di SearXNG completata con successo!"
+echo "------------------------------------------------------------------------------"
+echo " Per testare SearXNG in modalità standalone/debug, esegui:"
 echo "   sudo -H -u searxng -i"
-echo "   . /usr/local/searxng/searx-pyenv/bin/activate"
-echo "   python /usr/local/searxng/searxng-src/searx/webapp.py"
-echo " Interfaccia locale prevista su: http://127.0.0.1:8888"
-echo ""
+echo "   cd /usr/local/searxng/searxng-src"
+echo "   python searx/webapp.py"
+echo "------------------------------------------------------------------------------"
+echo " Endpoint predefinito: http://127.0.0.1:8888"
+echo "=============================================================================="
