@@ -1,11 +1,13 @@
 #!/bin/bash
+# port_inspector.sh - Ispeziona porte, visualizza file/giornali e gestisce/ferma/disabilita i servizi systemd.
 
+# Assicuriamoci di essere root
 if [ "$EUID" -ne 0 ]; then
   echo "Per favore, esegui questo script come root (sudo)."
   exit 1
 fi
 
-BACKTITLE="Service Inspector"
+BACKTITLE="Homelab AI - Port & Service Inspector"
 
 # Funzione menu principale
 main_menu() {
