@@ -5,7 +5,7 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-BACKTITLE="Homelab AI - Port & Service Inspector"
+BACKTITLE="Service Inspector"
 
 # Funzione menu principale
 main_menu() {
