@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# Script di Installazione Locale di SearXNG (Home: /usr/local/searxng)
-# Compatibile con Ubuntu / Debian
-# ==============================================================================
 
 set -euo pipefail
 
@@ -85,13 +81,35 @@ fi
 # Assegnazione permessi corretti alla cartella di configurazione
 chown -R "searxng:searxng" "/etc/searxng"
 
+# 7. Creazione e avvio del servizio Systemd per SearXNG
+echo "[*] Configurazione del servizio Systemd per SearXNG..."
+cat << 'EOF' > /etc/systemd/system/searxng.service
+[Unit]
+Description=SearXNG Metasearch Engine
+After=network.target
+
+[Service]
+Type=simple
+User=searxng
+Group=searxng
+WorkingDirectory=/usr/local/searxng/searxng-src
+Environment="SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml"
+ExecStart=/usr/local/searxng/searx-pyenv/bin/python searx/webapp.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "[*] Ricarica daemon e avvio del servizio searxng..."
+systemctl daemon-reload
+systemctl enable --now searxng.service
+
 echo "=============================================================================="
-echo "[OK] Installazione di SearXNG completata con successo!"
+echo "[OK] Installazione e configurazione del servizio SearXNG completate con successo!"
 echo "------------------------------------------------------------------------------"
-echo " Per testare SearXNG in modalità standalone/debug, esegui:"
-echo "   sudo -H -u searxng -i"
-echo "   cd /usr/local/searxng/searxng-src"
-echo "   python searx/webapp.py"
-echo "------------------------------------------------------------------------------"
-echo " Endpoint predefinito: http://127.0.0.1:8888"
+echo " Servizio Systemd: attivo e configurato per l'avvio automatico."
+echo " Stato servizio:   sudo systemctl status searxng"
+echo " Endpoint attivo:  http://127.0.0.1:8888"
 echo "=============================================================================="
