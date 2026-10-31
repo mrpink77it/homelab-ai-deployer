@@ -17,17 +17,3 @@
 | **Generazione Video** | Trasformazione di immagini statiche in clip video in movimento o creazione di brevi animazioni da testo. | Stable Video Diffusion (SVD) / LTX-Video |
 
 ---
-
-## Modelli Quantizzati in Formato GGUF Consigliati
-| Task / Funzione | Modello GGUF 1 (Consigliato) | Modello GGUF 2 (Alternativa) |
-| :--- | :--- | :--- |
-| **Sviluppo Software (Coding)** | `unsloth/Qwen2.5-Coder-7B-Instruct-GGUF` (Q4_K_M) | `bartowski/Qwen2.5-Coder-14B-Instruct-GGUF` (Q4_K_M) |
-| **Generazione Immagini** | `city96/FLUX.1-dev-gguf` (Q4_K) | `second-state/FLUX.1-schnell-GGUF` (Q4_0) |
-| **Ragionamento e Pianificazione** | `bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF` (Q4_K_M) | `unsloth/DeepSeek-R1-Distill-Qwen-14B-GGUF` (Q4_K_M) |
-| **Generazione e Sintesi Testuale** | `bartowski/Qwen2.5-7B-Instruct-GGUF` (Q4_K_M) | `bartowski/Llama-3.1-8B-Instruct-GGUF` (Q4_K_M) |
-| **Visione Artificiale (VLM)** | `bartowski/Qwen2.5-VL-7B-Instruct-GGUF` (Q4_K_M) | `unsloth/Llama-3.2-11B-Vision-Instruct-GGUF` (Q4_K_M) |
-| **Trascrizione Vocale (STT)** | `ggerganov/whisper.cpp` (`ggml-large-v3-q5_0.bin`) | `ggerganov/whisper.cpp` (`ggml-base.en.bin`) |
-| **Sintesi Vocale (TTS)** | `rhasspy/piper` (Modelli ONNX quantizzati INT8) | `coqui/XTTS-v2` (Versioni ottimizzate 4-bit) |
-| **Musica e Sound Design** | `facebook/musicgen-medium` (Versione INT8 quantizzata) | `facebook/audiocraft` (Checkpoint ottimizzati) |
-| **Generazione Video** | `stabilityai/stable-video-diffusion-img2vid-xt` (INT8) | `Lightricks/LTX-Video` (Versioni quantizzate VRAM-safe) |
-| **Automazione e Conoscenza (RAG)** | `bartowski/bge-large-en-v1.5-GGUF` (Q8_0) | `mradermacher/embeddinggemma-270m-GGUF` (F16) |
