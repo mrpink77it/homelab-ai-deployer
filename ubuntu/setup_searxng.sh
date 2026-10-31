@@ -2,23 +2,22 @@
 
 set -euo pipefail
 
-# 1. Verifica che lo script sia eseguito con i privilegi di root
+# 1. Verifica permessi di root
 if [ "$EUID" -ne 0 ]; then
   echo "[-] Errore: Esegui questo script con sudo o come utente root." >&2
   exit 1
 fi
 
-echo "[*] Avvio installazione di SearXNG..."
+echo "[*] Avvio installazione e configurazione di SearXNG..."
 
-# 2. Installazione delle dipendenze di sistema
-echo "[*] Aggiornamento indici e installazione pacchetti di sistema..."
+# 2. Installazione delle dipendenze di sistema (senza uwsgi o pacchetti ridondanti)
+echo "[*] Aggiornamento indici e installazione dipendenze di sistema..."
 apt-get update -qq
 apt-get install -y -qq \
     python3-dev python3-babel python3-venv python-is-python3 \
-    uwsgi uwsgi-plugin-python3 \
-    git build-essential libxslt1-dev zlib1g-dev libffi-dev libssl-dev
+    git build-essential libxslt1-dev zlib1g-dev libffi-dev libssl-dev openssl
 
-# 3. Creazione dell'utente di sistema per SearXNG (se non esiste già)
+# 3. Creazione dell'utente di sistema 'searxng'
 if ! id "searxng" &>/dev/null; then
     echo "[*] Creazione utente di sistema 'searxng'..."
     useradd --shell /bin/bash --system \
@@ -29,13 +28,13 @@ else
     echo "[*] Utente 'searxng' già esistente."
 fi
 
-# 4. Creazione e configurazione permessi directory home
-echo "[*] Preparazione directory /usr/local/searxng..."
+# 4. Preparazione directory e permessi
+echo "[*] Configurazione directory /usr/local/searxng..."
 mkdir -p "/usr/local/searxng"
 chown -R "searxng:searxng" "/usr/local/searxng"
 
-# 5. Download e setup del Virtual Environment tramite utente searxng
-echo "[*] Download del repository e configurazione Virtual Environment..."
+# 5. Download sorgenti e setup Virtual Environment via utente searxng
+echo "[*] Setup ambiente Python e clone repository SearXNG..."
 su - searxng -c '
 set -e
 SEARXNG_DIR="/usr/local/searxng"
@@ -45,7 +44,7 @@ VENV_DIR="$SEARXNG_DIR/searx-pyenv"
 if [ ! -d "$SRC_DIR" ]; then
     git clone "https://github.com/searxng/searxng.git" "$SRC_DIR"
 else
-    echo "[*] Repository già clonata. Aggiornamento codice..."
+    echo "[*] Repository già clonata. Aggiornamento in corso..."
     git -C "$SRC_DIR" pull
 fi
 
@@ -57,7 +56,6 @@ if ! grep -q "searx-pyenv/bin/activate" "$SEARXNG_DIR/.profile" 2>/dev/null; the
     echo ". $VENV_DIR/bin/activate" >> "$SEARXNG_DIR/.profile"
 fi
 
-# Attivazione VENV e installazione dipendenze Python
 source "$VENV_DIR/bin/activate"
 
 pip install -U --quiet pip setuptools wheel
@@ -67,22 +65,43 @@ cd "$SRC_DIR"
 pip install --use-pep517 --no-build-isolation -e .
 '
 
-# 6. Configurazione iniziale del file settings.yml
-echo "[*] Configurazione dei file di configurazione in /etc/searxng..."
+# 6. Generazione file di configurazione /etc/searxng/settings.yml
+echo "[*] Generazione configurazione /etc/searxng/settings.yml..."
 mkdir -p "/etc/searxng"
 
-if [ ! -f "/etc/searxng/settings.yml" ]; then
-    cp "/usr/local/searxng/searxng-src/utils/templates/etc/searxng/settings.yml" "/etc/searxng/settings.yml"
-    echo "[*] File /etc/searxng/settings.yml creato dal template."
-else
-    echo "[*] File /etc/searxng/settings.yml già presente, salto sovrascrittura."
-fi
+# Generazione secret_key univoca
+SECRET_KEY=$(openssl rand -hex 32)
 
-# Assegnazione permessi corretti alla cartella di configurazione
+cat << EOF > /etc/searxng/settings.yml
+# SearXNG settings
+
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "SearXNG"
+
+search:
+  safe_search: 2
+  autocomplete: 'duckduckgo'
+  formats:
+    - html
+
+server:
+  secret_key: "${SECRET_KEY}"
+  limiter: true
+  image_proxy: true
+  port: 8889
+  bind_address: "127.0.0.1"
+
+valkey:
+  url: valkey://localhost:6379/0
+EOF
+
 chown -R "searxng:searxng" "/etc/searxng"
 
-# 7. Creazione e avvio del servizio Systemd per SearXNG
-echo "[*] Configurazione del servizio Systemd per SearXNG..."
+# 7. Creazione e abilitazione del servizio Systemd
+echo "[*] Creazione del servizio systemd..."
 cat << 'EOF' > /etc/systemd/system/searxng.service
 [Unit]
 Description=SearXNG Metasearch Engine
@@ -102,14 +121,13 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-echo "[*] Ricarica daemon e avvio del servizio searxng..."
+echo "[*] Ricarica daemon systemd e avvio del servizio..."
 systemctl daemon-reload
 systemctl enable --now searxng.service
 
 echo "=============================================================================="
-echo "[OK] Installazione e configurazione del servizio SearXNG completate con successo!"
+echo "[OK] Setup completato con successo!"
 echo "------------------------------------------------------------------------------"
-echo " Servizio Systemd: attivo e configurato per l'avvio automatico."
-echo " Stato servizio:   sudo systemctl status searxng"
-echo " Endpoint attivo:  http://127.0.0.1:8888"
+echo " Stato servizio:   sudo systemctl status searxng.service"
+echo " Endpoint attivo:  http://127.0.0.1:8889"
 echo "=============================================================================="
