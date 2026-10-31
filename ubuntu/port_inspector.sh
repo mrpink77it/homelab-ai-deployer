@@ -1,5 +1,5 @@
 #!/bin/bash
-# port_inspector.sh - Ispeziona porte, visualizza file/giornali e gestisce/ferma/disabilita i servizi systemd.
+# port_inspector.sh - Ispeziona porte, visualizza file/giornale e gestisce/ferma/disabilita i servizi systemd.
 
 # Assicuriamoci di essere root
 if [ "$EUID" -ne 0 ]; then
@@ -11,6 +11,7 @@ BACKTITLE="Homelab AI - Port & Service Inspector"
 
 # Funzione menu principale
 main_menu() {
+    local CHOICE
     CHOICE=$(whiptail --title "Port & Service Inspector" --backtitle "$BACKTITLE" --menu \
         "Scegli un'operazione di gestione servizi:" 18 70 4 \
         "1" "📊 Visualizza Servizi, File e Giornale (Log)" \
@@ -18,7 +19,7 @@ main_menu() {
         "3" "🚫 Disabilita Servizi dall'Avvio (Selezione Multipla)" \
         "4" "🚪 Esci" 3>&1 1>&2 2>&3)
     
-    case $CHOICE in
+    case "$CHOICE" in
         1) view_services_menu ;;
         2) stop_services_menu ;;
         3) disable_services_menu ;;
@@ -40,19 +41,21 @@ view_services_menu() {
         return
     fi
 
+    local SELECTED_SRV
     SELECTED_SRV=$(whiptail --title "Seleziona Servizio" --backtitle "$BACKTITLE" --menu \
         "Selezionare un servizio da ispezionare:" 20 70 10 \
         "${services[@]}" 3>&1 1>&2 2>&3)
 
     [ -z "$SELECTED_SRV" ] && { main_menu; return; }
 
+    local ACTION
     ACTION=$(whiptail --title "Azione per $SELECTED_SRV" --backtitle "$BACKTITLE" --menu \
         "Cosa vuoi visualizzare per '$SELECTED_SRV'?" 15 60 3 \
         "1" "📄 Mostra file di configurazione (systemctl cat)" \
         "2" "📜 Mostra giornale / log recenti (journalctl)" \
         "3" "🔙 Torna al menu principale" 3>&1 1>&2 2>&3)
 
-    case $ACTION in
+    case "$ACTION" in
         1)
             clear
             echo "=== File di configurazione per $SELECTED_SRV ==="
@@ -82,15 +85,15 @@ stop_services_menu() {
         whiptail --title "Informazione" --msgbox "Nessun servizio attivo da fermare." 10 50
         main_menu
         return
-    }
+    fi
 
+    local CHOICES
     CHOICES=$(whiptail --title "Ferma Servizi" --backtitle "$BACKTITLE" --checklist \
         "Seleziona i servizi da FERMARE (Usa SPAZIO per selezionare, INVIO per confermare):" 20 75 10 \
         "${services[@]}" 3>&1 1>&2 2>&3)
 
     [ -z "$CHOICES" ] && { main_menu; return; }
 
-    # Rimuove le virgolette superflue restituite dalla checklist
     CHOICES=$(echo "$CHOICES" | tr -d '"')
 
     clear
@@ -115,8 +118,9 @@ disable_services_menu() {
         whiptail --title "Informazione" --msgbox "Nessun servizio abilitato al boot trovato." 10 50
         main_menu
         return
-    }
+    fi
 
+    local CHOICES
     CHOICES=$(whiptail --title "Disabilita Servizi all'Avvio" --backtitle "$BACKTITLE" --checklist \
         "Seleziona i servizi da DISABILITARE all'avvio (Usa SPAZIO per selezionare, INVIO per confermare):" 20 75 10 \
         "${services[@]}" 3>&1 1>&2 2>&3)
