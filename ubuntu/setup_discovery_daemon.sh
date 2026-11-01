@@ -28,7 +28,7 @@ async def probe_endpoint(ip: str, port: int):
     url_models = f"http://{ip}:{port}/v1/models"
     url_props = f"http://{ip}:{port}/props"
     try:
-        async with httpx.AsyncClient(timeout=1.5) as client:
+        async with httpx.AsyncClient(timeout=1.2) as client:
             resp_models = await client.get(url_models)
             if resp_models.status_code == 200:
                 models = []
@@ -63,7 +63,6 @@ async def probe_endpoint(ip: str, port: int):
                     "ram_util_pct": mem.percent
                 }
 
-                print(f"[OK] Rilevato backend attivo su {ip}:{port} ({backend_type})")
                 return {
                     "host": ip,
                     "port": port,
@@ -77,7 +76,6 @@ async def probe_endpoint(ip: str, port: int):
     return None
 
 async def scan_cluster():
-    # Rilevamento dinamico tramite psutil delle porte in ascolto nel range 8000-8500
     targets = set()
     for conn in psutil.net_connections(kind='inet'):
         if conn.status == psutil.CONN_LISTEN:
@@ -85,8 +83,6 @@ async def scan_cluster():
             if 8000 <= port <= 8500:
                 probe_ip = "127.0.0.1" if ip in ("0.0.0.0", "::") else ip
                 targets.add((probe_ip, port))
-
-    print(f"[*] Porte TCP attive trovate nel range 8000-8500: {targets}")
 
     tasks = [probe_endpoint(ip, port) for ip, port in targets]
     results = await asyncio.gather(*tasks) if tasks else []
@@ -112,13 +108,12 @@ async def scan_cluster():
                 })
             
     topology = {
-        "cluster_version": "2.2.0",
+        "cluster_version": "2.4.0",
         "nodes": list(nodes_map.values())
     }
     
     with open(AUTO_MANIFEST_PATH, "w") as f:
         json.dump(topology, f, indent=4)
-    print(f"[*] Topologia salvata in {AUTO_MANIFEST_PATH}. Nodi totali mappati: {len(nodes_map)}")
 
 if __name__ == "__main__":
     asyncio.run(scan_cluster())
@@ -144,7 +139,7 @@ Description=Run LLM Cluster Smart Auto-Discovery periodically
 
 [Timer]
 OnBootSec=5sec
-OnUnitActiveSec=2min
+OnUnitActiveSec=1min
 Unit=cluster-discovery.service
 
 [Install]
@@ -154,4 +149,4 @@ EOF
 systemctl daemon-reload
 systemctl enable --now cluster-discovery.timer
 
-echo "[OK] Demone di Auto-Discovery intelligente installato e attivato con successo!"
+echo "[OK] Demone di Auto-Discovery installato e attivato con successo!"
