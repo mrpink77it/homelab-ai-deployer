@@ -12,7 +12,7 @@ SERVICE_FILE="/etc/systemd/system/cluster-discovery.service"
 TIMER_FILE="/etc/systemd/system/cluster-discovery.timer"
 CURRENT_USER="${SUDO_USER:-root}"
 
-echo "[*] Configurazione del demone di auto-discovery in $INSTALL_DIR..."
+echo "[*] Configurazione del demone avanzato di auto-discovery in $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 
 cat << 'EOF' > "$SCRIPT_PATH"
@@ -21,8 +21,10 @@ import asyncio
 import httpx
 import json
 import socket
+import psutil
 
-PORT_RANGE = range(8000, 8025)
+# Range di porte esteso per includere standard e custom (es. 8080-8025, 8200)
+PORT_RANGE = list(range(8000, 8030)) + [8200]
 AUTO_MANIFEST_PATH = "/opt/gateway/cluster-topology.json"
 
 def get_local_ip():
@@ -37,18 +39,47 @@ def get_local_ip():
     return IP
 
 async def probe_endpoint(ip: str, port: int):
-    url = f"http://{ip}:{port}/v1/models"
+    url_models = f"http://{ip}:{port}/v1/models"
+    url_props = f"http://{ip}:{port}/props"
     try:
-        async with httpx.AsyncClient(timeout=0.8) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200:
-                data = resp.json()
+        async with httpx.AsyncClient(timeout=1.2) as client:
+            resp_models = await client.get(url_models)
+            if resp_models.status_code == 200:
+                data = resp_models.json()
                 models = [m.get("id") for m in data.get("data", [])]
+                
+                # Rilevamento proprietà e backend (CUDA / Vulkan / CPU)
+                backend_type = "llama.cpp (Auto)"
+                try:
+                    resp_props = await client.get(url_props)
+                    if resp_props.status_code == 200:
+                        props = resp_props.json()
+                        if "cuda" in str(props).lower():
+                            backend_type = "CUDA (NVIDIA)"
+                        elif "vulkan" in str(props).lower():
+                            backend_type = "Vulkan (Mixed/GPU)"
+                        else:
+                            backend_type = "CPU / OpenBLAS"
+                except Exception:
+                    pass
+                
+                # Raccolta metriche hardware del nodo
+                mem = psutil.virtual_memory()
+                cpu_pct = psutil.cpu_percent(interval=None)
+                hardware_metrics = {
+                    "cpu_util_pct": cpu_pct,
+                    "ram_used_gb": round(mem.used / (1024**3), 2),
+                    "ram_total_gb": round(mem.total / (1024**3), 2),
+                    "ram_util_pct": mem.percent
+                }
+
                 return {
                     "host": ip,
                     "port": port,
                     "status": "ONLINE",
-                    "models": models
+                    "models": models,
+                    "backend_type": backend_type,
+                    "hardware": hardware_metrics
                 }
     except Exception:
         pass
@@ -82,7 +113,9 @@ async def scan_subnet():
             nodes_map[host]["backends"].append({
                 "port": res["port"],
                 "models_loaded": res["models"],
-                "status": res["status"]
+                "status": res["status"],
+                "backend_type": res["backend_type"],
+                "hardware": res["hardware"]
             })
             
     topology = {
@@ -116,7 +149,7 @@ cat << EOF > "$TIMER_FILE"
 Description=Run LLM Cluster Auto-Discovery periodically
 
 [Timer]
-OnBootSec=10sec
+OnBootSec=5sec
 OnUnitActiveSec=2min
 Unit=cluster-discovery.service
 
@@ -127,4 +160,4 @@ EOF
 systemctl daemon-reload
 systemctl enable --now cluster-discovery.timer
 
-echo "[OK] Demone di Auto-Discovery installato e attivato con successo!"
+echo "[OK] Demone di Auto-Discovery avanzato installato e avviato con successo!"
