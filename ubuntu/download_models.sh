@@ -24,6 +24,12 @@ fi
 HF_ARG=""
 [ -n "$HF_TOKEN" ] && HF_ARG="--token $HF_TOKEN"
 
+# Controllo e installazione automatica di huggingface_hub se mancante
+if [ "$TEST_MODE" = false ] && ! command -v huggingface-cli &> /dev/null; then
+    echo "[*] huggingface-cli non trovato. Installazione dipendenze in corso..."
+    pip3 install --upgrade huggingface_hub[cli] || sudo pip3 install --upgrade huggingface_hub[cli]
+fi
+
 [ "$TEST_MODE" = false ] && echo "=== Inizio Download Modelli in $TARGET_DIR ==="
 
 download_model() {
@@ -52,7 +58,8 @@ download_model() {
         echo "    [OK] File già presente, skip."
         return 0
     fi
-    huggingface-cli download "$repo" "$filename" --local-dir "$TARGET_DIR" --local-dir-use-symlinks False $HF_ARG && echo "    [OK] Completato" || echo "    [-] ERRORE"
+    
+    huggingface-cli download "$repo" "$filename" --local-dir "$TARGET_DIR" $HF_ARG && echo "    [OK] Completato" || echo "    [-] ERRORE"
 }
 
 # Modelli verificati e stabili
