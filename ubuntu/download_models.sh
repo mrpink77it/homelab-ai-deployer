@@ -24,10 +24,18 @@ fi
 HF_ARG=""
 [ -n "$HF_TOKEN" ] && HF_ARG="--token $HF_TOKEN"
 
-# Controllo e installazione automatica di huggingface_hub se mancante
-if [ "$TEST_MODE" = false ] && ! command -v huggingface-cli &> /dev/null; then
-    echo "[*] huggingface-cli non trovato. Installazione dipendenze in corso..."
-    pip3 install --upgrade huggingface_hub[cli] || sudo pip3 install --upgrade huggingface_hub[cli]
+# Gestione isolata di huggingface-cli tramite virtualenv locale (evita PEP 668)
+HF_CLI="huggingface-cli"
+if ! command -v huggingface-cli &> /dev/null; then
+    VENV_DIR="/opt/hf_cli_venv"
+    if [ ! -f "$VENV_DIR/bin/huggingface-cli" ]; then
+        echo "[*] huggingface-cli non trovato. Configurazione ambiente virtuale isolato in $VENV_DIR..."
+        sudo apt update -qq && sudo apt install -y python3-venv python3-pip -qq
+        sudo python3 -m venv "$VENV_DIR"
+        sudo "$VENV_DIR/bin/pip" install --upgrade pip -qq
+        sudo "$VENV_DIR/bin/pip" install huggingface_hub[cli] -qq
+    fi
+    HF_CLI="$VENV_DIR/bin/huggingface-cli"
 fi
 
 [ "$TEST_MODE" = false ] && echo "=== Inizio Download Modelli in $TARGET_DIR ==="
@@ -59,7 +67,7 @@ download_model() {
         return 0
     fi
     
-    huggingface-cli download "$repo" "$filename" --local-dir "$TARGET_DIR" $HF_ARG && echo "    [OK] Completato" || echo "    [-] ERRORE"
+    sudo "$HF_CLI" download "$repo" "$filename" --local-dir "$TARGET_DIR" $HF_ARG && echo "    [OK] Completato" || echo "    [-] ERRORE"
 }
 
 # Modelli verificati e stabili
@@ -85,7 +93,7 @@ download_model "unsloth/Qwen2.5-Coder-14B-Instruct-GGUF" "Qwen2.5-Coder-14B-Inst
 download_model "unsloth/Qwen2.5-Coder-14B-Instruct-GGUF" "Qwen2.5-Coder-14B-Instruct-Q5_K_M.gguf"
 download_model "unsloth/Qwen2.5-Coder-32B-Instruct-GGUF" "Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf"
 download_model "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF" "Qwen2.5-Coder-7B-Instruct-Q6_K.gguf"
-download_model "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF" "Qwen2.5-Coder-7B-Instruct-Q8_0.gguf"
+download_model "unsloth/Qwen2.5-Coder-7B-Instruct-Q8_0.gguf" "Qwen2.5-Coder-7B-Instruct-Q8_0.gguf"
 download_model "unsloth/Qwen2.5-VL-7B-Instruct-GGUF" "Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf"
 download_model "mudler/timestral-cpp-gguf" "209M/timestral-209m-f32.gguf"
 download_model "featherless-ai-quants/unsloth-Meta-Llama-3.1-8B-Instruct-GGUF" "unsloth-Meta-Llama-3.1-8B-Instruct-Q6_K.gguf"
