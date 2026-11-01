@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 if [ "$EUID" -ne 0 ]; then
   echo "[-] Errore: Esegui questo script con sudo o come root."
@@ -127,4 +127,4 @@ EOF
 systemctl daemon-reload
 systemctl enable --now cluster-discovery.timer
 
-echo "[OK] Demone di Auto-Discovery installato e avviato con successo!"
+echo "[OK] Demone di Auto-Discovery installato e attivato con successo!"
