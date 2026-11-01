@@ -20,14 +20,14 @@ port="${4:-8080}"
 
 usage() {
     echo "Uso:"
-    echo "  sudo ./add_node.sh add <node_id> <ip_address> <port>   (Aggiunge o aggiorna un nodo manuale)"
+    echo "  sudo ./add_node.sh add <node_id> <ip_address> <port>   (Aggiunge o aggiorna un nodo manuale/esterno)"
     echo "  sudo ./add_node.sh remove <node_id>                    (Rimuove un nodo manuale)"
     echo "  sudo ./add_node.sh list                                (Elenca i nodi manuali)"
     exit 1
 }
 
 if [ "$action" = "list" ]; then
-    echo "=== Nodi Statici Manuali ==="
+    echo "=== Nodi Statici ed Esterni ==="
     cat "$STATIC_FILE"
     exit 0
 fi
@@ -57,7 +57,7 @@ data["nodes"].append({
 
 with open(path, "w") as f:
     json.dump(data, f, indent=4)
-print(f"[OK] Nodo statico {nid} ({host}:{port}) aggiunto con successo.")
+print(f"[OK] Nodo statico/esterno {nid} ({host}:{port}) aggiunto con successo.")
 ' "$STATIC_FILE" "$node_id" "$host" "$port"
 
 elif [ "$action" = "remove" ]; then
