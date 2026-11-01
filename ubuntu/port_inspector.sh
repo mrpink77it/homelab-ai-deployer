@@ -1,5 +1,5 @@
 #!/bin/bash
-# port_inspector.sh - Ispeziona porte, visualizza file/giornale e gestisce/ferma/disabilita i servizi systemd.
+
 
 # Assicuriamoci di essere root
 if [ "$EUID" -ne 0 ]; then
@@ -14,10 +14,10 @@ main_menu() {
     local CHOICE
     CHOICE=$(whiptail --title "Port & Service Inspector" --backtitle "$BACKTITLE" --menu \
         "Scegli un'operazione di gestione servizi:" 18 70 4 \
-        "1" "📊 Visualizza Servizi, File e Giornale (Log)" \
-        "2" "🛑 Ferma Servizi (Selezione Multipla)" \
-        "3" "🚫 Disabilita Servizi dall'Avvio (Selezione Multipla)" \
-        "4" "🚪 Esci" 3>&1 1>&2 2>&3)
+        "1" "Visualizza Servizi, File e Giornale (Log)" \
+        "2" "Ferma Servizi (Selezione Multipla)" \
+        "3" "Disabilita Servizi dall'Avvio (Selezione Multipla)" \
+        "4" "Esci" 3>&1 1>&2 2>&3)
     
     case "$CHOICE" in
         1) view_services_menu ;;
