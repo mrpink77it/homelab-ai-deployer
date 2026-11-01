@@ -21,21 +21,14 @@ if [ -z "$HF_TOKEN" ] && [ -f "/root/.bashrc" ]; then
     HF_TOKEN=$(sudo grep -E '^export HF_TOKEN=' /root/.bashrc | cut -d'=' -f2 | tr -d '"' | tr -d "'" || true)
 fi
 
-HF_ARG=""
-[ -n "$HF_TOKEN" ] && HF_ARG="--token $HF_TOKEN"
-
-# Gestione isolata di huggingface-cli tramite virtualenv locale (evita PEP 668)
-HF_CLI="huggingface-cli"
-if ! command -v huggingface-cli &> /dev/null; then
-    VENV_DIR="/opt/hf_cli_venv"
-    if [ ! -f "$VENV_DIR/bin/huggingface-cli" ]; then
-        echo "[*] huggingface-cli non trovato. Configurazione ambiente virtuale isolato in $VENV_DIR..."
-        sudo apt update -qq && sudo apt install -y python3-venv python3-pip -qq
-        sudo python3 -m venv "$VENV_DIR"
-        sudo "$VENV_DIR/bin/pip" install --upgrade pip -qq
-        sudo "$VENV_DIR/bin/pip" install huggingface_hub[cli] -qq
-    fi
-    HF_CLI="$VENV_DIR/bin/huggingface-cli"
+# Configurazione ambiente virtuale isolato per evitare problemi con sudo e PEP 668
+VENV_DIR="/opt/hf_cli_venv"
+if [ "$TEST_MODE" = false ] && [ ! -f "$VENV_DIR/bin/python3" ]; then
+    echo "[*] Configurazione ambiente virtuale isolato in $VENV_DIR..."
+    sudo apt update -qq && sudo apt install -y python3-venv python3-pip -qq
+    sudo python3 -m venv "$VENV_DIR"
+    sudo "$VENV_DIR/bin/pip" install --upgrade pip -qq
+    sudo "$VENV_DIR/bin/pip" install huggingface_hub -qq
 fi
 
 [ "$TEST_MODE" = false ] && echo "=== Inizio Download Modelli in $TARGET_DIR ==="
@@ -67,7 +60,22 @@ download_model() {
         return 0
     fi
     
-    sudo "$HF_CLI" download "$repo" "$filename" --local-dir "$TARGET_DIR" $HF_ARG && echo "    [OK] Completato" || echo "    [-] ERRORE"
+    # Esecuzione diretta tramite Python per garantire compatibilità assoluta con sudo
+    sudo "$VENV_DIR/bin/python3" -c "
+from huggingface_hub import hf_hub_download
+import sys
+try:
+    hf_hub_download(
+        repo_id=sys.argv[1],
+        filename=sys.argv[2],
+        local_dir=sys.argv[3],
+        token=sys.argv[4] if sys.argv[4] else None
+    )
+    print('    [OK] Completato')
+except Exception as e:
+    print(f'    [-] ERRORE: {e}')
+    sys.exit(1)
+" "$repo" "$filename" "$TARGET_DIR" "${HF_TOKEN:-}"
 }
 
 # Modelli verificati e stabili
@@ -93,7 +101,7 @@ download_model "unsloth/Qwen2.5-Coder-14B-Instruct-GGUF" "Qwen2.5-Coder-14B-Inst
 download_model "unsloth/Qwen2.5-Coder-14B-Instruct-GGUF" "Qwen2.5-Coder-14B-Instruct-Q5_K_M.gguf"
 download_model "unsloth/Qwen2.5-Coder-32B-Instruct-GGUF" "Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf"
 download_model "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF" "Qwen2.5-Coder-7B-Instruct-Q6_K.gguf"
-download_model "unsloth/Qwen2.5-Coder-7B-Instruct-Q8_0.gguf" "Qwen2.5-Coder-7B-Instruct-Q8_0.gguf"
+download_model "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF" "Qwen2.5-Coder-7B-Instruct-Q8_0.gguf"
 download_model "unsloth/Qwen2.5-VL-7B-Instruct-GGUF" "Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf"
 download_model "mudler/timestral-cpp-gguf" "209M/timestral-209m-f32.gguf"
 download_model "featherless-ai-quants/unsloth-Meta-Llama-3.1-8B-Instruct-GGUF" "unsloth-Meta-Llama-3.1-8B-Instruct-Q6_K.gguf"
