@@ -9,7 +9,6 @@ fi
 STATIC_FILE="/opt/gateway/cluster-static-nodes.json"
 mkdir -p /opt/gateway
 
-# Inizializza il file JSON se non esiste
 if [ ! -f "$STATIC_FILE" ]; then
     echo '{"nodes": []}' > "$STATIC_FILE"
 fi
@@ -17,7 +16,7 @@ fi
 action="${1:-}"
 node_id="${2:-}"
 host="${3:-}"
-port="${4:-8001}"
+port="${4:-8080}"
 
 usage() {
     echo "Uso:"
@@ -48,14 +47,12 @@ try:
 except Exception:
     data = {"nodes": []}
 
-# Rimuovi se esiste già per evitar duplicati
 data["nodes"] = [n for n in data["nodes"] if n["node_id"] != nid]
 
-# Aggiungi nuovo nodo
 data["nodes"].append({
     "node_id": nid,
     "host": host,
-    "backends": [{"port": port, "status": "MANUAL_STATIC"}]
+    "backends": [{"port": port, "status": "MANUAL_STATIC", "models_loaded": ["default"]}]
 })
 
 with open(path, "w") as f:
