@@ -15,17 +15,15 @@ CURRENT_USER="${SUDO_USER:-root}"
 echo "[*] Configurazione del demone di auto-discovery in $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 
-# 1. Scrittura dello script di discovery robusto
 cat << 'EOF' > "$SCRIPT_PATH"
 #!/usr/bin/env python3
 import asyncio
 import httpx
 import json
-import subprocess
 import socket
 
-PORT_RANGE = range(8001, 8020)
-MANIFEST_PATH = "/opt/gateway/cluster-topology.json"
+PORT_RANGE = range(8000, 8025)
+AUTO_MANIFEST_PATH = "/opt/gateway/cluster-topology.json"
 
 def get_local_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -89,11 +87,10 @@ async def scan_subnet():
             
     topology = {
         "cluster_version": "2.2.0",
-        "last_updated": asyncio.get_event_loop().time(),
         "nodes": list(nodes_map.values())
     }
     
-    with open(MANIFEST_PATH, "w") as f:
+    with open(AUTO_MANIFEST_PATH, "w") as f:
         json.dump(topology, f, indent=4)
 
 if __name__ == "__main__":
@@ -103,7 +100,6 @@ EOF
 chmod +x "$SCRIPT_PATH"
 chown "$CURRENT_USER:$CURRENT_USER" "$SCRIPT_PATH"
 
-# 2. Creazione Systemd Service per il task di discovery
 cat << EOF > "$SERVICE_FILE"
 [Unit]
 Description=LLM Cluster Auto-Discovery Worker
@@ -115,7 +111,6 @@ User=$CURRENT_USER
 ExecStart=$INSTALL_DIR/venv/bin/python $SCRIPT_PATH
 EOF
 
-# 3. Creazione Systemd Timer (esegue il task ogni 2 minuti e subito all'avvio)
 cat << EOF > "$TIMER_FILE"
 [Unit]
 Description=Run LLM Cluster Auto-Discovery periodically
@@ -129,11 +124,7 @@ Unit=cluster-discovery.service
 WantedBy=timers.target
 EOF
 
-# 4. Attivazione del Timer Systemd
 systemctl daemon-reload
 systemctl enable --now cluster-discovery.timer
 
-echo ""
 echo "[OK] Demone di Auto-Discovery installato e avviato con successo!"
-echo " Il timer eseguirà la scansione della subnet ogni 2 minuti."
-echo " Stato timer: sudo systemctl status cluster-discovery.timer"
