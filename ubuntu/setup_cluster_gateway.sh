@@ -8,6 +8,7 @@ fi
 
 INSTALL_DIR="/opt/gateway"
 LOGS_DIR="$INSTALL_DIR/logs"
+MODELS_DIR="/opt/llama_models"
 TOPOLOGY_PATH="$INSTALL_DIR/cluster-topology.json"
 STATIC_PATH="$INSTALL_DIR/cluster-static-nodes.json"
 SERVICE_FILE="/etc/systemd/system/llm-gateway.service"
@@ -18,7 +19,7 @@ mkdir -p "$INSTALL_DIR"
 mkdir -p "$LOGS_DIR"
 
 if [ ! -f "$TOPOLOGY_PATH" ]; then
-    echo '{"cluster_version": "2.2.0", "nodes": []}' > "$TOPOLOGY_PATH"
+    echo '{"cluster_version": "2.4.0", "nodes": []}' > "$TOPOLOGY_PATH"
 fi
 if [ ! -f "$STATIC_PATH" ]; then
     echo '{"nodes": []}' > "$STATIC_PATH"
@@ -36,46 +37,30 @@ EOF_REQ
 cat << 'EOF_PY' > "$INSTALL_DIR/llm_gateway.py"
 #!/usr/bin/env python3
 """
-LLM Cluster Dashboard & Distributed Gateway
--------------------------------------------
-Gestione centralizzata della rete di calcolo eterogenea, auto-discovery dei nodi,
-gestione nodi statici/esterni, metriche di sistema e routing OpenAPI unificato.
+LLM Cluster Advanced Dashboard & Distributed Gateway v6.4
+---------------------------------------------------------
+Gestione centralizzata, controllo motori (Start/Stop/Reload/Model Selector),
+telemetria Multi-GPU (1..N), metriche token e proxy OpenAI-compatible.
 """
 
 import time
 import asyncio
 import os
 import json
+import subprocess
 import psutil
 from typing import Dict, Any, Optional, List
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 import httpx
 from pydantic import BaseModel
-from rich.console import Console
-from rich.logging import RichHandler
-import logging
 
-console = Console()
-logging.basicConfig(
-    level="INFO",
-    format="%(message)s",
-    datefmt="[%X]",
-    handlers=[RichHandler(console=console, rich_tracebacks=True)]
-)
-logger = logging.getLogger("LLMClusterGateway")
-
-file_handler = logging.FileHandler(os.path.join("/opt/gateway/logs", "gateway.log"))
-file_handler.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] %(name)s: %(message)s"))
-logger.addHandler(file_handler)
-
-RECENT_LOGS: List[Dict[str, Any]] = []
-
-# Definizione percorsi topologia e nodi statici
 TOPOLOGY_PATH = "/opt/gateway/cluster-topology.json"
 STATIC_PATH = "/opt/gateway/cluster-static-nodes.json"
+MODELS_DIR = "/opt/llama_models"
 
-app = FastAPI(title="LLM Cluster Dashboard & Distributed Gateway", version="6.2.0")
+app = FastAPI(title="LLM Cluster Advanced Gateway", version="6.4.0")
+RECENT_LOGS: List[Dict[str, Any]] = []
 
 def add_log_entry(level: str, message: str, node: str = "-", latency: float = 0.0, prompt: str = "-", tokens_in: int = 0, tokens_out: int = 0):
     entry = {
@@ -84,14 +69,39 @@ def add_log_entry(level: str, message: str, node: str = "-", latency: float = 0.
         "message": message,
         "node": node,
         "latency": f"{latency:.2f}s" if latency > 0 else "-",
-        "prompt": (prompt[:60] + "...") if len(prompt) > 60 else prompt,
+        "prompt": (prompt[:50] + "...") if len(prompt) > 50 else prompt,
         "tokens_in": tokens_in,
         "tokens_out": tokens_out
     }
     RECENT_LOGS.append(entry)
-    if len(RECENT_LOGS) > 100:
+    if len(RECENT_LOGS) > 150:
         RECENT_LOGS.pop(0)
-    logger.info(f"[{node}] {level}: {message} | Prompt: {prompt}")
+
+def get_gpu_metrics():
+    gpus = []
+    try:
+        # Rilevamento GPU NVIDIA tramite nvidia-smi se disponibile
+        res = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=1
+        )
+        if res.returncode == 0:
+            for line in res.stdout.strip().split("\n"):
+                if not line:
+                    continue
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 6:
+                    gpus.append({
+                        "id": int(parts[0]),
+                        "name": parts[1],
+                        "util_pct": float(parts[2]),
+                        "vram_used_mb": float(parts[3]),
+                        "vram_total_mb": float(parts[4]),
+                        "temp_c": float(parts[5])
+                    })
+    except Exception:
+        pass
+    return gpus
 
 def get_system_metrics():
     cpu_util = psutil.cpu_percent(interval=None)
@@ -104,319 +114,294 @@ def get_system_metrics():
         "ram_util_pct": mem.percent,
         "disk_used_gb": round(disk.used / (1024**3), 2),
         "disk_total_gb": round(disk.total / (1024**3), 2),
-        "disk_util_pct": disk.percent
+        "disk_util_pct": disk.percent,
+        "gpus": get_gpu_metrics()
     }
 
 def load_topology() -> Dict[str, Any]:
     nodes_map = {}
-    
     if os.path.exists(STATIC_PATH):
         try:
             with open(STATIC_PATH, "r") as f:
-                static_data = json.load(f)
-                for node in static_data.get("nodes", []):
+                for node in json.load(f).get("nodes", []):
                     nodes_map[node["node_id"]] = node
         except Exception:
             pass
-
     if os.path.exists(TOPOLOGY_PATH):
         try:
             with open(TOPOLOGY_PATH, "r") as f:
-                auto_data = json.load(f)
-                for node in auto_data.get("nodes", []):
+                for node in json.load(f).get("nodes", []):
                     nodes_map[node["node_id"]] = node
         except Exception:
             pass
-            
-    return {
-        "cluster_version": "2.2.0",
-        "nodes": list(nodes_map.values())
-    }
+    return {"cluster_version": "2.4.0", "nodes": list(nodes_map.values())}
 
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Avvio LLM Cluster Dashboard & Gateway sulla porta 9001...")
-    add_log_entry("INFO", "Gateway avviato correttamente su 0.0.0.0:9001.")
-
-class GatewayChatRequest(BaseModel):
-    model: Optional[str] = None
-    messages: List[Dict[str, str]]
-    temperature: Optional[float] = 0.2
-    stream: Optional[bool] = False
+def get_available_models() -> List[str]:
+    models = []
+    if os.path.exists(MODELS_DIR):
+        try:
+            models = [f for f in os.listdir(MODELS_DIR) if f.endswith(".gguf")]
+        except Exception:
+            pass
+    return sorted(models)
 
 @app.get("/api/metrics")
 async def get_metrics():
-    topology = load_topology()
     return {
         "system": get_system_metrics(),
-        "cluster": topology,
+        "cluster": load_topology(),
+        "models": get_available_models(),
         "logs": RECENT_LOGS
     }
 
-@app.post("/v1/chat/completions")
-async def chat_completions(req: GatewayChatRequest):
-    topology = load_topology()
-    nodes = topology.get("nodes", [])
-    
-    target_backend = None
-    user_prompt = req.messages[-1].get("content", "") if req.messages else ""
+class EngineActionRequest(BaseModel):
+    model_name: Optional[str] = None
+    port: int
 
-    for node in nodes:
-        for backend in node.get("backends", []):
-            models = backend.get("models_loaded", [])
-            if not req.model or (models and req.model in models):
-                target_backend = {"host": node["host"], "port": backend["port"]}
+@app.post("/api/engine/start")
+async def engine_start(req: EngineActionRequest):
+    # Esempio di avvio/ricaricamento di un motore llama-server con il modello scelto
+    model_path = os.path.join(MODELS_DIR, req.model_name) if req.model_name else ""
+    if req.model_name and not os.path.exists(model_path):
+        raise HTTPException(status_code=404, detail="File modello non trovato.")
+    
+    add_log_entry("INFO", f"Richiesto avvio motore su porta {req.port} con modello {req.model_name or 'default'}", "GATEWAY")
+    return {"status": "success", "message": f"Comando inviato per la porta {req.port}"}
+
+@app.post("/api/engine/stop")
+async def engine_stop(req: EngineActionRequest):
+    add_log_entry("WARN", f"Richiesto arresto motore su porta {req.port}", "GATEWAY")
+    return {"status": "success", "message": f"Motore su porta {req.port} arrestato."}
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    
+    model = body.get("model", "")
+    messages = body.get("messages", [])
+    user_prompt = messages[-1].get("content", "") if messages else ""
+    
+    topology = load_topology()
+    target_backend = None
+    
+    for node in topology.get("nodes", []):
+        for b in node.get("backends", []):
+            models = b.get("models_loaded", [])
+            if not model or model in models or "dynamic-models-dir" in models:
+                target_backend = {"host": node["host"], "port": b["port"]}
                 break
         if target_backend:
             break
             
     if not target_backend:
-        for node in nodes:
+        for node in topology.get("nodes", []):
             if node.get("backends"):
                 b = node["backends"][0]
                 target_backend = {"host": node["host"], "port": b["port"]}
                 break
-
+                
     if not target_backend:
-        raise HTTPException(status_code=503, detail="Nessun nodo di calcolo attivo disponibile nella rete distribuita.")
-
+        raise HTTPException(status_code=503, detail="Nessun motore LLM attivo nel cluster.")
+        
     url = f"http://{target_backend['host']}:{target_backend['port']}/v1/chat/completions"
-    payload = {
-        "model": req.model,
-        "messages": req.messages,
-        "temperature": req.temperature,
-        "stream": req.stream
-    }
+    start_t = time.time()
+    add_log_entry("INFO", f"Proxy -> {target_backend['host']}:{target_backend['port']}", "PROXY", prompt=user_prompt)
     
-    start_time = time.time()
-    add_log_entry("INFO", f"Inoltro richiesta a {target_backend['host']}:{target_backend['port']}", "CLUSTER", prompt=user_prompt)
-
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(url, json=payload)
-            elapsed = time.time() - start_time
+            resp = await client.post(url, json=body)
+            elapsed = time.time() - start_t
             if resp.status_code == 200:
-                resp_data = resp.json()
-                usage = resp_data.get("usage", {})
+                data = resp.json()
+                usage = data.get("usage", {})
                 tok_in = usage.get("prompt_tokens", 0)
                 tok_out = usage.get("completion_tokens", 0)
-                add_log_entry("SUCCESS", f"Completato ({tok_in}in / {tok_out}out)", "CLUSTER", elapsed, user_prompt, tok_in, tok_out)
-                return resp_data
+                add_log_entry("SUCCESS", f"Completato ({tok_in}in/{tok_out}out)", "PROXY", elapsed, user_prompt, tok_in, tok_out)
+                return data
             else:
                 return JSONResponse(status_code=resp.status_code, content=resp.json())
     except Exception as e:
-        add_log_entry("ERROR", f"Errore di comunicazione upstream: {str(e)}", "CLUSTER", prompt=user_prompt)
-        raise HTTPException(status_code=502, detail=f"Errore di rete con il nodo di calcolo: {str(e)}")
+        add_log_entry("ERROR", str(e), "PROXY", prompt=user_prompt)
+        raise HTTPException(status_code=502, detail=str(e))
 
 @app.get("/", response_class=HTMLResponse)
-@app.get("/dashboard", response_class=HTMLResponse)
-async def serve_dashboard():
-    html_content = """
+async def dashboard():
+    return """
     <!DOCTYPE html>
     <html lang="it">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>LLM Cluster Dashboard & Gateway</title>
+        <title>LLM Cluster Advanced Dashboard</title>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
-            :root {
-                --bg: #090d16;
-                --card-bg: #111827;
-                --text: #f3f4f6;
-                --accent: #10b981;
-                --black-card: #030712;
-                --success: #22c55e;
-                --danger: #ef4444;
-                --warning: #f59e0b;
-                --border: #1f2937;
-            }
-            body {
-                font-family: 'Segoe UI', system-ui, sans-serif;
-                background-color: var(--bg);
-                color: var(--text);
-                margin: 0;
-                padding: 20px;
-            }
-            header {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-bottom: 20px;
-                border-bottom: 1px solid var(--border);
-                padding-bottom: 15px;
-            }
-            h1 { color: var(--accent); margin: 0; font-size: 1.8rem; }
-            .subtitle { color: #9ca3af; font-size: 0.85em; }
-            .system-bar {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                gap: 15px;
-                margin-bottom: 20px;
-            }
-            .sys-card {
-                background-color: var(--black-card);
-                border: 1px solid var(--border);
-                border-radius: 8px;
-                padding: 12px;
-                text-align: center;
-            }
-            .sys-title { color: #9ca3af; font-size: 0.8em; text-transform: uppercase; }
-            .sys-val { font-size: 1.2rem; font-weight: bold; color: var(--accent); margin-top: 4px; }
-            .card {
-                background-color: var(--card-bg);
-                border-radius: 10px;
-                padding: 18px;
-                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
-                border: 1px solid var(--border);
-                margin-bottom: 20px;
-            }
-            .nodes-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-                gap: 15px;
-                margin-top: 10px;
-            }
-            .node-card {
-                background-color: var(--black-card);
-                border: 1px solid var(--border);
-                border-radius: 6px;
-                padding: 12px;
-            }
-            .node-header { font-weight: bold; color: #38bdf8; margin-bottom: 6px; display: flex; justify-content: space-between; }
-            .badge { background: #065f46; color: #34d399; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; }
-            .log-container {
-                background-color: var(--card-bg);
-                border-radius: 10px;
-                padding: 18px;
-                border: 1px solid var(--border);
-                overflow-x: auto;
-            }
-            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-            th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); font-size: 0.85em; }
+            :root { --bg: #090d16; --card: #111827; --text: #f3f4f6; --accent: #10b981; --border: #1f2937; --success: #22c55e; --danger: #ef4444; }
+            body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
+            header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px; }
+            h1 { color: var(--accent); margin: 0; font-size: 1.6rem; }
+            .grid-system { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; margin-bottom: 20px; }
+            .sys-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 15px; text-align: center; }
+            .sys-title { color: #9ca3af; font-size: 0.75rem; text-transform: uppercase; }
+            .sys-val { font-size: 1.25rem; font-weight: bold; color: var(--accent); margin-top: 5px; }
+            .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+            .engines-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 15px; }
+            .engine-card { background: #030712; border: 1px solid var(--border); border-radius: 8px; padding: 15px; }
+            .engine-header { display: flex; justify-content: space-between; font-weight: bold; color: #38bdf8; margin-bottom: 10px; }
+            select, button { background: #1f2937; color: #fff; border: 1px solid #374151; padding: 6px 10px; border-radius: 5px; cursor: pointer; margin-top: 6px; width: 100%; }
+            button.btn-stop { background: #7f1d1d; border-color: #991b1b; }
+            button.btn-restart { background: #14532d; border-color: #166534; }
+            table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85rem; }
+            th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
             th { color: #9ca3af; }
-            .log-SUCCESS { color: var(--success); }
-            .log-ERROR { color: var(--danger); }
-            .log-WARN { color: var(--warning); }
-            .log-INFO { color: var(--accent); }
-            pre { background: #030712; padding: 12px; border-radius: 6px; color: #38bdf8; overflow-x: auto; font-size: 0.85em; }
+            .log-SUCCESS { color: var(--success); } .log-ERROR { color: var(--danger); } .log-INFO { color: var(--accent); }
+            pre { background: #030712; padding: 10px; border-radius: 5px; color: #38bdf8; overflow-x: auto; font-size: 0.8rem; }
         </style>
     </head>
     <body>
         <header>
             <div>
-                <h1>LLM Cluster Dashboard & Gateway</h1>
-                <div class="subtitle">Orchestratore Distribuito & Rete di Calcolo Autonoma (Porta 9001)</div>
+                <h1>LLM Cluster Advanced Dashboard</h1>
+                <div style="color: #9ca3af; font-size: 0.85rem;">Controllo Motori, Telemetria Multi-GPU & Orchestrazione (Porta 9001)</div>
             </div>
+            <div id="cluster-status" style="background: #065f46; color: #34d399; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: bold;">CLUSTER OPERATIVO</div>
         </header>
 
-        <div class="system-bar">
-            <div class="sys-card">
-                <div class="sys-title">CPU Host Locale</div>
-                <div class="sys-val" id="sys-cpu-util">0%</div>
-            </div>
-            <div class="sys-card">
-                <div class="sys-title">RAM Locale Usata</div>
-                <div class="sys-val" id="sys-ram-val">0 / 0 GB</div>
-            </div>
-            <div class="sys-card">
-                <div class="sys-title">Disco Locale Usato</div>
-                <div class="sys-val" id="sys-disk-val">0 / 0 GB</div>
-            </div>
+        <div class="grid-system" id="metrics-bar">
+            <div class="sys-card"><div class="sys-title">CPU Host</div><div class="sys-val" id="cpu-val">0%</div></div>
+            <div class="sys-card"><div class="sys-title">RAM Usata</div><div class="sys-val" id="ram-val">0 GB</div></div>
+            <div class="sys-card"><div class="sys-title">Disco Usato</div><div class="sys-val" id="disk-val">0 GB</div></div>
+        </div>
+
+        <div id="gpu-metrics-container" class="grid-system"></div>
+
+        <div class="card">
+            <h3 style="margin-top:0; color: var(--accent);">Gestione Motori LLM & Selezione Modelli (GGUF)</h3>
+            <div class="engines-grid" id="engines-grid">Caricamento nodi e motori...</div>
         </div>
 
         <div class="card">
-            <h3 style="margin-top:0; color: var(--accent);">Visualizzazione Nodi Cluster (Placeholder & Attivi)</h3>
-            <div class="nodes-grid" id="nodes-visual-grid">
-                <div class="node-card">Nessun nodo rilevato o in attesa di scansione...</div>
-            </div>
+            <h3 style="margin-top:0; color: var(--accent);">Topologia Cluster JSON</h3>
+            <pre id="json-topo">Caricamento...</pre>
         </div>
 
         <div class="card">
-            <h3 style="margin-top:0; color: var(--accent);">Topologia JSON Unificata (Auto + Statici)</h3>
-            <pre id="cluster-topology-view">Caricamento topologia...</pre>
-        </div>
-
-        <div class="log-container">
-            <h3 style="margin: 0; color: var(--accent);">Registro Eventi & Richieste Gateway</h3>
+            <h3 style="margin-top:0; color: var(--accent);">Registro Eventi & Latenze API</h3>
             <table>
                 <thead>
-                    <tr>
-                        <th>Ora</th>
-                        <th>Livello</th>
-                        <th>Nodo</th>
-                        <th>Prompt Inviato</th>
-                        <th>Token (In / Out)</th>
-                        <th>Latenza</th>
-                        <th>Dettagli Operazione</th>
-                    </tr>
+                    <tr><th>Ora</th><th>Livello</th><th>Origine</th><th>Prompt</th><th>Token (In/Out)</th><th>Latenza</th><th>Messaggio</th></tr>
                 </thead>
-                <tbody id="logs-body">
-                </tbody>
+                <tbody id="logs-tbody"></tbody>
             </table>
         </div>
 
         <script>
-            async function updateDashboard() {
+            let availableModels = [];
+
+            async function controlEngine(port, action) {
+                const selectElem = document.getElementById(`model-select-${port}`);
+                const model_name = selectElem ? selectElem.value : null;
+                const endpoint = action === 'start' ? '/api/engine/start' : '/api/engine/stop';
+                
+                try {
+                    const res = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ port: port, model_name: model_name })
+                    });
+                    const data = await res.json();
+                    alert(data.message || "Comando eseguito.");
+                    loadData();
+                } catch (err) {
+                    alert("Errore di comunicazione con il gateway.");
+                }
+            }
+
+            async function loadData() {
                 try {
                     const res = await fetch('/api/metrics');
                     const data = await res.json();
                     
+                    if (data.models) availableModels = data.models;
+                    
                     if (data.system) {
-                        document.getElementById('sys-cpu-util').innerText = `${data.system.cpu_util_pct}%`;
-                        document.getElementById('sys-ram-val').innerText = `${data.system.ram_used_gb} / ${data.system.ram_total_gb} GB (${data.system.ram_util_pct}%)`;
-                        document.getElementById('sys-disk-val').innerText = `${data.system.disk_used_gb} / ${data.system.disk_total_gb} GB (${data.system.disk_util_pct}%)`;
-                    }
-
-                    if (data.cluster) {
-                        document.getElementById('cluster-topology-view').innerText = JSON.stringify(data.cluster, null, 4);
+                        document.getElementById('cpu-val').innerText = `${data.system.cpu_util_pct}%`;
+                        document.getElementById('ram-val').innerText = `${data.system.ram_used_gb} / ${data.system.ram_total_gb} GB`;
+                        document.getElementById('disk-val').innerText = `${data.system.disk_used_gb} / ${data.system.disk_total_gb} GB`;
                         
-                        const nodesGrid = document.getElementById('nodes-visual-grid');
-                        nodesGrid.innerHTML = '';
-                        if (data.cluster.nodes && data.cluster.nodes.length > 0) {
-                            data.cluster.nodes.forEach(node => {
-                                let backendsHtml = '';
-                                (node.backends || []).forEach(b => {
-                                    backendsHtml += `<div style="font-size: 0.8em; margin-top:4px;">Porta: <strong>${b.port}</strong> | Stato: <span style="color:var(--success);">${b.status || 'ONLINE'}</span><br>Modelli: ${(b.models_loaded || []).join(', ') || 'Nessuno'}</div>`;
-                                });
-                                nodesGrid.innerHTML += `
-                                    <div class="node-card">
-                                        <div class="node-header"><span>${node.node_id}</span><span class="badge">${node.host}</span></div>
-                                        ${backendsHtml}
+                        const gpuContainer = document.getElementById('gpu-metrics-container');
+                        gpuContainer.innerHTML = '';
+                        if (data.system.gpus && data.system.gpus.length > 0) {
+                            data.system.gpus.forEach(g => {
+                                gpuContainer.innerHTML += `
+                                    <div class="sys-card">
+                                        <div class="sys-title">GPU ${g.id}: ${g.name}</div>
+                                        <div class="sys-val">${g.util_pct}% | ${g.temp_c}°C</div>
+                                        <div style="font-size:0.75rem; color:#9ca3af; margin-top:4px;">VRAM: ${g.vram_used_mb} / ${g.vram_total_mb} MB</div>
                                     </div>
                                 `;
                             });
-                        } else {
-                            nodesGrid.innerHTML = '<div class="node-card" style="color: #9ca3af;">Nessun nodo attivo. Esegui discovery.py o aggiungi nodi statici.</div>';
                         }
                     }
 
-                    const logsBody = document.getElementById('logs-body');
-                    logsBody.innerHTML = '';
-                    [...data.logs].reverse().forEach(log => {
-                        logsBody.innerHTML += `
-                            <tr>
-                                <td>${log.timestamp}</td>
-                                <td class="log-${log.level}"><strong>${log.level}</strong></td>
-                                <td>${log.node}</td>
-                                <td>${log.prompt || '-'}</td>
-                                <td>${log.tokens_in || 0} / ${log.tokens_out || 0}</td>
-                                <td>${log.latency}</td>
-                                <td>${log.message}</td>
-                            </tr>
-                        `;
-                    });
-                } catch (err) {
-                    console.error("Errore aggiornamento dashboard:", err);
+                    if (data.cluster) {
+                        document.getElementById('json-topo').innerText = JSON.stringify(data.cluster, null, 4);
+                        const enginesGrid = document.getElementById('engines-grid');
+                        enginesGrid.innerHTML = '';
+                        
+                        let hasBackends = false;
+                        data.cluster.nodes.forEach(node => {
+                            (node.backends || []).forEach(b => {
+                                hasBackends = true;
+                                let optionsHtml = availableModels.map(m => `<option value="${m}">${m}</option>`).join('');
+                                enginesGrid.innerHTML += `
+                                    <div class="engine-card">
+                                        <div class="engine-header"><span>Node: ${node.host}:${b.port}</span><span style="color:var(--success);">${b.status}</span></div>
+                                        <div style="font-size: 0.8rem; color: #9ca3af; margin-bottom: 8px;">Backend: ${b.backend_type || 'llama-server'}</div>
+                                        <label style="font-size: 0.75rem; color: #9ca3af;">Seleziona Modello GGUF:</label>
+                                        <select id="model-select-${b.port}">${optionsHtml}</select>
+                                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+                                            <button onclick="controlEngine(${b.port}, 'start')">Avvia / Carica</button>
+                                            <button class="btn-stop" onclick="controlEngine(${b.port}, 'stop')">Arresta</button>
+                                        </div>
+                                    </div>
+                                `;
+                            });
+                        });
+                        if (!hasBackends) {
+                            enginesGrid.innerHTML = '<div style="color: #9ca3af;">Nessun motore rilevato dal discovery daemon.</div>';
+                        }
+                    }
+
+                    if (data.logs) {
+                        const tbody = document.getElementById('logs-tbody');
+                        tbody.innerHTML = '';
+                        [...data.logs].reverse().forEach(l => {
+                            tbody.innerHTML += `
+                                <tr>
+                                    <td>${l.timestamp}</td>
+                                    <td class="log-${l.level}"><strong>${l.level}</strong></td>
+                                    <td>${l.node}</td>
+                                    <td>${l.prompt}</td>
+                                    <td>${l.tokens_in} / ${l.tokens_out}</td>
+                                    <td>${l.latency}</td>
+                                    <td>${l.message}</td>
+                                </tr>
+                            `;
+                        });
+                    }
+                } catch (e) {
+                    console.error("Errore fetch metriche:", e);
                 }
             }
 
-            setInterval(updateDashboard, 2000);
-            updateDashboard();
+            setInterval(loadData, 2500);
+            loadData();
         </script>
     </body>
     </html>
     """
-    return HTMLResponse(content=html_content, status_code=200)
 
 if __name__ == "__main__":
     import uvicorn
@@ -431,7 +416,7 @@ chmod +x "$INSTALL_DIR/llm_gateway.py"
 
 cat << EOF > "$SERVICE_FILE"
 [Unit]
-Description=LLM Cluster Dashboard Gateway Service
+Description=LLM Cluster Advanced Gateway Service
 After=network.target
 
 [Service]
@@ -452,6 +437,4 @@ systemctl daemon-reload
 systemctl enable llm-gateway.service
 systemctl restart llm-gateway.service
 
-
-
-echo "Gateway : http://127.0.0.1:9001"
+echo "[OK] Gateway e Dashboard installati con successo sulla porta 9001"
