@@ -26,8 +26,9 @@ curl -s https://raw.githubusercontent.com/langgenius/dify/main/docker/docker-com
 echo "[*] Generazione del file .env di configurazione..."
 if [ ! -f "$INSTALL_DIR/.env" ]; then
     curl -s https://raw.githubusercontent.com/langgenius/dify/main/docker/.env.example -o "$INSTALL_DIR/.env"
-    # Personalizziamo chiavi e porte se necessario
-    sed -i 's/EXPOSE_NGINX_PORT=80/EXPOSE_NGINX_PORT=8000/g' "$INSTALL_DIR/.env"
+    # Personalizziamo la porta Nginx impostandola sulla porta 9111
+    sed -i 's/EXPOSE_NGINX_PORT=80/EXPOSE_NGINX_PORT=9111/g' "$INSTALL_DIR/.env" || true
+    sed -i 's/# EXPOSE_NGINX_PORT=80/EXPOSE_NGINX_PORT=9111/g' "$INSTALL_DIR/.env" || true
 fi
 
 # Aggiungiamo extra_hosts ai servizi api e worker per raggiungere il gateway su host.docker.internal (porta 9000)
@@ -58,8 +59,8 @@ cd "$INSTALL_DIR"
 docker compose up -d
 
 echo "================================================================="
-echo "[OK] Dify installato e avviato con successo!"
-echo " Interfaccia Web Dify: http://127.0.0.1:8000"
+echo "[OK] Dify installato e avviato con successo sulla porta 9111!"
+echo " Interfaccia Web Dify: http://127.0.0.1:9111"
 echo " Per configurare i modelli nel pannello Dify, punta all'endpoint OpenAI:"
 echo " Base URL: http://host.docker.internal:9000/v1"
 echo "================================================================="
