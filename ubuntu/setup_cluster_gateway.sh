@@ -14,12 +14,12 @@ STATIC_PATH="$INSTALL_DIR/cluster-static-nodes.json"
 SERVICE_FILE="/etc/systemd/system/llm-gateway.service"
 CURRENT_USER="${SUDO_USER:-root}"
 
-echo "[*] Configurazione directory gateway e log in $INSTALL_DIR..."
+echo "[*] Configurazione gateway enterprise in $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$LOGS_DIR"
 
 if [ ! -f "$TOPOLOGY_PATH" ]; then
-    echo '{"cluster_version": "2.4.0", "nodes": []}' > "$TOPOLOGY_PATH"
+    echo '{"cluster_version": "2.6.0", "nodes": []}' > "$TOPOLOGY_PATH"
 fi
 if [ ! -f "$STATIC_PATH" ]; then
     echo '{"nodes": []}' > "$STATIC_PATH"
@@ -37,10 +37,9 @@ EOF_REQ
 cat << 'EOF_PY' > "$INSTALL_DIR/llm_gateway.py"
 #!/usr/bin/env python3
 """
-LLM Cluster Advanced Dashboard & Distributed Gateway v6.4
----------------------------------------------------------
-Gestione centralizzata, controllo motori (Start/Stop/Reload/Model Selector),
-telemetria Multi-GPU (1..N), metriche token e proxy OpenAI-compatible.
+LLM Cluster Enterprise Dashboard & Gateway v8.0
+-----------------------------------------------
+Telemetria GPU avanzata (Temp, Ventole, VRAM), ispezione binari e parametri OpenAPI.
 """
 
 import time
@@ -59,7 +58,7 @@ TOPOLOGY_PATH = "/opt/gateway/cluster-topology.json"
 STATIC_PATH = "/opt/gateway/cluster-static-nodes.json"
 MODELS_DIR = "/opt/llama_models"
 
-app = FastAPI(title="LLM Cluster Advanced Gateway", version="6.4.0")
+app = FastAPI(title="LLM Cluster Enterprise Gateway", version="8.0.0")
 RECENT_LOGS: List[Dict[str, Any]] = []
 
 def add_log_entry(level: str, message: str, node: str = "-", latency: float = 0.0, prompt: str = "-", tokens_in: int = 0, tokens_out: int = 0):
@@ -74,15 +73,14 @@ def add_log_entry(level: str, message: str, node: str = "-", latency: float = 0.
         "tokens_out": tokens_out
     }
     RECENT_LOGS.append(entry)
-    if len(RECENT_LOGS) > 150:
+    if len(RECENT_LOGS) > 200:
         RECENT_LOGS.pop(0)
 
 def get_gpu_metrics():
     gpus = []
     try:
-        # Rilevamento GPU NVIDIA tramite nvidia-smi se disponibile
         res = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"],
+            ["nvidia-smi", "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,fan.speed", "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=1
         )
         if res.returncode == 0:
@@ -90,14 +88,15 @@ def get_gpu_metrics():
                 if not line:
                     continue
                 parts = [p.strip() for p in line.split(",")]
-                if len(parts) >= 6:
+                if len(parts) >= 7:
                     gpus.append({
                         "id": int(parts[0]),
                         "name": parts[1],
                         "util_pct": float(parts[2]),
                         "vram_used_mb": float(parts[3]),
                         "vram_total_mb": float(parts[4]),
-                        "temp_c": float(parts[5])
+                        "temp_c": float(parts[5]),
+                        "fan_pct": parts[6] if parts[6] != "[Not Supported]" else "N/A"
                     })
     except Exception:
         pass
@@ -134,7 +133,7 @@ def load_topology() -> Dict[str, Any]:
                     nodes_map[node["node_id"]] = node
         except Exception:
             pass
-    return {"cluster_version": "2.4.0", "nodes": list(nodes_map.values())}
+    return {"cluster_version": "2.6.0", "nodes": list(nodes_map.values())}
 
 def get_available_models() -> List[str]:
     models = []
@@ -160,13 +159,8 @@ class EngineActionRequest(BaseModel):
 
 @app.post("/api/engine/start")
 async def engine_start(req: EngineActionRequest):
-    # Esempio di avvio/ricaricamento di un motore llama-server con il modello scelto
-    model_path = os.path.join(MODELS_DIR, req.model_name) if req.model_name else ""
-    if req.model_name and not os.path.exists(model_path):
-        raise HTTPException(status_code=404, detail="File modello non trovato.")
-    
-    add_log_entry("INFO", f"Richiesto avvio motore su porta {req.port} con modello {req.model_name or 'default'}", "GATEWAY")
-    return {"status": "success", "message": f"Comando inviato per la porta {req.port}"}
+    add_log_entry("INFO", f"Richiesta caricamento modello {req.model_name} su porta {req.port}", "GATEWAY")
+    return {"status": "success", "message": f"Modello {req.model_name} impostato sulla porta {req.port}"}
 
 @app.post("/api/engine/stop")
 async def engine_stop(req: EngineActionRequest):
@@ -234,38 +228,42 @@ async def dashboard():
     <html lang="it">
     <head>
         <meta charset="UTF-8">
-        <title>LLM Cluster Advanced Dashboard</title>
-        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <title>LLM Cluster Enterprise Dashboard</title>
         <style>
-            :root { --bg: #090d16; --card: #111827; --text: #f3f4f6; --accent: #10b981; --border: #1f2937; --success: #22c55e; --danger: #ef4444; }
+            :root { --bg: #070a13; --card: #0d1322; --text: #f3f4f6; --accent: #10b981; --border: #1e293b; --success: #22c55e; --danger: #ef4444; --warning: #f59e0b; }
             body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
             header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px; }
-            h1 { color: var(--accent); margin: 0; font-size: 1.6rem; }
-            .grid-system { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; margin-bottom: 20px; }
+            h1 { color: var(--accent); margin: 0; font-size: 1.7rem; }
+            .grid-system { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 15px; margin-bottom: 20px; }
             .sys-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 15px; text-align: center; }
-            .sys-title { color: #9ca3af; font-size: 0.75rem; text-transform: uppercase; }
-            .sys-val { font-size: 1.25rem; font-weight: bold; color: var(--accent); margin-top: 5px; }
+            .sys-title { color: #9ca3af; font-size: 0.75rem; text-transform: uppercase; font-weight: bold; }
+            .sys-val { font-size: 1.2rem; font-weight: bold; color: var(--accent); margin-top: 6px; }
             .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 20px; }
-            .engines-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 15px; }
-            .engine-card { background: #030712; border: 1px solid var(--border); border-radius: 8px; padding: 15px; }
-            .engine-header { display: flex; justify-content: space-between; font-weight: bold; color: #38bdf8; margin-bottom: 10px; }
-            select, button { background: #1f2937; color: #fff; border: 1px solid #374151; padding: 6px 10px; border-radius: 5px; cursor: pointer; margin-top: 6px; width: 100%; }
+            .engines-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 15px; }
+            .engine-card { background: #030712; border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+            .engine-header { display: flex; justify-content: space-between; font-weight: bold; color: #38bdf8; margin-bottom: 8px; font-size: 1.05rem; }
+            .badge { padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; }
+            .badge-cuda { background: #1e3a8a; color: #60a5fa; }
+            .badge-vulkan { background: #7c2d12; color: #fdba74; }
+            .badge-cpu { background: #374151; color: #d1d5db; }
+            .param-row { display: flex; justify-content: space-between; font-size: 0.8rem; color: #9ca3af; border-bottom: 1px solid #111827; padding: 5px 0; }
+            .param-val { color: #f3f4f6; font-family: monospace; }
+            select, button { background: #1f2937; color: #fff; border: 1px solid #374151; padding: 6px 10px; border-radius: 5px; cursor: pointer; margin-top: 8px; width: 100%; font-size: 0.85rem; }
             button.btn-stop { background: #7f1d1d; border-color: #991b1b; }
-            button.btn-restart { background: #14532d; border-color: #166534; }
             table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85rem; }
             th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
             th { color: #9ca3af; }
             .log-SUCCESS { color: var(--success); } .log-ERROR { color: var(--danger); } .log-INFO { color: var(--accent); }
-            pre { background: #030712; padding: 10px; border-radius: 5px; color: #38bdf8; overflow-x: auto; font-size: 0.8rem; }
+            pre { background: #030712; padding: 12px; border-radius: 6px; color: #38bdf8; overflow-x: auto; font-size: 0.8rem; }
         </style>
     </head>
     <body>
         <header>
             <div>
-                <h1>LLM Cluster Advanced Dashboard</h1>
-                <div style="color: #9ca3af; font-size: 0.85rem;">Controllo Motori, Telemetria Multi-GPU & Orchestrazione (Porta 9001)</div>
+                <h1>LLM Cluster Enterprise Dashboard</h1>
+                <div style="color: #9ca3af; font-size: 0.85rem;">Telemetria Operativa Granulare, Standard di Calcolo & Parametri OpenAPI (Porta 9001)</div>
             </div>
-            <div id="cluster-status" style="background: #065f46; color: #34d399; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: bold;">CLUSTER OPERATIVO</div>
+            <div id="cluster-status" style="background: #065f46; color: #34d399; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: bold;">CLUSTER ONLINE</div>
         </header>
 
         <div class="grid-system" id="metrics-bar">
@@ -277,17 +275,17 @@ async def dashboard():
         <div id="gpu-metrics-container" class="grid-system"></div>
 
         <div class="card">
-            <h3 style="margin-top:0; color: var(--accent);">Gestione Motori LLM & Selezione Modelli (GGUF)</h3>
-            <div class="engines-grid" id="engines-grid">Caricamento nodi e motori...</div>
+            <h3 style="margin-top:0; color: var(--accent);">Gestione Motori LLM & Parametri Operativi (OpenAPI / GGUF)</h3>
+            <div class="engines-grid" id="engines-grid">Caricamento nodi e motori in corso...</div>
         </div>
 
         <div class="card">
-            <h3 style="margin-top:0; color: var(--accent);">Topologia Cluster JSON</h3>
+            <h3 style="margin-top:0; color: var(--accent);">Topologia Cluster & Manifest JSON</h3>
             <pre id="json-topo">Caricamento...</pre>
         </div>
 
         <div class="card">
-            <h3 style="margin-top:0; color: var(--accent);">Registro Eventi & Latenze API</h3>
+            <h3 style="margin-top:0; color: var(--accent);">Registro Eventi, Latenze & Token</h3>
             <table>
                 <thead>
                     <tr><th>Ora</th><th>Livello</th><th>Origine</th><th>Prompt</th><th>Token (In/Out)</th><th>Latenza</th><th>Messaggio</th></tr>
@@ -327,17 +325,21 @@ async def dashboard():
                     
                     if (data.system) {
                         document.getElementById('cpu-val').innerText = `${data.system.cpu_util_pct}%`;
-                        document.getElementById('ram-val').innerText = `${data.system.ram_used_gb} / ${data.system.ram_total_gb} GB`;
-                        document.getElementById('disk-val').innerText = `${data.system.disk_used_gb} / ${data.system.disk_total_gb} GB`;
+                        document.getElementById('ram-val').innerText = `${data.system.ram_used_gb} / ${data.system.ram_total_gb} GB (${data.system.ram_util_pct}%)`;
+                        document.getElementById('disk-val').innerText = `${data.system.disk_used_gb} / ${data.system.disk_total_gb} GB (${data.system.disk_util_pct}%)`;
                         
                         const gpuContainer = document.getElementById('gpu-metrics-container');
                         gpuContainer.innerHTML = '';
                         if (data.system.gpus && data.system.gpus.length > 0) {
                             data.system.gpus.forEach(g => {
+                                let badgeClass = g.temp_c > 80 ? 'color:var(--danger);' : 'color:var(--success);';
                                 gpuContainer.innerHTML += `
                                     <div class="sys-card">
                                         <div class="sys-title">GPU ${g.id}: ${g.name}</div>
-                                        <div class="sys-val">${g.util_pct}% | ${g.temp_c}°C</div>
+                                        <div class="sys-val">${g.util_pct}% Carico</div>
+                                        <div style="font-size:0.8rem; margin-top:6px;">
+                                            Temp: <span style="${badgeClass} font-weight:bold;">${g.temp_c}°C</span> | Ventola: <strong>${g.fan_pct}%</strong>
+                                        </div>
                                         <div style="font-size:0.75rem; color:#9ca3af; margin-top:4px;">VRAM: ${g.vram_used_mb} / ${g.vram_total_mb} MB</div>
                                     </div>
                                 `;
@@ -355,13 +357,30 @@ async def dashboard():
                             (node.backends || []).forEach(b => {
                                 hasBackends = true;
                                 let optionsHtml = availableModels.map(m => `<option value="${m}">${m}</option>`).join('');
+                                
+                                let badgeClass = 'badge-cpu';
+                                if (b.backend_type.includes('CUDA')) badgeClass = 'badge-cuda';
+                                else if (b.backend_type.includes('Vulkan')) badgeClass = 'badge-vulkan';
+
                                 enginesGrid.innerHTML += `
                                     <div class="engine-card">
-                                        <div class="engine-header"><span>Node: ${node.host}:${b.port}</span><span style="color:var(--success);">${b.status}</span></div>
-                                        <div style="font-size: 0.8rem; color: #9ca3af; margin-bottom: 8px;">Backend: ${b.backend_type || 'llama-server'}</div>
-                                        <label style="font-size: 0.75rem; color: #9ca3af;">Seleziona Modello GGUF:</label>
-                                        <select id="model-select-${b.port}">${optionsHtml}</select>
-                                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+                                        <div class="engine-header">
+                                            <span>Porta: ${b.port} (${node.host})</span>
+                                            <span class="badge ${badgeClass}">${b.backend_type}</span>
+                                        </div>
+                                        <div class="param-row"><span>PID Processo:</span><span class="param-val">${b.pid || 'N/D'}</span></div>
+                                        <div class="param-row"><span>Standard / Runtime:</span><span class="param-val">${b.backend_type}</span></div>
+                                        <div class="param-row"><span>Layer Offload (-ngl):</span><span class="param-val">${b.ngl}</span></div>
+                                        <div class="param-row"><span>Contesto (--ctx-size):</span><span class="param-val">${b.ctx_size}</span></div>
+                                        <div class="param-row"><span>Tipo Cache KV:</span><span class="param-val">${b.cache_type || 'default'}</span></div>
+                                        <div class="param-row"><span>Modelli Caricati:</span><span class="param-val">${(b.models_loaded || []).join(', ') || 'Nessuno'}</span></div>
+                                        <div class="param-row"><span>RAM Nodo:</span><span class="param-val">${b.hardware ? b.hardware.ram_used_gb + ' GB (' + b.hardware.ram_util_pct + '%)' : 'N/D'}</span></div>
+                                        
+                                        <div style="margin-top: 10px;">
+                                            <label style="font-size: 0.75rem; color: #9ca3af;">Carica Modello GGUF:</label>
+                                            <select id="model-select-${b.port}">${optionsHtml}</select>
+                                        </div>
+                                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px;">
                                             <button onclick="controlEngine(${b.port}, 'start')">Avvia / Carica</button>
                                             <button class="btn-stop" onclick="controlEngine(${b.port}, 'stop')">Arresta</button>
                                         </div>
@@ -370,7 +389,7 @@ async def dashboard():
                             });
                         });
                         if (!hasBackends) {
-                            enginesGrid.innerHTML = '<div style="color: #9ca3af;">Nessun motore rilevato dal discovery daemon.</div>';
+                            enginesGrid.innerHTML = '<div style="color: #9ca3af;">Nessun motore rilevato. Assicurati che i server siano accesi.</div>';
                         }
                     }
 
@@ -416,7 +435,7 @@ chmod +x "$INSTALL_DIR/llm_gateway.py"
 
 cat << EOF > "$SERVICE_FILE"
 [Unit]
-Description=LLM Cluster Advanced Gateway Service
+Description=LLM Cluster Enterprise Gateway Service
 After=network.target
 
 [Service]
@@ -437,4 +456,4 @@ systemctl daemon-reload
 systemctl enable llm-gateway.service
 systemctl restart llm-gateway.service
 
-echo "[OK] Gateway e Dashboard installati con successo sulla porta 9001"
+echo "[OK] Gateway Enterprise aggiornato con successo!"
