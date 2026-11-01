@@ -453,20 +453,6 @@ systemctl daemon-reload
 systemctl enable llm-gateway.service
 systemctl restart llm-gateway.service
 
-echo ""
-echo "======================================================================"
-echo " [OK] LLM CLUSTER GATEWAY & DASHBOARD INSTALLATO CON SUCCESSO!"
-echo "======================================================================"
-echo " 📌 RIEPILOGO SERVIZI E ACCESSI INFRASTRUTTURA:"
 echo "----------------------------------------------------------------------"
-echo " • Dashboard & Gateway Centrale : http://127.0.0.1:9001"
-echo " • Interfaccia Web Dify          : http://127.0.0.1:9111"
-echo " • Plugin Daemon (Dify)          : Porta 5004"
-echo " • Database Vettoriale Qdrant    : Porta 6333"
-echo " • SurrealDB                     : Porta 8000"
-echo " • Motori LLM Locali (llama)     : Porte 8080, 8082, 8200 (Auto-Discovery)"
+echo " Gateway : http://127.0.0.1:9001"
 echo "----------------------------------------------------------------------"
-echo " File Topologia Unificata        : $TOPOLOGY_PATH"
-echo " File Nodi Statici/Esterni       : $STATIC_PATH"
-echo " Log Operativi Gateway           : $LOGS_DIR/gateway.log"
-echo "======================================================================"
