@@ -12,7 +12,7 @@ SERVICE_FILE="/etc/systemd/system/cluster-discovery.service"
 TIMER_FILE="/etc/systemd/system/cluster-discovery.timer"
 CURRENT_USER="${SUDO_USER:-root}"
 
-echo "[*] Configurazione del demone avanzato di auto-discovery in $INSTALL_DIR..."
+echo "[*] Configurazione del demone di auto-discovery (Porte 8000-8500) in $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 
 cat << 'EOF' > "$SCRIPT_PATH"
@@ -23,8 +23,8 @@ import json
 import socket
 import psutil
 
-# Range di porte esteso per includere standard e custom (es. 8080-8025, 8200)
-PORT_RANGE = list(range(8000, 8030)) + [8200]
+# Range completo richiesto: da 8000 a 8500
+PORT_RANGE = list(range(8000, 8501))
 AUTO_MANIFEST_PATH = "/opt/gateway/cluster-topology.json"
 
 def get_local_ip():
@@ -42,14 +42,20 @@ async def probe_endpoint(ip: str, port: int):
     url_models = f"http://{ip}:{port}/v1/models"
     url_props = f"http://{ip}:{port}/props"
     try:
-        async with httpx.AsyncClient(timeout=1.2) as client:
+        async with httpx.AsyncClient(timeout=1.0) as client:
             resp_models = await client.get(url_models)
             if resp_models.status_code == 200:
-                data = resp_models.json()
-                models = [m.get("id") for m in data.get("data", [])]
+                models = []
+                try:
+                    data = resp_models.json()
+                    models = [m.get("id") for m in data.get("data", [])]
+                except Exception:
+                    pass
                 
-                # Rilevamento proprietà e backend (CUDA / Vulkan / CPU)
-                backend_type = "llama.cpp (Auto)"
+                if not models:
+                    models = ["dynamic-models-dir"]
+
+                backend_type = "llama-server (CUDA/CPU)"
                 try:
                     resp_props = await client.get(url_props)
                     if resp_props.status_code == 200:
@@ -63,16 +69,15 @@ async def probe_endpoint(ip: str, port: int):
                 except Exception:
                     pass
                 
-                # Raccolta metriche hardware del nodo
                 mem = psutil.virtual_memory()
-                cpu_pct = psutil.cpu_percent(interval=None)
                 hardware_metrics = {
-                    "cpu_util_pct": cpu_pct,
+                    "cpu_util_pct": psutil.cpu_percent(interval=None),
                     "ram_used_gb": round(mem.used / (1024**3), 2),
                     "ram_total_gb": round(mem.total / (1024**3), 2),
                     "ram_util_pct": mem.percent
                 }
 
+                print(f"[OK] Rilevato backend attivo su {ip}:{port} ({backend_type})")
                 return {
                     "host": ip,
                     "port": port,
@@ -85,14 +90,12 @@ async def probe_endpoint(ip: str, port: int):
         pass
     return None
 
-async def scan_subnet():
+async def scan_cluster():
     local_ip = get_local_ip()
-    subnet_prefix = ".".join(local_ip.split(".")[:3]) + "."
-    
-    ips = [f"{subnet_prefix}{i}" for i in range(1, 255)]
-    if "127.0.0.1" not in ips:
-        ips.append("127.0.0.1")
-        
+    ips = ["127.0.0.1", local_ip]
+    if local_ip != "127.0.0.1":
+        ips = list(set(ips))
+
     tasks = []
     for ip in ips:
         for port in PORT_RANGE:
@@ -110,13 +113,15 @@ async def scan_subnet():
                     "host": host,
                     "backends": []
                 }
-            nodes_map[host]["backends"].append({
-                "port": res["port"],
-                "models_loaded": res["models"],
-                "status": res["status"],
-                "backend_type": res["backend_type"],
-                "hardware": res["hardware"]
-            })
+            existing_ports = [b["port"] for b in nodes_map[host]["backends"]]
+            if res["port"] not in existing_ports:
+                nodes_map[host]["backends"].append({
+                    "port": res["port"],
+                    "models_loaded": res["models"],
+                    "status": res["status"],
+                    "backend_type": res["backend_type"],
+                    "hardware": res["hardware"]
+                })
             
     topology = {
         "cluster_version": "2.2.0",
@@ -125,9 +130,10 @@ async def scan_subnet():
     
     with open(AUTO_MANIFEST_PATH, "w") as f:
         json.dump(topology, f, indent=4)
+    print(f"[*] Topologia salvata in {AUTO_MANIFEST_PATH}. Nodi totali mappati: {len(nodes_map)}")
 
 if __name__ == "__main__":
-    asyncio.run(scan_subnet())
+    asyncio.run(scan_cluster())
 EOF
 
 chmod +x "$SCRIPT_PATH"
@@ -135,7 +141,7 @@ chown "$CURRENT_USER:$CURRENT_USER" "$SCRIPT_PATH"
 
 cat << EOF > "$SERVICE_FILE"
 [Unit]
-Description=LLM Cluster Auto-Discovery Worker
+Description=LLM Cluster Auto-Discovery Worker (Porte 8000-8500)
 After=network.target
 
 [Service]
@@ -146,7 +152,7 @@ EOF
 
 cat << EOF > "$TIMER_FILE"
 [Unit]
-Description=Run LLM Cluster Auto-Discovery periodically
+Description=Run LLM Cluster Auto-Discovery periodically (Porte 8000-8500)
 
 [Timer]
 OnBootSec=5sec
@@ -160,4 +166,4 @@ EOF
 systemctl daemon-reload
 systemctl enable --now cluster-discovery.timer
 
-echo "[OK] Demone di Auto-Discovery avanzato installato e avviato con successo!"
+echo "[OK] Demone di Auto-Discovery (8000-8500) installato e attivato con successo!"
