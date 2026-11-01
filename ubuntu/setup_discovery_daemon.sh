@@ -12,7 +12,7 @@ SERVICE_FILE="/etc/systemd/system/cluster-discovery.service"
 TIMER_FILE="/etc/systemd/system/cluster-discovery.timer"
 CURRENT_USER="${SUDO_USER:-root}"
 
-echo "[*] Configurazione del demone di auto-discovery (Porte 8000-8500) in $INSTALL_DIR..."
+echo "[*] Configurazione del demone intelligente di auto-discovery in $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 
 cat << 'EOF' > "$SCRIPT_PATH"
@@ -20,29 +20,15 @@ cat << 'EOF' > "$SCRIPT_PATH"
 import asyncio
 import httpx
 import json
-import socket
 import psutil
 
-# Range completo richiesto: da 8000 a 8500
-PORT_RANGE = list(range(8000, 8501))
 AUTO_MANIFEST_PATH = "/opt/gateway/cluster-topology.json"
-
-def get_local_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("10.255.255.255", 1))
-        IP = s.getsockname()[0]
-    except Exception:
-        IP = "127.0.0.1"
-    finally:
-        s.close()
-    return IP
 
 async def probe_endpoint(ip: str, port: int):
     url_models = f"http://{ip}:{port}/v1/models"
     url_props = f"http://{ip}:{port}/props"
     try:
-        async with httpx.AsyncClient(timeout=1.0) as client:
+        async with httpx.AsyncClient(timeout=1.5) as client:
             resp_models = await client.get(url_models)
             if resp_models.status_code == 200:
                 models = []
@@ -91,17 +77,19 @@ async def probe_endpoint(ip: str, port: int):
     return None
 
 async def scan_cluster():
-    local_ip = get_local_ip()
-    ips = ["127.0.0.1", local_ip]
-    if local_ip != "127.0.0.1":
-        ips = list(set(ips))
+    # Rilevamento dinamico tramite psutil delle porte in ascolto nel range 8000-8500
+    targets = set()
+    for conn in psutil.net_connections(kind='inet'):
+        if conn.status == psutil.CONN_LISTEN:
+            ip, port = conn.laddr.ip, conn.laddr.port
+            if 8000 <= port <= 8500:
+                probe_ip = "127.0.0.1" if ip in ("0.0.0.0", "::") else ip
+                targets.add((probe_ip, port))
 
-    tasks = []
-    for ip in ips:
-        for port in PORT_RANGE:
-            tasks.append(probe_endpoint(ip, port))
-            
-    results = await asyncio.gather(*tasks)
+    print(f"[*] Porte TCP attive trovate nel range 8000-8500: {targets}")
+
+    tasks = [probe_endpoint(ip, port) for ip, port in targets]
+    results = await asyncio.gather(*tasks) if tasks else []
     
     nodes_map = {}
     for res in results:
@@ -141,7 +129,7 @@ chown "$CURRENT_USER:$CURRENT_USER" "$SCRIPT_PATH"
 
 cat << EOF > "$SERVICE_FILE"
 [Unit]
-Description=LLM Cluster Auto-Discovery Worker (Porte 8000-8500)
+Description=LLM Cluster Smart Auto-Discovery Worker
 After=network.target
 
 [Service]
@@ -152,7 +140,7 @@ EOF
 
 cat << EOF > "$TIMER_FILE"
 [Unit]
-Description=Run LLM Cluster Auto-Discovery periodically (Porte 8000-8500)
+Description=Run LLM Cluster Smart Auto-Discovery periodically
 
 [Timer]
 OnBootSec=5sec
@@ -166,4 +154,4 @@ EOF
 systemctl daemon-reload
 systemctl enable --now cluster-discovery.timer
 
-echo "[OK] Demone di Auto-Discovery (8000-8500) installato e attivato con successo!"
+echo "[OK] Demone di Auto-Discovery intelligente installato e attivato con successo!"
