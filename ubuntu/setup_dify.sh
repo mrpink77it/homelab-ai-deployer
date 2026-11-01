@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 if [ "$EUID" -ne 0 ]; then
   echo "[-] Errore: Esegui questo script con sudo o come root."
@@ -9,30 +9,39 @@ fi
 INSTALL_DIR="/opt/dify"
 CURRENT_USER="${SUDO_USER:-root}"
 
-echo "[*] Verifica di Docker e Docker Compose..."
+echo "=== [1/6] Pulizia vecchi container, volumi e directory Dify ==="
+if [ -d "$INSTALL_DIR" ]; then
+    cd "$INSTALL_DIR"
+    # Arresta i container e rimuove i volumi corrotti (-v) per evitare errori di permessi
+    docker compose down -v --remove-orphans 2>/dev/null || true
+    cd /opt
+    rm -rf "$INSTALL_DIR"
+    echo "[*] Vecchia installazione rimossa con successo."
+fi
+
+echo "=== [2/6] Verifica di Docker e Docker Compose ==="
 if ! command -v docker &> /dev/null; then
     echo "[*] Installazione di Docker..."
     apt-get update && apt-get install -y docker.io docker-compose-v2
     systemctl enable --now docker
 fi
 
-echo "[*] Creazione directory di installazione in $INSTALL_DIR..."
-mkdir -p "$INSTALL_DIR/docker"
+echo "=== [3/6] Creazione directory pulita in $INSTALL_DIR ==="
+mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-echo "[*] Download del file docker-compose ufficiale di Dify..."
+echo "=== [4/6] Download delle configurazioni ufficiali di Dify ==="
 curl -s https://raw.githubusercontent.com/langgenius/dify/main/docker/docker-compose.yaml -o "$INSTALL_DIR/docker-compose.yml"
+curl -s https://raw.githubusercontent.com/langgenius/dify/main/docker/.env.example -o "$INSTALL_DIR/.env"
 
-echo "[*] Generazione del file .env di configurazione..."
-if [ ! -f "$INSTALL_DIR/.env" ]; then
-    curl -s https://raw.githubusercontent.com/langgenius/dify/main/docker/.env.example -o "$INSTALL_DIR/.env"
-    # Personalizziamo la porta Nginx impostandola sulla porta 9111
-    sed -i 's/EXPOSE_NGINX_PORT=80/EXPOSE_NGINX_PORT=9111/g' "$INSTALL_DIR/.env" || true
-    sed -i 's/# EXPOSE_NGINX_PORT=80/EXPOSE_NGINX_PORT=9111/g' "$INSTALL_DIR/.env" || true
+# Impostazione della porta Nginx su 9111
+if grep -q "EXPOSE_NGINX_PORT=" "$INSTALL_DIR/.env"; then
+    sed -i 's/^EXPOSE_NGINX_PORT=.*/EXPOSE_NGINX_PORT=9111/' "$INSTALL_DIR/.env"
+else
+    echo "EXPOSE_NGINX_PORT=9111" >> "$INSTALL_DIR/.env"
 fi
 
-# Aggiungiamo extra_hosts ai servizi api e worker per raggiungere il gateway su host.docker.internal (porta 9000)
-echo "[*] Aggiornamento del docker-compose.yml per il routing locale verso il Gateway (porta 9000)..."
+echo "=== [5/6] Configurazione routing locale (porta 9000) ==="
 python3 -c '
 import yaml
 
@@ -51,16 +60,14 @@ with open(compose_path, "w") as f:
     yaml.safe_dump(data, f, sort_keys=False)
 '
 
-echo "[*] Configurazione permessi..."
 chown -R "$CURRENT_USER:$CURRENT_USER" "$INSTALL_DIR"
 
-echo "[*] Avvio dei container Dify..."
+echo "=== [6/6] Avvio pulito dei container Dify sulla porta 9111 ==="
 cd "$INSTALL_DIR"
 docker compose up -d
 
 echo "================================================================="
-echo "[OK] Dify installato e avviato con successo sulla porta 9111!"
-echo " Interfaccia Web Dify: http://127.0.0.1:9111"
-echo " Per configurare i modelli nel pannello Dify, punta all'endpoint OpenAI:"
-echo " Base URL: http://host.docker.internal:9000/v1"
+echo "[OK] Dify installato e avviato da zero con successo!"
+echo " 🌐 Interfaccia Web Dify: http://127.0.0.1:9111"
+echo " 🔌 Base URL per i modelli: http://host.docker.internal:9000/v1"
 echo "================================================================="
