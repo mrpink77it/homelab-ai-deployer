@@ -51,9 +51,9 @@ view_services_menu() {
     local ACTION
     ACTION=$(whiptail --title "Azione per $SELECTED_SRV" --backtitle "$BACKTITLE" --menu \
         "Cosa vuoi visualizzare per '$SELECTED_SRV'?" 15 60 3 \
-        "1" "📄 Mostra file di configurazione (systemctl cat)" \
-        "2" "📜 Mostra giornale / log recenti (journalctl)" \
-        "3" "🔙 Torna al menu principale" 3>&1 1>&2 2>&3)
+        "1" "Mostra file di configurazione (systemctl cat)" \
+        "2" "Mostra giornale / log recenti (journalctl)" \
+        "3" "Torna al menu principale" 3>&1 1>&2 2>&3)
 
     case "$ACTION" in
         1)
