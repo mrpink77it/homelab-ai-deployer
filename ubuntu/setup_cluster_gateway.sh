@@ -17,7 +17,6 @@ echo "[*] Configurazione directory gateway e log in $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$LOGS_DIR"
 
-# Inizializza i file di topologia e nodi statici se non esistono
 if [ ! -f "$TOPOLOGY_PATH" ]; then
     echo '{"cluster_version": "2.2.0", "nodes": []}' > "$TOPOLOGY_PATH"
 fi
@@ -72,6 +71,10 @@ logger.addHandler(file_handler)
 
 RECENT_LOGS: List[Dict[str, Any]] = []
 
+# Definizione percorsi topologia e nodi statici
+TOPOLOGY_PATH = "/opt/gateway/cluster-topology.json"
+STATIC_PATH = "/opt/gateway/cluster-static-nodes.json"
+
 app = FastAPI(title="LLM Cluster Dashboard & Distributed Gateway", version="6.2.0")
 
 def add_log_entry(level: str, message: str, node: str = "-", latency: float = 0.0, prompt: str = "-", tokens_in: int = 0, tokens_out: int = 0):
@@ -107,7 +110,6 @@ def get_system_metrics():
 def load_topology() -> Dict[str, Any]:
     nodes_map = {}
     
-    # 1. Carica i nodi statici/esterni configurati manualmente
     if os.path.exists(STATIC_PATH):
         try:
             with open(STATIC_PATH, "r") as f:
@@ -117,7 +119,6 @@ def load_topology() -> Dict[str, Any]:
         except Exception:
             pass
 
-    # 2. Carica i nodi scoperti automaticamente dall'auto-discovery
     if os.path.exists(TOPOLOGY_PATH):
         try:
             with open(TOPOLOGY_PATH, "r") as f:
@@ -160,7 +161,6 @@ async def chat_completions(req: GatewayChatRequest):
     target_backend = None
     user_prompt = req.messages[-1].get("content", "") if req.messages else ""
 
-    # Ricerca backend nel cluster che possiede il modello richiesto
     for node in nodes:
         for backend in node.get("backends", []):
             models = backend.get("models_loaded", [])
@@ -170,7 +170,6 @@ async def chat_completions(req: GatewayChatRequest):
         if target_backend:
             break
             
-    # Fallback sul primo backend disponibile se non trovato match esatto
     if not target_backend:
         for node in nodes:
             if node.get("backends"):
@@ -453,6 +452,6 @@ systemctl daemon-reload
 systemctl enable llm-gateway.service
 systemctl restart llm-gateway.service
 
-echo "----------------------------------------------------------------------"
-echo " Gateway : http://127.0.0.1:9001"
-echo "----------------------------------------------------------------------"
+
+
+echo "Gateway : http://127.0.0.1:9001"
