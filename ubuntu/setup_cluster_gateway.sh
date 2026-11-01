@@ -7,111 +7,70 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 INSTALL_DIR="/opt/gateway"
-CONFIG_FILE="$INSTALL_DIR/cluster-topology.json"
 SERVICE_FILE="/etc/systemd/system/llm-gateway.service"
 CURRENT_USER="${SUDO_USER:-root}"
 
 echo "[*] Configurazione directory gateway in $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR/logs"
 
-# 1. Scrittura dello script di Auto-Discovery e Generazione Manifesto
-cat << 'EOF' > "$INSTALL_DIR/discovery.py"
-import asyncio
-import httpx
-import json
-import socket
-import os
-
-SUBNET_PREFIX = "192.168.1."  # Personalizzabile o autorilevato
-PORT_RANGE = range(8001, 8020)
-MANIFEST_PATH = "/opt/gateway/cluster-topology.json"
-
-async def probe_endpoint(ip: str, port: int):
-    url = f"http://{ip}:{port}/v1/models"
-    try:
-        async with httpx.AsyncClient(timeout=1.0) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200:
-                data = resp.json()
-                models = [m.get("id") for m in data.get("data", [])]
-                return {
-                    "host": ip,
-                    "port": port,
-                    "status": "ONLINE",
-                    "models": models
-                }
-    except Exception:
-        pass
-    return None
-
-async def scan_network():
-    print("[*] Avvio scansione subnet per nodi llama.cpp / OpenAPI...")
-    active_nodes = []
-    
-    # Genera IPs locali da scandire (es. da .1 a .254)
-    ips = [f"{SUBNET_PREFIX}{i}" for i in range(1, 255)]
-    ips.append("127.0.0.1") # Includi sempre localhost
-    
-    tasks = []
-    for ip in ips:
-        for port in PORT_RANGE:
-            tasks.append(probe_endpoint(ip, port))
-            
-    results = await asyncio.gather(*tasks)
-    
-    nodes_map = {}
-    for res in results:
-        if res:
-            host = res["host"]
-            if host not in nodes_map:
-                nodes_map[host] = {
-                    "node_id": f"node-{host.replace('.', '-')}",
-                    "host": host,
-                    "backends": []
-                }
-            nodes_map[host]["backends"].append({
-                "port": res["port"],
-                "models_loaded": res["models"],
-                "status": res["status"]
-            })
-            
-    topology = {
-        "cluster_version": "2.0.0",
-        "nodes": list(nodes_map.values())
-    }
-    
-    with open(MANIFEST_PATH, "w") as f:
-        json.dump(topology, f, indent=4)
-    print(f"[OK] Manifesto cluster aggiornato in {MANIFEST_PATH} ({len(nodes_map)} host trovati).")
-
-if __name__ == "__main__":
-    asyncio.run(scan_network())
-EOF
-
-# 2. Scrittura del Gateway Principale con caricamento dinamico del manifesto
 cat << 'EOF' > "$INSTALL_DIR/llm_gateway.py"
 #!/usr/bin/env python3
 import time
 import asyncio
 import os
 import json
+import psutil
 from typing import Dict, Any, Optional, List
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 import httpx
 from pydantic import BaseModel
 
-app = FastAPI(title="Distributed LLM Network Gateway", version="6.0.0")
-MANIFEST_PATH = "/opt/gateway/cluster-topology.json"
+app = FastAPI(title="LLM Cluster Dashboard", version="6.2.0")
+TOPOLOGY_PATH = "/opt/gateway/cluster-topology.json"
+STATIC_PATH = "/opt/gateway/cluster-static-nodes.json"
 
 def load_topology() -> Dict[str, Any]:
-    if os.path.exists(MANIFEST_PATH):
+    nodes_map = {}
+    
+    # 1. Carica i nodi statici manuali/esterni
+    if os.path.exists(STATIC_PATH):
         try:
-            with open(MANIFEST_PATH, "r") as f:
-                return json.load(f)
+            with open(STATIC_PATH, "r") as f:
+                static_data = json.load(f)
+                for node in static_data.get("nodes", []):
+                    nodes_map[node["node_id"]] = node
         except Exception:
             pass
-    return {"cluster_version": "2.0.0", "nodes": []}
+
+    # 2. Carica i nodi scoperti automaticamente sulla subnet
+    if os.path.exists(TOPOLOGY_PATH):
+        try:
+            with open(TOPOLOGY_PATH, "r") as f:
+                auto_data = json.load(f)
+                for node in auto_data.get("nodes", []):
+                    nodes_map[node["node_id"]] = node
+        except Exception:
+            pass
+            
+    return {
+        "cluster_version": "2.2.0",
+        "nodes": list(nodes_map.values())
+    }
+
+def get_local_metrics() -> Dict[str, Any]:
+    cpu_percent = psutil.cpu_percent(interval=None)
+    mem = psutil.virtual_memory()
+    disk = psutil.disk_usage('/')
+    return {
+        "cpu_util_pct": cpu_percent,
+        "ram_used_gb": round(mem.used / (1024**3), 2),
+        "ram_total_gb": round(mem.total / (1024**3), 2),
+        "ram_util_pct": mem.percent,
+        "disk_used_gb": round(disk.used / (1024**3), 2),
+        "disk_total_gb": round(disk.total / (1024**3), 2),
+        "disk_util_pct": disk.percent
+    }
 
 class GatewayChatRequest(BaseModel):
     model: Optional[str] = None
@@ -119,9 +78,12 @@ class GatewayChatRequest(BaseModel):
     temperature: Optional[float] = 0.2
     stream: Optional[bool] = False
 
-@app.get("/api/topology")
-async def get_topology():
-    return load_topology()
+@app.get("/api/metrics")
+async def api_metrics():
+    return {
+        "local_machine": get_local_metrics(),
+        "cluster_topology": load_topology()
+    }
 
 @app.post("/v1/chat/completions")
 async def proxy_chat(req: GatewayChatRequest):
@@ -129,20 +91,16 @@ async def proxy_chat(req: GatewayChatRequest):
     nodes = topology.get("nodes", [])
     
     target_backend = None
-    # Logica di routing dinamico basata sul primo backend disponibile con il modello richiesto o attivo
     for node in nodes:
         for backend in node.get("backends", []):
-            if not req.model or req.model in backend.get("models_loaded", []):
-                target_backend = {
-                    "host": node["host"],
-                    "port": backend["port"]
-                }
+            models = backend.get("models_loaded", [])
+            if not req.model or (models and req.model in models):
+                target_backend = {"host": node["host"], "port": backend["port"]}
                 break
         if target_backend:
             break
             
     if not target_backend:
-        # Fallback sul primo backend disponibile in assoluto nella rete
         for node in nodes:
             if node.get("backends"):
                 b = node["backends"][0]
@@ -153,45 +111,92 @@ async def proxy_chat(req: GatewayChatRequest):
         raise HTTPException(status_code=503, detail="Nessun nodo di calcolo disponibile nella rete distribuita.")
         
     url = f"http://{target_backend['host']}:{target_backend['port']}/v1/chat/completions"
-    
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
             resp = await client.post(url, json=req.dict())
             return JSONResponse(status_code=resp.status_code, content=resp.json())
         except Exception as e:
-            raise HTTPException(status_code=502, detail=fupstream error: {str(e)}")
+            raise HTTPException(status_code=502, detail=f"Upstream error: {str(e)}")
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
-    topo = load_topology()
-    return f"""
-    <html>
-    <head><title>Distributed LLM Gateway</title></head>
-    <body style="font-family:sans-serif; background:#090d16; color:#f3f4f6; padding:20px;">
-        <h1>Distributed LLM Mesh Gateway</h1>
-        <p>Stato Manifesto Cluster caricato da <code>cluster-topology.json</code>:</p>
-        <pre style="background:#111827; padding:15px; border-radius:8px;">{json.dumps(topo, indent=4)}</pre>
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="it">
+    <head>
+        <meta charset="UTF-8">
+        <title>LLM Cluster Dashboard</title>
+        <style>
+            body { font-family: 'Segoe UI', system-ui, sans-serif; background: #090d16; color: #f3f4f6; margin: 0; padding: 20px; }
+            h1 { color: #10b981; }
+            .card { background: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 15px; margin-bottom: 20px; }
+            pre { background: #030712; padding: 12px; border-radius: 6px; color: #38bdf8; overflow-x: auto; }
+            .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; }
+            .metric-val { font-size: 1.4rem; font-weight: bold; color: #10b981; margin-top: 5px; }
+        </style>
+    </head>
+    <body>
+        <h1>LLM Cluster Dashboard & Gateway</h1>
+        <p>Orchestratore distribuito attivo sulla porta <strong>9001</strong>.</p>
+        
+        <div class="grid">
+            <div class="card">
+                <h3>CPU Locale</h3>
+                <div class="metric-val" id="local-cpu">--%</div>
+            </div>
+            <div class="card">
+                <h3>RAM Locale</h3>
+                <div class="metric-val" id="local-ram">-- / -- GB</div>
+            </div>
+            <div class="card">
+                <h3>Disco Locale</h3>
+                <div class="metric-val" id="local-disk">-- / -- GB</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Topologia Cluster Unificata (Auto + Statici)</h3>
+            <pre id="cluster-json">Caricamento in corso...</pre>
+        </div>
+
+        <script>
+            async function fetchMetrics() {
+                try {
+                    const res = await fetch('/api/metrics');
+                    const data = await res.json();
+                    
+                    document.getElementById('local-cpu').innerText = data.local_machine.cpu_util_pct + '%';
+                    document.getElementById('local-ram').innerText = data.local_machine.ram_used_gb + ' / ' + data.local_machine.ram_total_gb + ' GB (' + data.local_machine.ram_util_pct + '%)';
+                    document.getElementById('local-disk').innerText = data.local_machine.disk_used_gb + ' / ' + data.local_machine.disk_total_gb + ' GB (' + data.local_machine.disk_util_pct + '%)';
+                    
+                    document.getElementById('cluster-json').innerText = JSON.stringify(data.cluster_topology, null, 4);
+                } catch(e) {
+                    console.error("Errore fetch metriche:", e);
+                }
+            }
+            setInterval(fetchMetrics, 2000);
+            fetchMetrics();
+        </script>
     </body>
     </html>
     """
+    return HTMLResponse(content=html_content, status_code=200)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=9000)
+    uvicorn.run(app, host="0.0.0.0", port=9001)
 EOF
 
-# Creazione ambiente virtuale e dipendenze
 python3 -m venv "$INSTALL_DIR/venv"
 "$INSTALL_DIR/venv/bin/pip" install --upgrade pip
-"$INSTALL_DIR/venv/bin/pip" install fastapi uvicorn httpx pydantic
+"$INSTALL_DIR/venv/bin/pip" install fastapi uvicorn httpx pydantic psutil
 
 chown -R "$CURRENT_USER:$CURRENT_USER" "$INSTALL_DIR"
-chmod +x "$INSTALL_DIR/llm_gateway.py" "$INSTALL_DIR/discovery.py"
+chmod +x "$INSTALL_DIR/llm_gateway.py"
 
-# Configurazione Servizio Systemd per il Gateway
 cat << EOF > "$SERVICE_FILE"
 [Unit]
-Description=Distributed LLM Mesh Gateway
+Description=LLM Cluster Dashboard Gateway
 After=network.target
 
 [Service]
@@ -210,7 +215,4 @@ systemctl daemon-reload
 systemctl enable llm-gateway.service
 systemctl restart llm-gateway.service
 
-echo ""
-echo "[OK] Setup Gateway distribuito completato con successo!"
-echo " Esegui la scansione di rete con: sudo python3 $INSTALL_DIR/discovery.py"
-echo " Dashboard Gateway attiva su: http://127.0.0.1:9000"
+echo "[OK] LLM Cluster Dashboard & Gateway configurato e avviato sulla porta 9001!"
