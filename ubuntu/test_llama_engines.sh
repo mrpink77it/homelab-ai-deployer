@@ -59,10 +59,10 @@ for PORT in "${PORTS[@]}"; do
 JSON_EOF
 )
 
-    # Esegue la chiamata misurando il tempo totale con curl e inviando l'output in pipe a Python
+    # Esegue la chiamata inviando l'output in pipe a Python tramite heredoc sicuro
     curl -s -X POST "http://$HOST:$PORT/v1/chat/completions" \
         -H "Content-Type: application/json" \
-        -d "$PAYLOAD" | python3 -c '
+        -d "$PAYLOAD" | python3 - << 'EOF_PY'
 import json, sys
 
 try:
@@ -70,7 +70,8 @@ try:
     
     # Controllo errori restituiti dall API
     if "error" in data:
-        print(f"  [✗] Errore API: {data[\"error\"].get(\"message\", data[\"error\"])}")
+        err_msg = data["error"].get("message", data["error"])
+        print(f"  [✗] Errore API: {err_msg}")
         sys.exit(0)
 
     usage = data.get("usage", {})
@@ -92,7 +93,8 @@ try:
     print(f"      - Time to First Token       : {pp_ms:.2f} ms")
 except Exception as e:
     print(f"  [✗] Errore nel parsing della risposta JSON: {e}")
-'
+EOF_PY
+
 done
 
 echo -e "\n=============================================================="
