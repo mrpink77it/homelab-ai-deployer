@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# v3.0.0 - Gateway & Dashboard Cluster Dinamica (Porta 9001)
+# v3.1.0 - Gateway & Dashboard Cluster Modulare con Grafico a Linee (4 Variabili)
 
 set -euo pipefail
 
@@ -29,7 +29,7 @@ fi
 ./venv/bin/pip install --upgrade pip
 ./venv/bin/pip install fastapi uvicorn requests psutil pynvml
 
-echo "[*] Generazione del backend FastAPI dinamico ($GATEWAY_DIR/main.py)..."
+echo "[*] Generazione del backend FastAPI ($GATEWAY_DIR/main.py)..."
 cat << 'EOF_PYTHON' > "$GATEWAY_DIR/main.py"
 import json
 import os
@@ -64,7 +64,6 @@ def scan_local_models():
                 size_bytes = os.path.getsize(path)
                 size_gb = round(size_bytes / (1024**3), 2)
                 
-                # Categorizzazione dinamica basata sul nome
                 category = "Generale / Chat"
                 if "coder" in f.lower():
                     category = "Sviluppo & Codice (Coding)"
@@ -86,7 +85,6 @@ def scan_local_models():
 def get_aggregated_nodes():
     nodes_dict = {}
     
-    # 1. Nodi da auto-discovery
     if os.path.exists(TOPOLOGY_FILE):
         try:
             with open(TOPOLOGY_FILE, "r", encoding="utf-8") as f:
@@ -102,7 +100,6 @@ def get_aggregated_nodes():
         except Exception:
             pass
 
-    # 2. Nodi statici ed esterni
     if os.path.exists(STATIC_NODES_FILE):
         try:
             with open(STATIC_NODES_FILE, "r", encoding="utf-8") as f:
@@ -203,7 +200,7 @@ async def control_engine(req: Request):
             PID = subprocess.getoutput(f"pgrep -f 'port {port}' | head -n 1")
             if PID:
                 subprocess.run(["kill", "-9", PID])
-                log_event(f"Processo PID {PID} forzatamente terminato.", "WARN")
+                log_event(f"Processo PID {PID} terminato.", "WARN")
         return {"status": "ok", "message": f"Azione {action} eseguita con successo su {service_name}"}
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
@@ -234,13 +231,10 @@ async def proxy_chat_completions(request: Request):
         )
         elapsed_ms = round((time.time() - start_time) * 1000, 2)
         
-        # Analisi richiesta e instradamento avanzato
         messages = body.get("messages", [])
-        prompt_snippet = messages[-1].get("content", "N/A")[:30] if messages else "N/A"
+        prompt_snippet = messages[-1].get("content", "N/A")[:25] if messages else "N/A"
         req_type = "Chat / Completamento"
-        if "embedding" in request.url.path:
-            req_type = "Embeddings Vettoriali"
-
+        
         routing_target = f"Motore LLM (Porta {target_port})"
         if "qdrant" in str(body).lower():
             routing_target = "Database Vettoriale Qdrant"
@@ -271,7 +265,7 @@ def read_root():
         return f.read()
 EOF_PYTHON
 
-echo "[*] Generazione del frontend modulare ($GATEWAY_DIR/index.html)..."
+echo "[*] Generazione del frontend con grafico a linee multi-variabile ($GATEWAY_DIR/index.html)..."
 cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
 <!DOCTYPE html>
 <html lang="it">
@@ -305,7 +299,6 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
         .metric-card span { display: block; color: var(--text-muted); font-size: 0.8rem; text-transform: uppercase; }
         .metric-card h2 { font-size: 1.4rem; color: var(--accent-blue); margin-top: 5px; }
 
-        /* Sistema Modulare a Tab / Selettore Nodi */
         .cluster-nav { display: flex; gap: 10px; margin-bottom: 15px; overflow-x: auto; padding-bottom: 5px; }
         .tab-btn {
             background: var(--card-bg);
@@ -379,8 +372,9 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
             color: #38bdf8;
         }
 
-        .chart-side { display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0f172a; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
-        .chart-container { width: 180px; height: 180px; margin-bottom: 10px; }
+        .chart-side { display: flex; flex-direction: column; background: #0f172a; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
+        .chart-side h3 { font-size: 0.95rem; margin-bottom: 10px; color: var(--text-muted); text-align: center; }
+        .chart-container { flex-grow: 1; min-height: 200px; position: relative; }
 
         .global-logs { background: var(--card-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
         .global-logs h3 { font-size: 1rem; margin-bottom: 10px; }
@@ -415,15 +409,12 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
         </div>
     </div>
 
-    <!-- Navigazione Modulare Cluster -->
     <div class="cluster-nav" id="cluster-tabs"></div>
 
-    <!-- Contenitore Modulare Attivo -->
     <div class="modular-container" id="modular-view">
         <div style="text-align:center; color: var(--text-muted); grid-column: span 2;">Caricamento nodi cluster in corso...</div>
     </div>
 
-    <!-- Registro Globale di Routing -->
     <div class="global-logs">
         <h3>Registro Richieste & Instradamento Cluster (Porta 9001)</h3>
         <table class="log-table">
@@ -450,6 +441,15 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
         let activeBackendKey = null;
         let engineChart = null;
 
+        // Storico dati per il grafico live a 4 variabili
+        const historyData = {
+            labels: [],
+            temp: [],
+            fan: [],
+            load: [],
+            ram: []
+        };
+
         async function fetchTelemetry() {
             try {
                 const res = await fetch('/api/telemetry');
@@ -460,7 +460,6 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
                 document.getElementById('vram-val').innerText = `${data.nvidia.vram_used} / ${data.nvidia.vram_total} MB`;
                 document.getElementById('gpu-temp-val').innerText = `${data.nvidia.temp}°C / ${data.nvidia.fan}%`;
 
-                // Raccoglie tutti i backend disponibili
                 allBackends = [];
                 data.nodes.forEach(node => {
                     node.backends.forEach(backend => {
@@ -477,6 +476,28 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
                 if (allBackends.length > 0 && !activeBackendKey) {
                     activeBackendKey = `${allBackends[0].host}:${allBackends[0].port}`;
                 }
+
+                // Aggiornamento storico grafico
+                const now = new Date().toLocaleTimeString();
+                if (historyData.labels.length > 15) {
+                    historyData.labels.shift();
+                    historyData.temp.shift();
+                    historyData.fan.shift();
+                    historyData.load.shift();
+                    historyData.ram.shift();
+                }
+
+                const activeBackend = allBackends.find(b => `${b.host}:${b.port}` === activeBackendKey);
+                const currentTemp = activeBackend?.hardware?.temp || data.nvidia.temp || 45;
+                const currentFan = activeBackend?.hardware?.fan || data.nvidia.fan || 0;
+                const currentLoad = activeBackend?.hardware?.cpu_util_pct || data.cpu_usage || 10;
+                const currentRam = activeBackend?.hardware?.ram_used_gb || data.ram_used_gb || 4.0;
+
+                historyData.labels.push(now);
+                historyData.temp.push(currentTemp);
+                historyData.fan.push(currentFan);
+                historyData.load.push(currentLoad);
+                historyData.ram.push(currentRam);
 
                 renderClusterTabs();
                 renderModularView();
@@ -517,7 +538,6 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
             const hw = backend.hardware || { cpu_util_pct: 0, ram_used_gb: 0, ram_total_gb: 0 };
             const loadedModel = (backend.models_loaded || ['N/D'])[0];
 
-            // Generazione dinamica opzioni modello raggruppate per categoria
             const categories = {};
             (backend.models_available || []).forEach(m => {
                 if (!categories[m.category]) categories[m.category] = [];
@@ -560,38 +580,39 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
                     </div>
                 </div>
                 <div class="chart-side">
+                    <h3>Telemetria Live (RAM, Load, Fan, Temp)</h3>
                     <div class="chart-container">
-                        <canvas id="engineDoughnut"></canvas>
-                    </div>
-                    <div style="font-size: 0.85rem; color: var(--text-muted); text-align: center; margin-top: 5px;">
-                        Temp: <strong style="color:var(--text-main)">${backend.hardware?.temp || 45}°C</strong> | 
-                        Ventola: <strong style="color:var(--text-main)">${backend.hardware?.fan || 0}%</strong> | 
-                        Carico: <strong style="color:var(--accent-blue)">${hw.cpu_util_pct || 15}%</strong>
+                        <canvas id="engineLineChart"></canvas>
                     </div>
                 </div>
             `;
 
-            renderEngineChart(hw.cpu_util_pct || 15);
+            renderEngineLineChart();
         }
 
-        function renderEngineChart(loadVal) {
-            const ctx = document.getElementById('engineDoughnut').getContext('2d');
+        function renderEngineLineChart() {
+            const ctx = document.getElementById('engineLineChart').getContext('2d');
             if (engineChart) engineChart.destroy();
 
             engineChart = new Chart(ctx, {
-                type: 'doughnut',
+                type: 'line',
                 data: {
-                    labels: ['Carico Attivo (%)', 'Risorse Libere (%)'],
-                    datasets: [{
-                        data: [loadVal, Math.max(0, 100 - loadVal)],
-                        backgroundColor: ['#38bdf8', '#334155'],
-                        borderWidth: 0
-                    }]
+                    labels: historyData.labels,
+                    datasets: [
+                        { label: 'Temperatura (°C)', data: historyData.temp, borderColor: '#ef4444', backgroundColor: '#ef4444', tension: 0.3, yAxisID: 'y' },
+                        { label: 'Ventola (%)', data: historyData.fan, borderColor: '#38bdf8', backgroundColor: '#38bdf8', tension: 0.3, yAxisID: 'y' },
+                        { label: 'Carico (%)', data: historyData.load, borderColor: '#22c55e', backgroundColor: '#22c55e', tension: 0.3, yAxisID: 'y' },
+                        { label: 'RAM Usata (GB)', data: historyData.ram, borderColor: '#f59e0b', backgroundColor: '#f59e0b', tension: 0.3, yAxisID: 'y1' }
+                    ]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { legend: { display: false } }
+                    scales: {
+                        y: { type: 'linear', display: true, position: 'left', min: 0, max: 100, grid: { color: '#334155' } },
+                        y1: { type: 'linear', display: true, position: 'right', min: 0, max: 64, grid: { drawOnChartArea: false } },
+                        x: { grid: { display: false } }
+                    }
                 }
             });
         }
@@ -642,7 +663,6 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
             }
         }
 
-        // Aggiornamento rapido ogni 1 secondo
         setInterval(fetchTelemetry, 1000);
         setInterval(fetchLogs, 1000);
         fetchTelemetry();
