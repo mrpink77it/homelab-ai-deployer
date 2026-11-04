@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+# v2.5.0 - Setup Completo Gateway & Dashboard Cluster Open API (Porta 9001)
+
 set -euo pipefail
 
 if [ "$EUID" -ne 0 ]; then
@@ -6,545 +9,583 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-INSTALL_DIR="/opt/gateway"
-LOGS_DIR="$INSTALL_DIR/logs"
-MODELS_DIR="/opt/llama_models"
-TOPOLOGY_PATH="$INSTALL_DIR/cluster-topology.json"
-STATIC_PATH="$INSTALL_DIR/cluster-static-nodes.json"
+GATEWAY_DIR="/opt/gateway"
 SERVICE_FILE="/etc/systemd/system/llm-gateway.service"
-CURRENT_USER="${SUDO_USER:-root}"
+PORT=9001
 
-echo "[*] Configurazione Gateway in $INSTALL_DIR..."
-mkdir -p "$INSTALL_DIR"
-mkdir -p "$LOGS_DIR"
-mkdir -p "$MODELS_DIR"
+echo "[*] Installazione dipendenze Python per il Gateway..."
+apt-get update
+apt-get install -y python3 python3-pip python3-venv lm-sensors
 
-if [ ! -f "$TOPOLOGY_PATH" ]; then
-    echo '{"cluster_version": "3.0.0", "nodes": []}' > "$TOPOLOGY_PATH"
+echo "[*] Creazione ambiente di lavoro in $GATEWAY_DIR..."
+mkdir -p "$GATEWAY_DIR"
+cd "$GATEWAY_DIR"
+
+if [ ! -d "venv" ]; then
+    python3 -m venv venv
 fi
-if [ ! -f "$STATIC_PATH" ]; then
-    echo '{"nodes": []}' > "$STATIC_PATH"
-fi
 
-cat << 'EOF_REQ' > "$INSTALL_DIR/requirements.txt"
-fastapi
-uvicorn
-httpx
-pydantic
-psutil
-EOF_REQ
+./venv/bin/pip install --upgrade pip
+./venv/bin/pip install fastapi uvicorn requests psutil pynvml
 
-cat << 'EOF_PY' > "$INSTALL_DIR/llm_gateway.py"
-#!/usr/bin/env python3
-"""
-Gateway e Dashboard Minimalista per Server Open API
-"""
-
-import time
-import os
+echo "[*] Generazione del backend FastAPI ($GATEWAY_DIR/main.py)..."
+cat << 'EOF_PYTHON' > "$GATEWAY_DIR/main.py"
 import json
+import os
+import time
+import subprocess
+import requests
 import psutil
-from typing import Dict, Any, Optional, List
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
-import httpx
-from pydantic import BaseModel
 
-TOPOLOGY_PATH = "/opt/gateway/cluster-topology.json"
-STATIC_PATH = "/opt/gateway/cluster-static-nodes.json"
-MODELS_DIR = "/opt/llama_models"
+app = FastAPI(title="Open API Cluster Gateway & Telemetry")
 
-app = FastAPI(title="Gateway e Dashboard Server Open API", version="3.0.0")
-RECENT_LOGS: List[Dict[str, Any]] = []
+TOPOLOGY_FILE = "/opt/gateway/cluster-topology.json"
+STATIC_NODES_FILE = "/opt/gateway/cluster-static-nodes.json"
+SYSTEM_LOGS = []
+GLOBAL_REQUEST_LOGS = []
 
-def add_log_entry(level: str, message: str, node: str = "-", latency: float = 0.0, prompt: str = "-"):
-    entry = {
-        "timestamp": time.strftime("%H:%M:%S"),
-        "level": level,
-        "message": message,
-        "node": node,
-        "latency": f"{latency:.2f}s" if latency > 0 else "-",
-        "prompt": (prompt[:40] + "...") if len(prompt) > 40 else prompt
-    }
-    RECENT_LOGS.append(entry)
-    if len(RECENT_LOGS) > 200:
-        RECENT_LOGS.pop(0)
+def log_event(msg, level="INFO"):
+    timestamp = time.strftime("%H:%M:%S")
+    SYSTEM_LOGS.append(f"[{timestamp}] [{level}] {msg}")
+    if len(SYSTEM_LOGS) > 200:
+        SYSTEM_LOGS.pop(0)
 
-def get_system_metrics():
-    cpu_util = psutil.cpu_percent(interval=None)
+def get_aggregated_nodes():
+    nodes_dict = {}
+    
+    # 1. Caricamento nodi auto-scoperti dal demone di discovery
+    if os.path.exists(TOPOLOGY_FILE):
+        try:
+            with open(TOPOLOGY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for node in data.get("nodes", []):
+                    nid = node.get("node_id")
+                    nodes_dict[nid] = {
+                        "node_id": nid,
+                        "name": f"Nodo ({node.get('host')})",
+                        "host": node.get("host"),
+                        "backends": node.get("backends", [])
+                    }
+        except Exception as e:
+            log_event(f"Errore lettura cluster-topology.json: {str(e)}", "ERROR")
+
+    # 2. Caricamento nodi statici/esterni (gestiti da add_node.sh)
+    if os.path.exists(STATIC_NODES_FILE):
+        try:
+            with open(STATIC_NODES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for node in data.get("nodes", []):
+                    nid = node.get("node_id")
+                    if nid in nodes_dict:
+                        existing_ports = [b["port"] for b in nodes_dict[nid]["backends"]]
+                        for b in node.get("backends", []):
+                            if b["port"] not in existing_ports:
+                                nodes_dict[nid]["backends"].append(b)
+                    else:
+                        nodes_dict[nid] = {
+                            "node_id": nid,
+                            "name": f"Esterno ({node.get('host')})",
+                            "host": node.get("host"),
+                            "backends": node.get("backends", [])
+                        }
+        except Exception as e:
+            log_event(f"Errore lettura cluster-static-nodes.json: {str(e)}", "ERROR")
+
+    if not nodes_dict:
+        return [{
+            "node_id": "node-127-0-0-1",
+            "name": "Server Locale",
+            "host": "127.0.0.1",
+            "backends": [{
+                "port": 8080,
+                "status": "OFFLINE",
+                "models_loaded": ["Nessun modello"],
+                "backend_type": "CPU / OpenBLAS",
+                "hardware": {"cpu_util_pct": 0, "ram_used_gb": 0, "ram_total_gb": 0, "ram_util_pct": 0}
+            }]
+        }]
+
+    return list(nodes_dict.values())
+
+@app.get("/api/telemetry")
+def get_telemetry():
     mem = psutil.virtual_memory()
-    disk = psutil.disk_usage('/')
+    cpu_percent = psutil.cpu_percent(interval=None)
+    
+    nvidia_info = {"temp": 0, "fan": 0, "vram_used": 0, "vram_total": 8192}
+    try:
+        res = subprocess.run(
+            ["nvidia-smi", "--query-gpu=temperature.gpu,fan.speed,memory.used,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=1
+        )
+        if res.returncode == 0:
+            parts = res.stdout.strip().split(',')
+            if len(parts) == 4:
+                nvidia_info["temp"] = int(parts[0].strip())
+                nvidia_info["fan"] = int(parts[1].strip())
+                nvidia_info["vram_used"] = int(parts[2].strip())
+                nvidia_info["vram_total"] = int(parts[3].strip())
+    except Exception:
+        pass
+
+    nodes = get_aggregated_nodes()
     return {
-        "cpu_util_pct": cpu_util,
+        "cpu_usage": cpu_percent,
         "ram_used_gb": round(mem.used / (1024**3), 2),
         "ram_total_gb": round(mem.total / (1024**3), 2),
-        "ram_util_pct": mem.percent,
-        "disk_used_gb": round(disk.used / (1024**3), 2),
-        "disk_total_gb": round(disk.total / (1024**3), 2),
-        "disk_util_pct": disk.percent
+        "nvidia": nvidia_info,
+        "nodes": nodes
     }
 
-def load_topology() -> Dict[str, Any]:
-    nodes_map = {}
-    if os.path.exists(STATIC_PATH):
-        try:
-            with open(STATIC_PATH, "r") as f:
-                for node in json.load(f).get("nodes", []):
-                    nodes_map[node["node_id"]] = node
-        except Exception:
-            pass
-    if os.path.exists(TOPOLOGY_PATH):
-        try:
-            with open(TOPOLOGY_PATH, "r") as f:
-                for node in json.load(f).get("nodes", []):
-                    nodes_map[node["node_id"]] = node
-        except Exception:
-            pass
-    return {"cluster_version": "3.0.0", "nodes": list(nodes_map.values())}
-
-def get_available_models() -> List[str]:
-    models = []
-    if os.path.exists(MODELS_DIR):
-        try:
-            models = [f for f in os.listdir(MODELS_DIR) if f.endswith(".gguf")]
-        except Exception:
-            pass
-    return sorted(models)
-
-@app.get("/api/metrics")
-async def get_metrics():
-    return {
-        "system": get_system_metrics(),
-        "cluster": load_topology(),
-        "models": get_available_models(),
-        "logs": RECENT_LOGS
+@app.post("/api/engine/control")
+async def control_engine(req: Request):
+    data = await req.json()
+    action = data.get("action")
+    port = data.get("port")
+    
+    service_map = {
+        8080: "llama-cpp-vulkan.service",
+        8200: "llama-cuda-0.service",
+        8082: "llama-cpu.service"
     }
+    
+    service_name = service_map.get(int(port))
+    if not service_name:
+        return JSONResponse({"status": "error", "message": f"Servizio systemd non mappato per la porta {port}"}, status_code=400)
+    
+    try:
+        if action == "restart":
+            subprocess.run(["systemctl", "restart", service_name], check=True)
+            log_event(f"Servizio {service_name} riavviato sulla porta {port}.")
+        elif action == "stop":
+            subprocess.run(["systemctl", "stop", service_name], check=True)
+            log_event(f"Servizio {service_name} arrestato.")
+        elif action == "start":
+            subprocess.run(["systemctl", "start", service_name], check=True)
+            log_event(f"Servizio {service_name} avviato.")
+        elif action == "kill":
+            PID = subprocess.getoutput(f"pgrep -f 'port {port}' | head -n 1")
+            if PID:
+                subprocess.run(["kill", "-9", PID])
+                log_event(f"Processo PID {PID} forzatamente terminato (Kill -9).", "WARN")
+        return {"status": "ok", "message": f"Azione {action} eseguita con successo su {service_name}"}
+    except Exception as e:
+        log_event(f"Errore controllo servizio {service_name}: {str(e)}", "ERROR")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
-class EngineActionRequest(BaseModel):
-    model_name: Optional[str] = None
-    port: int
-
-@app.post("/api/engine/start")
-async def engine_start(req: EngineActionRequest):
-    add_log_entry("INFO", f"Avvio modello {req.model_name} sulla porta {req.port}", f"Porta {req.port}")
-    return {"status": "success", "message": f"Modello {req.model_name} avviato sulla porta {req.port}"}
-
-@app.post("/api/engine/stop")
-async def engine_stop(req: EngineActionRequest):
-    add_log_entry("INFO", f"Arresto motore sulla porta {req.port}", f"Porta {req.port}")
-    return {"status": "success", "message": f"Motore sulla porta {req.port} arrestato."}
-
-@app.post("/api/engine/restart")
-async def engine_restart(req: EngineActionRequest):
-    add_log_entry("INFO", f"Riavvio motore sulla porta {req.port}", f"Porta {req.port}")
-    return {"status": "success", "message": f"Motore sulla porta {req.port} riavviato."}
+@app.get("/api/logs")
+def get_logs():
+    return {"logs": SYSTEM_LOGS, "request_logs": GLOBAL_REQUEST_LOGS}
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: Request):
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+async def proxy_chat_completions(request: Request):
+    body = await request.json()
+    target_port = body.get("port", 8200)
     
-    model = body.get("model", "")
-    messages = body.get("messages", [])
-    user_prompt = messages[-1].get("content", "") if messages else ""
-    
-    topology = load_topology()
-    target_backend = None
-    
-    for node in topology.get("nodes", []):
-        for b in node.get("backends", []):
-            models = b.get("models_loaded", [])
-            if not model or model in models:
-                target_backend = {"host": node["host"], "port": b["port"]}
-                break
-        if target_backend:
-            break
-            
-    if not target_backend:
-        for node in topology.get("nodes", []):
-            if node.get("backends"):
-                b = node["backends"][0]
-                target_backend = {"host": node["host"], "port": b["port"]}
+    nodes = get_aggregated_nodes()
+    target_host = "127.0.0.1"
+    for n in nodes:
+        for b in n.get("backends", []):
+            if b.get("port") == int(target_port):
+                target_host = n.get("host", "127.0.0.1")
                 break
                 
-    if not target_backend:
-        raise HTTPException(status_code=503, detail="Nessun server disponibile.")
-        
-    url = f"http://{target_backend['host']}:{target_backend['port']}/v1/chat/completions"
-    start_t = time.time()
-    
+    start_time = time.time()
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(url, json=body)
-            elapsed = time.time() - start_t
-            if resp.status_code == 200:
-                add_log_entry("SUCCESS", "Completamento chat riuscito", f"{target_backend['host']}:{target_backend['port']}", elapsed, user_prompt)
-                return resp.json()
-            else:
-                return JSONResponse(status_code=resp.status_code, content=resp.json())
+        resp = requests.post(
+            f"http://{target_host}:{target_port}/v1/chat/completions",
+            json=body,
+            timeout=120
+        )
+        elapsed_ms = round((time.time() - start_time) * 1000, 2)
+        
+        log_entry = {
+            "time": time.strftime("%H:%M:%S"),
+            "port": target_port,
+            "status": resp.status_code,
+            "latency_ms": elapsed_ms,
+            "model": body.get("model", "unknown")
+        }
+        GLOBAL_REQUEST_LOGS.append(log_entry)
+        if len(GLOBAL_REQUEST_LOGS) > 100:
+            GLOBAL_REQUEST_LOGS.pop(0)
+
+        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
     except Exception as e:
-        add_log_entry("ERROR", str(e), "Gateway", prompt=user_prompt)
-        raise HTTPException(status_code=502, detail=str(e))
+        log_event(f"Errore Proxy Gateway su porta {target_port}: {str(e)}", "ERROR")
+        return JSONResponse({"error": str(e)}, status_code=502)
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard():
-    return """
-    <!DOCTYPE html>
-    <html lang="it">
-    <head>
-        <meta charset="UTF-8">
-        <title>Monitor Server Open API</title>
-        <style>
-            :root {
-                --bg: #121214;
-                --surface: #18181b;
-                --border: #27272a;
-                --text: #f4f4f5;
-                --text-muted: #a1a1aa;
-                --accent: #3b82f6;
-                --success: #10b981;
-                --danger: #ef4444;
-            }
-            body {
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                background: var(--bg);
-                color: var(--text);
-                margin: 0;
-                padding: 24px;
-            }
-            header {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                border-bottom: 1px solid var(--border);
-                padding-bottom: 16px;
-                margin-bottom: 24px;
-            }
-            h1 { margin: 0; font-size: 1.4rem; font-weight: 600; color: var(--text); }
-            .tabs {
-                display: flex;
-                gap: 8px;
-                border-bottom: 1px solid var(--border);
-                margin-bottom: 24px;
-                padding-bottom: 12px;
-            }
-            .tab-btn {
-                background: var(--surface);
-                color: var(--text-muted);
-                border: 1px solid var(--border);
-                padding: 8px 16px;
-                border-radius: 6px;
-                cursor: pointer;
-                font-size: 0.9rem;
-            }
-            .tab-btn.active {
-                background: var(--accent);
-                color: #fff;
-                border-color: var(--accent);
-            }
-            .tab-content { display: none; }
-            .tab-content.active { display: block; }
-            .card {
-                background: var(--surface);
-                border: 1px solid var(--border);
-                border-radius: 8px;
-                padding: 20px;
-                margin-bottom: 20px;
-            }
-            .metrics-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                gap: 16px;
-                margin-bottom: 24px;
-            }
-            .metric-card {
-                background: var(--surface);
-                border: 1px solid var(--border);
-                border-radius: 8px;
-                padding: 16px;
-            }
-            .metric-title { font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px; }
-            .metric-val { font-size: 1.2rem; font-weight: 600; color: var(--accent); }
-            
-            /* Carousel per i Server da 1 a N */
-            .carousel-wrapper {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 16px;
-                margin-top: 10px;
-            }
-            .nav-btn {
-                background: var(--surface);
-                color: var(--text);
-                border: 1px solid var(--border);
-                width: 40px;
-                height: 40px;
-                border-radius: 50%;
-                font-size: 1.2rem;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }
-            .nav-btn:hover { background: var(--border); }
-            .server-box {
-                background: #101012;
-                border: 1px solid var(--border);
-                border-radius: 8px;
-                padding: 24px;
-                width: 100%;
-                max-width: 500px;
-            }
-            .row { display: flex; justify-content: space-between; font-size: 0.9rem; padding: 8px 0; border-bottom: 1px solid var(--border); }
-            .row-label { color: var(--text-muted); }
-            .row-val { font-family: monospace; color: var(--text); }
-            
-            select, button.action-btn {
-                background: #27272a;
-                color: #fff;
-                border: 1px solid var(--border);
-                padding: 8px 12px;
-                border-radius: 6px;
-                width: 100%;
-                margin-top: 10px;
-                cursor: pointer;
-                font-size: 0.9rem;
-            }
-            button.action-btn:hover { background: #3f3f46; }
-            button.stop-btn { background: #7f1d1d; border-color: #991b1b; }
-            button.stop-btn:hover { background: #991b1b; }
+def read_root():
+    with open("index.html", "r", encoding="utf-8") as f:
+        return f.read()
+EOF_PYTHON
 
-            table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-            th, td { text-align: left; padding: 10px; border-bottom: 1px solid var(--border); }
-            th { color: var(--text-muted); }
-            pre { background: #101012; padding: 12px; border-radius: 6px; color: #38bdf8; overflow-x: auto; font-size: 0.85rem; }
-            .placeholder { text-align: center; color: var(--text-muted); padding: 40px; border: 2px dashed var(--border); border-radius: 8px; }
-        </style>
-    </head>
-    <body>
-        <header>
-            <h1>Monitor Server Open API</h1>
-            <div id="status-indicator" style="font-size: 0.85rem; color: var(--success); font-weight: 600;">● SISTEMA ATTIVO</div>
-        </header>
+echo "[*] Generazione del frontend Dashboard ($GATEWAY_DIR/index.html)..."
+cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor Server Open API - Cluster Gateway</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --card-bg: #1e293b;
+            --border-color: #334155;
+            --accent-blue: #38bdf8;
+            --accent-green: #22c55e;
+            --accent-red: #ef4444;
+            --accent-yellow: #f59e0b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
 
-        <div class="tabs">
-            <button class="tab-btn active" onclick="switchTab('servers')">Server in Rete (1..N)</button>
-            <button class="tab-btn" onclick="switchTab('nodes')">Gestione Nodi</button>
-            <button class="tab-btn" onclick="switchTab('services')">Servizi e Database</button>
-            <button class="tab-btn" onclick="switchTab('logs')">Registro Attività</button>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+        body { background: var(--bg-dark); color: var(--text-main); padding: 20px; line-height: 1.5; }
+
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px solid var(--border-color); }
+        h1 { font-size: 1.5rem; font-weight: 700; }
+        .status-badge { background: rgba(34, 197, 94, 0.1); color: var(--accent-green); padding: 4px 12px; border-radius: 20px; font-weight: 600; font-size: 0.85rem; }
+
+        .metrics-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 25px; }
+        .metric-card { background: var(--card-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
+        .metric-card span { display: block; color: var(--text-muted); font-size: 0.8rem; text-transform: uppercase; }
+        .metric-card h2 { font-size: 1.4rem; color: var(--accent-blue); margin-top: 5px; }
+
+        .carousel-section { margin-bottom: 30px; }
+        .carousel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .carousel-container { display: flex; gap: 15px; overflow-x: auto; scroll-behavior: smooth; padding-bottom: 10px; }
+        .carousel-container::-webkit-scrollbar { height: 8px; }
+        .carousel-container::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+
+        .node-card {
+            flex: 0 0 100%;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 18px;
+            min-width: 300px;
+        }
+        @media (min-width: 768px) { .node-card { flex: 0 0 calc(33.333% - 10px); } }
+        @media (min-width: 1440px) { .node-card { flex: 0 0 calc(20% - 12px); } }
+
+        .node-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .node-title { font-weight: 600; font-size: 1.05rem; }
+        .node-badge { font-size: 0.75rem; padding: 2px 8px; border-radius: 4px; background: #334155; }
+        .node-badge.online { background: rgba(34, 197, 94, 0.2); color: var(--accent-green); }
+        .node-badge.offline { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
+
+        .node-info { font-size: 0.82rem; color: var(--text-muted); margin-bottom: 10px; }
+        .node-info div { display: flex; justify-content: space-between; margin-bottom: 3px; }
+
+        select.model-select {
+            width: 100%;
+            background: #0f172a;
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            padding: 8px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            margin-bottom: 10px;
+        }
+
+        .control-btns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
+        .btn {
+            background: var(--border-color);
+            color: white;
+            border: none;
+            padding: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .btn:hover { opacity: 0.9; }
+        .btn-start { background: #166534; color: #4ade80; }
+        .btn-stop { background: #991b1b; color: #fca5a5; }
+        .btn-restart { background: #1e40af; color: #93c5fd; }
+        .btn-kill { background: #7f1d1d; color: #f87171; }
+
+        .terminal-box {
+            background: #090d16;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 8px;
+            font-family: monospace;
+            font-size: 0.72rem;
+            height: 80px;
+            overflow-y: auto;
+            color: #38bdf8;
+        }
+
+        .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .chart-card { background: var(--card-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
+        .chart-card h3 { font-size: 0.95rem; margin-bottom: 10px; color: var(--text-muted); }
+
+        .global-logs { background: var(--card-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
+        .global-logs h3 { font-size: 1rem; margin-bottom: 10px; }
+        .log-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+        .log-table th, .log-table td { padding: 8px; text-align: left; border-bottom: 1px solid var(--border-color); }
+        .log-table th { color: var(--text-muted); font-weight: 600; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Monitor Server Open API</h1>
+        <div class="status-badge" id="cluster-status">SISTEMA ATTIVO</div>
+    </header>
+
+    <div class="metrics-bar">
+        <div class="metric-card">
+            <span>Carico CPU Host</span>
+            <h2 id="cpu-host-val">0.0%</h2>
         </div>
-
-        <!-- TAB 1: SERVER & MOTORI -->
-        <div id="tab-servers" class="tab-content active">
-            <div class="metrics-grid">
-                <div class="metric-card"><div class="metric-title">CPU Host</div><div class="metric-val" id="cpu-metric">0%</div></div>
-                <div class="metric-card"><div class="metric-title">RAM di Sistema</div><div class="metric-val" id="ram-metric">0 GB</div></div>
-                <div class="metric-card"><div class="metric-title">Spazio Disco</div><div class="metric-val" id="disk-metric">0 GB</div></div>
-            </div>
-
-            <div class="card">
-                <h3 style="margin-top:0;">Navigazione Server Cluster (Porta 1 di N)</h3>
-                <div class="carousel-wrapper">
-                    <button class="nav-btn" onclick="prevServer()">&#10094;</button>
-                    <div id="server-container" class="server-box">Caricamento server in corso...</div>
-                    <button class="nav-btn" onclick="nextServer()">&#10095;</button>
-                </div>
-            </div>
+        <div class="metric-card">
+            <span>RAM di Sistema</span>
+            <h2 id="ram-host-val">0.0 / 0.0 GB</h2>
         </div>
-
-        <!-- TAB 2: NODI -->
-        <div id="tab-nodes" class="tab-content">
-            <div class="card">
-                <h3>Topologia e Nodi</h3>
-                <div class="placeholder">Gestione dei nodi di rete statici e dinamici del cluster.</div>
-            </div>
+        <div class="metric-card">
+            <span>NVIDIA VRAM (RTX 3060 Ti)</span>
+            <h2 id="vram-val">0 / 8192 MB</h2>
         </div>
-
-        <!-- TAB 3: SERVIZI -->
-        <div id="tab-services" class="tab-content">
-            <div class="card">
-                <h3>Servizi Ausiliari</h3>
-                <div class="placeholder">Integrazione database vettoriali e container.</div>
-            </div>
+        <div class="metric-card">
+            <span>GPU Temp / Ventola</span>
+            <h2 id="gpu-temp-val">0°C / 0%</h2>
         </div>
+    </div>
 
-        <!-- TAB 4: LOG -->
-        <div id="tab-logs" class="tab-content">
-            <div class="card">
-                <h3>Registro Attività</h3>
-                <table>
-                    <thead>
-                        <tr><th>Ora</th><th>Livello</th><th>Origine</th><th>Prompt</th><th>Latenza</th><th>Messaggio</th></tr>
-                    </thead>
-                    <tbody id="logs-tbody"></tbody>
-                </table>
-            </div>
+    <div class="carousel-section">
+        <div class="carousel-header">
+            <h3>Navigazione Cluster (Auto-Discovery + Nodi Statici)</h3>
         </div>
+        <div class="carousel-container" id="nodes-carousel"></div>
+    </div>
 
-        <script>
-            let serverList = [];
-            let currentServerIdx = 0;
-            let availableModels = [];
+    <div class="charts-grid">
+        <div class="chart-card">
+            <h3>Telemetria GPU NVIDIA (Temperatura & Ventole)</h3>
+            <canvas id="tempChart" height="150"></canvas>
+        </div>
+        <div class="chart-card">
+            <h3>Allocazione Memoria VRAM (MB)</h3>
+            <canvas id="vramChart" height="150"></canvas>
+        </div>
+    </div>
 
-            function switchTab(tabName) {
-                document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-                document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-                document.getElementById(`tab-${tabName}`).classList.add('active');
-                event.target.classList.add('active');
-            }
+    <div class="global-logs">
+        <h3>Registro Richieste Gateway Open API (Porta 9001)</h3>
+        <table class="log-table">
+            <thead>
+                <tr>
+                    <th>Ora</th>
+                    <th>Porta Destinazione</th>
+                    <th>Modello Target</th>
+                    <th>Latenza (ms)</th>
+                    <th>Stato HTTP</th>
+                </tr>
+            </thead>
+            <tbody id="global-request-logs">
+                <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">In attesa di richieste API...</td></tr>
+            </tbody>
+        </table>
+    </div>
 
-            function prevServer() {
-                if (serverList.length === 0) return;
-                currentServerIdx = (currentServerIdx - 1 + serverList.length) % serverList.length;
-                renderServer();
-            }
+    <script>
+        const ctxTemp = document.getElementById('tempChart').getContext('2d');
+        const tempChart = new Chart(ctxTemp, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Temp GPU (°C)', data: [], borderColor: '#ef4444', tension: 0.3 },
+                    { label: 'Ventola (%)', data: [], borderColor: '#38bdf8', tension: 0.3 }
+                ]
+            },
+            options: { responsive: true, scales: { y: { beginAtZero: true, max: 100 } } }
+        });
 
-            function nextServer() {
-                if (serverList.length === 0) return;
-                currentServerIdx = (currentServerIdx + 1) % serverList.length;
-                renderServer();
-            }
+        const ctxVram = document.getElementById('vramChart').getContext('2d');
+        const vramChart = new Chart(ctxVram, {
+            type: 'bar',
+            data: {
+                labels: ['RTX 3060 Ti'],
+                datasets: [
+                    { label: 'VRAM Usata (MB)', data: [0], backgroundColor: '#38bdf8' },
+                    { label: 'VRAM Libera (MB)', data: [8192], backgroundColor: '#334155' }
+                ]
+            },
+            options: { responsive: true, scales: { x: { stacked: true }, y: { stacked: true, max: 8192 } } }
+        });
 
-            function renderServer() {
-                const container = document.getElementById('server-container');
-                if (serverList.length === 0) {
-                    container.innerHTML = '<div style="text-align:center; color:var(--text-muted);">Nessun server rilevato nel cluster.</div>';
-                    return;
+        const modelOptionsHTML = `
+            <optgroup label="⚡ Leggeri & Avvio Rapido (RAM < 3GB)">
+                <option value="Llama-3.2-3B-Instruct-Q4_K_M.gguf">Llama-3.2-3B-Instruct (1.9 GB) [CPU/GPU]</option>
+                <option value="qwen2.5-1.5b-instruct-q8_0.gguf">Qwen2.5-1.5B-Instruct (1.8 GB) [CPU/GPU]</option>
+            </optgroup>
+            <optgroup label="💻 Sviluppo & Codice (Coding)">
+                <option value="Qwen2.5-Coder-7B-Instruct-Q6_K.gguf">Qwen2.5-Coder-7B-Q6_K (5.9 GB) [CUDA Target]</option>
+                <option value="Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf">Qwen2.5-Coder-14B-Q4_K_M (8.4 GB) [CUDA High VRAM]</option>
+            </optgroup>
+            <optgroup label="🧠 Ragionamento Generale & Istruzioni">
+                <option value="Mistral-7B-Instruct-v0.3-Q6_K.gguf" selected>Mistral-7B-Instruct-v0.3 (5.6 GB) [Vulkan/CPU]</option>
+                <option value="DeepSeek-V4-Pro-Qwen3.5-9B.Q4_K_M.gguf">DeepSeek-V4-Pro-9B (5.4 GB) [CUDA/Vulkan]</option>
+            </optgroup>
+        `;
+
+        async function fetchTelemetry() {
+            try {
+                const res = await fetch('/api/telemetry');
+                const data = await res.json();
+
+                document.getElementById('cpu-host-val').innerText = `${data.cpu_usage}%`;
+                document.getElementById('ram-host-val').innerText = `${data.ram_used_gb} / ${data.ram_total_gb} GB`;
+                document.getElementById('vram-val').innerText = `${data.nvidia.vram_used} / ${data.nvidia.vram_total} MB`;
+                document.getElementById('gpu-temp-val').innerText = `${data.nvidia.temp}°C / ${data.nvidia.fan}%`;
+
+                const now = new Date().toLocaleTimeString();
+                if (tempChart.data.labels.length > 10) {
+                    tempChart.data.labels.shift();
+                    tempChart.data.datasets[0].data.shift();
+                    tempChart.data.datasets[1].data.shift();
                 }
-                const b = serverList[currentServerIdx];
-                let optionsHtml = availableModels.map(m => `<option value="${m}" ${b.models_loaded && b.models_loaded.includes(m) ? 'selected' : ''}>${m}</option>`).join('');
+                tempChart.data.labels.push(now);
+                tempChart.data.datasets[0].data.push(data.nvidia.temp);
+                tempChart.data.datasets[1].data.push(data.nvidia.fan);
+                tempChart.update();
 
-                container.innerHTML = `
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-                        <strong>Server ${currentServerIdx + 1} di ${serverList.length}</strong>
-                        <span style="background:#27272a; padding:2px 8px; border-radius:4px; font-size:0.8rem;">Porta: ${b.port}</span>
-                    </div>
-                    <div class="row"><span class="row-label">Host:</span><span class="row-val">${b.host}</span></div>
-                    <div class="row"><span class="row-label">Tipo Backend:</span><span class="row-val">${b.backend_type}</span></div>
-                    <div class="row"><span class="row-label">PID Processo:</span><span class="row-val">${b.pid || 'N/D'}</span></div>
-                    <div class="row"><span class="row-label">Offload (-ngl):</span><span class="row-val">${b.ngl}</span></div>
-                    <div class="row"><span class="row-label">Contesto:</span><span class="row-val">${b.ctx_size}</span></div>
-                    <div class="row"><span class="row-label">Modelli in Uso:</span><span class="row-val">${(b.models_loaded || []).join(', ') || 'Nessuno'}</span></div>
+                vramChart.data.datasets[0].data = [data.nvidia.vram_used];
+                vramChart.data.datasets[1].data = [data.nvidia.vram_total - data.nvidia.vram_used];
+                vramChart.update();
 
-                    <div style="margin-top: 16px;">
-                        <label style="font-size:0.8rem; color:var(--text-muted);">Seleziona Modello:</label>
-                        <select id="model-select-${b.port}">${optionsHtml}</select>
-                    </div>
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
-                        <button class="action-btn" onclick="controlEngine(${b.port}, 'start')">Avvia / Carica</button>
-                        <button class="action-btn stop-btn" onclick="controlEngine(${b.port}, 'stop')">Arresta</button>
-                    </div>
-                    <button class="action-btn" onclick="controlEngine(${b.port}, 'restart')">Riavvia Server</button>
-                `;
-            }
+                const carousel = document.getElementById('nodes-carousel');
+                carousel.innerHTML = '';
 
-            async function controlEngine(port, action) {
-                const selectElem = document.getElementById(`model-select-${port}`);
-                const model_name = selectElem ? selectElem.value : null;
-                const endpoint = action === 'start' ? '/api/engine/start' : (action === 'stop' ? '/api/engine/stop' : '/api/engine/restart');
-                try {
-                    const res = await fetch(endpoint, {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ port: port, model_name: model_name })
+                data.nodes.forEach(node => {
+                    node.backends.forEach(backend => {
+                        const card = document.createElement('div');
+                        card.className = 'node-card';
+                        const isOnline = backend.status === "ONLINE";
+                        const hw = backend.hardware || {};
+                        card.innerHTML = `
+                            <div class="node-header">
+                                <span class="node-title">${node.name} (${backend.port})</span>
+                                <span class="node-badge ${isOnline ? 'online' : 'offline'}">${backend.status}</span>
+                            </div>
+                            <div class="node-info">
+                                <div><span>Host:</span> <strong>${node.host}</strong></div>
+                                <div><span>Backend:</span> <strong>${backend.backend_type || 'N/A'}</strong></div>
+                                <div><span>CPU / RAM Nodo:</span> <strong>${hw.cpu_util_pct || 0}% / ${hw.ram_used_gb || 0} GB</strong></div>
+                                <div><span>Modello In Uso:</span> <strong style="color:var(--accent-blue)">${(backend.models_loaded || ['N/D'])[0]}</strong></div>
+                            </div>
+                            <select class="model-select" id="select-${backend.port}">
+                                ${modelOptionsHTML}
+                            </select>
+                            <div class="control-btns">
+                                <button class="btn btn-start" onclick="controlEngine(${backend.port}, 'start')" title="Avvia">▶</button>
+                                <button class="btn btn-stop" onclick="controlEngine(${backend.port}, 'stop')" title="Arresta">⏹</button>
+                                <button class="btn btn-restart" onclick="controlEngine(${backend.port}, 'restart')" title="Riavvia">🔄</button>
+                                <button class="btn btn-kill" onclick="controlEngine(${backend.port}, 'kill')" title="Kill -9">✕</button>
+                            </div>
+                            <div class="terminal-box" id="term-${backend.port}">
+                                [LOG ${node.node_id}] Backend attivo su porta ${backend.port}...
+                            </div>
+                        `;
+                        carousel.appendChild(card);
                     });
-                    const data = await res.json();
-                    alert(data.message || "Comando eseguito.");
-                    loadData();
-                } catch (e) {
-                    alert("Errore di comunicazione con il server.");
-                }
+                });
+
+            } catch (err) {
+                console.error("Errore fetch telemetria:", err);
             }
+        }
 
-            async function loadData() {
-                try {
-                    const res = await fetch('/api/metrics');
-                    const data = await res.json();
-
-                    if (data.models) availableModels = data.models;
-
-                    if (data.system) {
-                        document.getElementById('cpu-metric').innerText = `${data.system.cpu_util_pct}%`;
-                        document.getElementById('ram-metric').innerText = `${data.system.ram_used_gb} / ${data.system.ram_total_gb} GB (${data.system.ram_util_pct}%)`;
-                        document.getElementById('disk-metric').innerText = `${data.system.disk_used_gb} / ${data.system.disk_total_gb} GB (${data.system.disk_util_pct}%)`;
-                    }
-
-                    if (data.cluster && data.cluster.nodes) {
-                        let newServers = [];
-                        data.cluster.nodes.forEach(node => {
-                            (node.backends || []).forEach(b => {
-                                newServers.push({ host: node.host, ...b });
-                            });
-                        });
-                        serverList = newServers;
-                        if (currentServerIdx >= serverList.length) currentServerIdx = 0;
-                        renderServer();
-                    }
-
-                    if (data.logs) {
-                        const tbody = document.getElementById('logs-tbody');
-                        tbody.innerHTML = '';
-                        [...data.logs].reverse().forEach(l => {
-                            tbody.innerHTML += `
-                                <tr>
-                                    <td>${l.timestamp}</td>
-                                    <td><strong>${l.level}</strong></td>
-                                    <td>${l.node}</td>
-                                    <td>${l.prompt}</td>
-                                    <td>${l.latency}</td>
-                                    <td>${l.message}</td>
-                                </tr>
-                            `;
-                        });
-                    }
-                } catch (e) {
-                    console.error("Errore fetch metriche:", e);
-                }
+        async function controlEngine(port, action) {
+            const select = document.getElementById(`select-${port}`);
+            const selectedModel = select ? select.value : '';
+            
+            try {
+                const res = await fetch('/api/engine/control', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ port: port, action: action, model: selectedModel })
+                });
+                const result = await res.json();
+                alert(result.message);
+                fetchTelemetry();
+            } catch (e) {
+                alert("Errore invio comando: " + e);
             }
+        }
 
-            setInterval(loadData, 2500);
-            loadData();
-        </script>
-    </body>
-    </html>
-    """
+        async function fetchLogs() {
+            try {
+                const res = await fetch('/api/logs');
+                const data = await res.json();
+                
+                const tableBody = document.getElementById('global-request-logs');
+                if (data.request_logs.length > 0) {
+                    tableBody.innerHTML = '';
+                    data.request_logs.slice().reverse().forEach(log => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td>${log.time}</td>
+                            <td>${log.port}</td>
+                            <td>${log.model}</td>
+                            <td>${log.latency_ms} ms</td>
+                            <td style="color: ${log.status === 200 ? 'var(--accent-green)' : 'var(--accent-red)'}">${log.status}</td>
+                        `;
+                        tableBody.appendChild(tr);
+                    });
+                }
+            } catch (e) {
+                console.error("Errore recupero log:", e);
+            }
+        }
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=9001, log_level="warning")
-EOF_PY
+        setInterval(fetchTelemetry, 3000);
+        setInterval(fetchLogs, 2000);
+        fetchTelemetry();
+        fetchLogs();
+    </script>
+</body>
+</html>
+EOF_HTML
 
-python3 -m venv "$INSTALL_DIR/venv"
-"$INSTALL_DIR/venv/bin/pip" install --upgrade pip -qq
-"$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" -qq
-chown -R "$CURRENT_USER:$CURRENT_USER" "$INSTALL_DIR"
-chmod +x "$INSTALL_DIR/llm_gateway.py"
-
-cat << EOF > "$SERVICE_FILE"
+echo "[*] Generazione del file systemd in $SERVICE_FILE..."
+cat << EOF_SERVICE > "$SERVICE_FILE"
 [Unit]
-Description=Gateway e Dashboard Server Open API
+Description=Llama Open API Cluster Gateway & Dashboard (Port $PORT)
 After=network.target
 
 [Service]
 Type=simple
-User=$CURRENT_USER
-WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/venv/bin/python $INSTALL_DIR/llm_gateway.py
+User=root
+WorkingDirectory=$GATEWAY_DIR
+ExecStart=$GATEWAY_DIR/venv/bin/uvicorn main:app --host 0.0.0.0 --port $PORT
 Restart=always
-RestartSec=5
+RestartSec=3
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOF_SERVICE
 
+echo "[*] Ricarico systemd, abilito e avvio il Gateway sulla porta $PORT..."
 systemctl daemon-reload
 systemctl enable llm-gateway.service
 systemctl restart llm-gateway.service
 
-echo "[OK] Gateway configurato e attivo sulla porta 9001!"
-echo "Dashboard accessibile su: http://127.0.0.1:9001"
+echo "================================================================="
+echo "[OK] Setup Cluster Gateway completato con successo!"
+echo " Interfaccia Dashboard Web disponibile su: http://127.0.0.1:$PORT"
+echo "================================================================="
