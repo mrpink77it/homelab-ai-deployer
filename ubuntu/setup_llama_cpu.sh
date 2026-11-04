@@ -8,12 +8,18 @@ fi
 
 SERVICE_FILE="/etc/systemd/system/llama-cpu.service"
 MODEL_DIR="/opt/llama_models"
+MODEL_FILE="Llama-3.2-3B-Instruct-Q4_K_M.gguf"
 PORT=8082
 THREADS=16
 
 if [ ! -f "/opt/llama.cpp/build/bin/llama-server" ]; then
   echo "[-] Errore: Binario llama-server non trovato in /opt/llama.cpp. Esegui prima setup_vulkan_llama.sh."
   exit 1
+fi
+
+if [ ! -f "$MODEL_DIR/$MODEL_FILE" ]; then
+  echo "[-] Attenzione: Il file del modello $MODEL_FILE non è presente in $MODEL_DIR."
+  echo "    Assicurati di averlo scaricato prima di avviare il servizio."
 fi
 
 echo "[*] Creazione directory modelli in $MODEL_DIR..."
@@ -29,7 +35,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/opt/llama.cpp/build/bin
-ExecStart=/opt/llama.cpp/build/bin/llama-server --host 0.0.0.0 --port $PORT --models-dir $MODEL_DIR -ngl 0 -t $THREADS --cache-type-k q4_0 --cache-type-v q4_0
+ExecStart=/opt/llama.cpp/build/bin/llama-server --host 0.0.0.0 --port $PORT --models-dir $MODEL_DIR -m $MODEL_DIR/$MODEL_FILE -ngl 0 -t $THREADS --cache-type-k q4_0 --cache-type-v q4_0
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -42,11 +48,12 @@ EOF_SERVICE
 echo "[*] Ricarico systemd, abilito e avvio il servizio..."
 systemctl daemon-reload
 systemctl enable llama-cpu.service
-systemctl start llama-cpu.service
+systemctl restart llama-cpu.service
 
 echo "================================================================="
 echo "[OK] Servizio Llama CPU avviato con successo sulla porta $PORT!"
-echo " Modelli puntati a: $MODEL_DIR"
+echo " Modello precaricato: $MODEL_FILE"
+echo " Directory modelli: $MODEL_DIR"
 echo " Thread configurati: $THREADS (P-cores)"
 echo " Stato: sudo systemctl status llama-cpu"
 echo " Log: sudo journalctl -u llama-cpu -f"
