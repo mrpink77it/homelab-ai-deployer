@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# v3.1.0 - Gateway & Dashboard Cluster Modulare con Grafico a Linee (4 Variabili)
+# v4.0.0 - Gateway & Dashboard Cluster Pure Open-API (Zero-Systemd Abstraction, Dynamic Floating UI)
 
 set -euo pipefail
 
@@ -34,13 +34,12 @@ cat << 'EOF_PYTHON' > "$GATEWAY_DIR/main.py"
 import json
 import os
 import time
-import subprocess
 import requests
 import psutil
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 
-app = FastAPI(title="Open API Cluster Gateway & Telemetry")
+app = FastAPI(title="Open API Cluster Gateway & Pure API Telemetry")
 
 TOPOLOGY_FILE = "/opt/gateway/cluster-topology.json"
 STATIC_NODES_FILE = "/opt/gateway/cluster-static-nodes.json"
@@ -49,10 +48,11 @@ MODEL_DIR = "/opt/llama_models"
 SYSTEM_LOGS = []
 GLOBAL_REQUEST_LOGS = []
 
-def log_event(msg, level="INFO"):
+def log_debug(msg, origin="GATEWAY", level="DEBUG"):
     timestamp = time.strftime("%H:%M:%S")
-    SYSTEM_LOGS.append(f"[{timestamp}] [{level}] {msg}")
-    if len(SYSTEM_LOGS) > 200:
+    entry = f"[{timestamp}] [{origin}] [{level}] {msg}"
+    SYSTEM_LOGS.append(entry)
+    if len(SYSTEM_LOGS) > 300:
         SYSTEM_LOGS.pop(0)
 
 def scan_local_models():
@@ -61,81 +61,65 @@ def scan_local_models():
         for f in os.listdir(MODEL_DIR):
             if f.endswith(".gguf"):
                 path = os.path.join(MODEL_DIR, f)
-                size_bytes = os.path.getsize(path)
-                size_gb = round(size_bytes / (1024**3), 2)
+                size_gb = round(os.path.getsize(path) / (1024**3), 2)
                 
-                category = "Generale / Chat"
+                cat = "Generale / Chat"
                 if "coder" in f.lower():
-                    category = "Sviluppo & Codice (Coding)"
-                elif "medical" in f.lower() or "med" in f.lower():
-                    category = "Medico & Specialistico"
+                    cat = "Sviluppo & Codice (Coding)"
+                elif "med" in f.lower():
+                    cat = "Medico & Specialistico"
                 elif "embed" in f.lower():
-                    category = "Embeddings / Vettori"
+                    cat = "Embeddings / Vettori"
                 elif size_gb < 3:
-                    category = "Leggeri & Avvio Rapido (<3GB)"
+                    cat = "Leggeri & Avvio Rapido (<3GB)"
                 
                 models.append({
                     "id": f,
-                    "name": f,
+                    "filename": f,
                     "size_gb": size_gb,
-                    "category": category
+                    "category": cat
                 })
     return models
 
-def get_aggregated_nodes():
-    nodes_dict = {}
+def get_aggregated_topology():
+    topology_data = {"nodes": []}
+    static_data = {"nodes": []}
     
     if os.path.exists(TOPOLOGY_FILE):
         try:
             with open(TOPOLOGY_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                for node in data.get("nodes", []):
-                    nid = node.get("node_id")
-                    nodes_dict[nid] = {
-                        "node_id": nid,
-                        "name": f"Nodo ({node.get('host')})",
-                        "host": node.get("host"),
-                        "backends": node.get("backends", [])
-                    }
-        except Exception:
-            pass
+                topology_data = json.load(f)
+        except Exception as e:
+            log_debug(f"Errore lettura {TOPOLOGY_FILE}: {str(e)}", level="ERROR")
 
     if os.path.exists(STATIC_NODES_FILE):
         try:
             with open(STATIC_NODES_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                for node in data.get("nodes", []):
-                    nid = node.get("node_id")
-                    if nid in nodes_dict:
-                        existing_ports = [b["port"] for b in nodes_dict[nid]["backends"]]
-                        for b in node.get("backends", []):
-                            if b["port"] not in existing_ports:
-                                nodes_dict[nid]["backends"].append(b)
-                    else:
-                        nodes_dict[nid] = {
-                            "node_id": nid,
-                            "name": f"Esterno ({node.get('host')})",
-                            "host": node.get("host"),
-                            "backends": node.get("backends", [])
-                        }
-        except Exception:
-            pass
+                static_data = json.load(f)
+        except Exception as e:
+            log_debug(f"Errore lettura {STATIC_NODES_FILE}: {str(e)}", level="ERROR")
 
-    if not nodes_dict:
-        nodes_dict["local-default"] = {
-            "node_id": "local-default",
-            "name": "Server Locale",
-            "host": "127.0.0.1",
-            "backends": [{
-                "port": 8080,
-                "status": "OFFLINE",
-                "models_loaded": ["Nessun modello"],
-                "backend_type": "CPU / OpenBLAS",
-                "hardware": {"cpu_util_pct": 0, "ram_used_gb": 0, "ram_total_gb": 0, "ram_util_pct": 0}
-            }]
-        }
+    # Merge intelligente dei nodi
+    nodes_map = {}
+    for n in topology_data.get("nodes", []):
+        nid = n.get("node_id")
+        nodes_map[nid] = n
 
-    return list(nodes_dict.values())
+    for n in static_data.get("nodes", []):
+        nid = n.get("node_id")
+        if nid in nodes_map:
+            existing_ports = [b["port"] for b in nodes_map[nid].get("backends", [])]
+            for b in n.get("backends", []):
+                if b["port"] not in existing_ports:
+                    nodes_map[nid]["backends"].append(b)
+        else:
+            nodes_map[nid] = n
+
+    return {
+        "merged_nodes": list(nodes_map.values()),
+        "raw_topology": topology_data,
+        "raw_static": static_data
+    }
 
 @app.get("/api/telemetry")
 def get_telemetry():
@@ -144,6 +128,7 @@ def get_telemetry():
     
     nvidia_info = {"temp": 0, "fan": 0, "vram_used": 0, "vram_total": 8192}
     try:
+        import subprocess
         res = subprocess.run(
             ["nvidia-smi", "--query-gpu=temperature.gpu,fan.speed,memory.used,memory.total", "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=1
@@ -158,65 +143,67 @@ def get_telemetry():
     except Exception:
         pass
 
-    nodes = get_aggregated_nodes()
-    models = scan_local_models()
+    topo = get_aggregated_topology()
 
     return {
         "cpu_usage": cpu_percent,
         "ram_used_gb": round(mem.used / (1024**3), 2),
         "ram_total_gb": round(mem.total / (1024**3), 2),
         "nvidia": nvidia_info,
-        "nodes": nodes,
-        "available_models": models
+        "nodes": topo["merged_nodes"],
+        "raw_topology": topo["raw_topology"],
+        "raw_static": topo["raw_static"],
+        "available_models": scan_local_models()
     }
 
-@app.post("/api/engine/control")
-async def control_engine(req: Request):
+# Controllo diretto dei Motori LLM via HTTP / Open-API REST (Senza Systemd)
+@app.post("/api/engine/native-control")
+async def native_control(req: Request):
     data = await req.json()
-    action = data.get("action")
+    host = data.get("host", "127.0.0.1")
     port = data.get("port")
-    
-    service_map = {
-        8080: "llama-cpp-vulkan.service",
-        8200: "llama-cuda-0.service",
-        8082: "llama-cpu.service"
-    }
-    
-    service_name = service_map.get(int(port))
-    if not service_name:
-        return JSONResponse({"status": "error", "message": f"Servizio systemd non mappato per la porta {port}"}, status_code=400)
-    
+    action = data.get("action")  # 'load', 'unload', 'slot_clear'
+    model = data.get("model")
+
+    endpoint_base = f"http://{host}:{port}"
+
     try:
-        if action == "restart":
-            subprocess.run(["systemctl", "restart", service_name], check=True)
-            log_event(f"Servizio {service_name} riavviato sulla porta {port}.")
-        elif action == "stop":
-            subprocess.run(["systemctl", "stop", service_name], check=True)
-            log_event(f"Servizio {service_name} arrestato.")
-        elif action == "start":
-            subprocess.run(["systemctl", "start", service_name], check=True)
-            log_event(f"Servizio {service_name} avviato.")
-        elif action == "kill":
-            PID = subprocess.getoutput(f"pgrep -f 'port {port}' | head -n 1")
-            if PID:
-                subprocess.run(["kill", "-9", PID])
-                log_event(f"Processo PID {PID} terminato.", "WARN")
-        return {"status": "ok", "message": f"Azione {action} eseguita con successo su {service_name}"}
+        if action == "load":
+            # Comando OpenAPI per caricare/cambiare modello in RAM/VRAM
+            payload = {"model": model}
+            log_debug(f"Invio comando LOAD a {endpoint_base}/v1/models/load -> Modello: {model}", origin="ENGINE_API")
+            r = requests.post(f"{endpoint_base}/v1/models/load", json=payload, timeout=30)
+            return {"status": "ok", "http_code": r.status_code, "response": r.json() if r.headers.get("content-type") == "application/json" else r.text}
+
+        elif action == "unload":
+            # Comando OpenAPI per liberare VRAM/RAM e fermare l'inferenza del modello
+            log_debug(f"Invio comando UNLOAD / CLEAR RAM a {endpoint_base}/v1/models/unload", origin="ENGINE_API")
+            r = requests.post(f"{endpoint_base}/v1/models/unload", json={}, timeout=10)
+            return {"status": "ok", "message": "Modello scaricato dalla RAM con successo."}
+
+        elif action == "slot_clear":
+            # Reset contesti attivi via API native llama.cpp
+            log_debug(f"Reset slot di memoria e contesto su {endpoint_base}/slots/0?action=release", origin="ENGINE_API")
+            r = requests.get(f"{endpoint_base}/slots/0?action=release", timeout=5)
+            return {"status": "ok", "message": "Slot di contesto azzerati."}
+
+        return JSONResponse({"error": "Azione non supportata"}, status_code=400)
     except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+        log_debug(f"Errore comunicazione Open-API con {endpoint_base}: {str(e)}", origin="ENGINE_API", level="ERROR")
+        return JSONResponse({"status": "error", "message": f"Errore connessione motore HTTP: {str(e)}"}, status_code=502)
 
 @app.get("/api/logs")
 def get_logs():
-    return {"logs": SYSTEM_LOGS, "request_logs": GLOBAL_REQUEST_LOGS}
+    return {"debug_logs": SYSTEM_LOGS, "request_logs": GLOBAL_REQUEST_LOGS}
 
 @app.post("/v1/chat/completions")
 async def proxy_chat_completions(request: Request):
     body = await request.json()
     target_port = body.get("port", 8200)
     
-    nodes = get_aggregated_nodes()
+    topo = get_aggregated_topology()
     target_host = "127.0.0.1"
-    for n in nodes:
+    for n in topo["merged_nodes"]:
         for b in n.get("backends", []):
             if b.get("port") == int(target_port):
                 target_host = n.get("host", "127.0.0.1")
@@ -224,6 +211,7 @@ async def proxy_chat_completions(request: Request):
                 
     start_time = time.time()
     try:
+        log_debug(f"Routing richiesta OpenAI su http://{target_host}:{target_port}/v1/chat/completions", origin="GATEWAY_ROUTER")
         resp = requests.post(
             f"http://{target_host}:{target_port}/v1/chat/completions",
             json=body,
@@ -232,21 +220,20 @@ async def proxy_chat_completions(request: Request):
         elapsed_ms = round((time.time() - start_time) * 1000, 2)
         
         messages = body.get("messages", [])
-        prompt_snippet = messages[-1].get("content", "N/A")[:25] if messages else "N/A"
-        req_type = "Chat / Completamento"
+        prompt_snippet = messages[-1].get("content", "N/A")[:30] if messages else "N/A"
         
-        routing_target = f"Motore LLM (Porta {target_port})"
+        routing_target = f"Llama Engine ({target_host}:{target_port})"
         if "qdrant" in str(body).lower():
-            routing_target = "Database Vettoriale Qdrant"
+            routing_target = "Qdrant Vector DB"
         elif "surreal" in str(body).lower():
-            routing_target = "SurrealDB (Memoria)"
+            routing_target = "SurrealDB Memory Agent"
 
         log_entry = {
             "time": time.strftime("%H:%M:%S"),
             "node": f"{target_host}:{target_port}",
             "request": prompt_snippet + "...",
-            "model": body.get("model", "unknown"),
-            "type": req_type,
+            "model": body.get("model", "auto"),
+            "type": "Chat/Completion",
             "routing": routing_target,
             "latency_ms": elapsed_ms,
             "status": resp.status_code
@@ -255,8 +242,10 @@ async def proxy_chat_completions(request: Request):
         if len(GLOBAL_REQUEST_LOGS) > 100:
             GLOBAL_REQUEST_LOGS.pop(0)
 
+        log_debug(f"Risposta ricevuta in {elapsed_ms}ms [HTTP {resp.status_code}]", origin="GATEWAY_ROUTER")
         return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
     except Exception as e:
+        log_debug(f"Errore Proxy su {target_host}:{target_port}: {str(e)}", origin="GATEWAY_ROUTER", level="ERROR")
         return JSONResponse({"error": str(e)}, status_code=502)
 
 @app.get("/", response_class=HTMLResponse)
@@ -265,7 +254,7 @@ def read_root():
         return f.read()
 EOF_PYTHON
 
-echo "[*] Generazione del frontend con grafico a linee multi-variabile ($GATEWAY_DIR/index.html)..."
+echo "[*] Generazione dell'interfaccia UI ad aggiornamento continuo ($GATEWAY_DIR/index.html)..."
 cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
 <!DOCTYPE html>
 <html lang="it">
@@ -318,7 +307,7 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
             border: 1px solid var(--border-color);
             border-radius: 10px;
             padding: 20px;
-            margin-bottom: 30px;
+            margin-bottom: 25px;
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 20px;
@@ -340,7 +329,7 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
             margin-bottom: 15px;
         }
 
-        .control-btns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 15px; }
+        .control-btns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 15px; }
         .btn {
             background: var(--border-color);
             color: white;
@@ -349,35 +338,33 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
             border-radius: 6px;
             cursor: pointer;
             font-weight: 600;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             display: flex;
             align-items: center;
             justify-content: center;
+            gap: 5px;
         }
         .btn:hover { opacity: 0.9; }
-        .btn-start { background: #166534; color: #4ade80; }
-        .btn-stop { background: #991b1b; color: #fca5a5; }
-        .btn-restart { background: #1e40af; color: #93c5fd; }
-        .btn-kill { background: #7f1d1d; color: #f87171; }
-
-        .terminal-box {
-            background: #090d16;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            padding: 10px;
-            font-family: monospace;
-            font-size: 0.75rem;
-            height: 90px;
-            overflow-y: auto;
-            color: #38bdf8;
-        }
+        .btn-load { background: #166534; color: #4ade80; }
+        .btn-unload { background: #991b1b; color: #fca5a5; }
+        .btn-clear { background: #1e40af; color: #93c5fd; }
 
         .chart-side { display: flex; flex-direction: column; background: #0f172a; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
         .chart-side h3 { font-size: 0.95rem; margin-bottom: 10px; color: var(--text-muted); text-align: center; }
-        .chart-container { flex-grow: 1; min-height: 200px; position: relative; }
+        .chart-container { flex-grow: 1; min-height: 220px; position: relative; }
 
-        .global-logs { background: var(--card-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
-        .global-logs h3 { font-size: 1rem; margin-bottom: 10px; }
+        /* Sezione File di Configurazione */
+        .config-section { margin-bottom: 25px; background: var(--card-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
+        .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 10px; }
+        @media(max-width: 800px) { .config-grid { grid-template-columns: 1fr; } }
+        .config-box { background: #090d16; border: 1px solid var(--border-color); padding: 10px; border-radius: 6px; font-family: monospace; font-size: 0.75rem; height: 160px; overflow-y: auto; color: #a7f3d0; }
+
+        /* Console Debug Estesa & Flow */
+        .debug-console { background: #030712; border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; }
+        .debug-console h3 { font-size: 0.95rem; margin-bottom: 10px; color: var(--accent-yellow); }
+        .debug-box { font-family: monospace; font-size: 0.78rem; height: 140px; overflow-y: auto; color: #38bdf8; display: flex; flex-direction: column-reverse; }
+
+        .global-logs { background: var(--card-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 25px; }
         .log-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
         .log-table th, .log-table td { padding: 8px; text-align: left; border-bottom: 1px solid var(--border-color); }
         .log-table th { color: var(--text-muted); font-weight: 600; }
@@ -387,7 +374,7 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
 
     <header>
         <h1>Monitor Server Open API</h1>
-        <div class="status-badge" id="cluster-status">SISTEMA ATTIVO</div>
+        <div class="status-badge" id="cluster-status">PURE HTTP API MODE</div>
     </header>
 
     <div class="metrics-bar">
@@ -409,14 +396,60 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
         </div>
     </div>
 
+    <!-- Tab dei Nodi del Cluster -->
     <div class="cluster-nav" id="cluster-tabs"></div>
 
-    <div class="modular-container" id="modular-view">
-        <div style="text-align:center; color: var(--text-muted); grid-column: span 2;">Caricamento nodi cluster in corso...</div>
+    <!-- Scheda Motore Modulare -->
+    <div class="modular-container">
+        <div class="node-details">
+            <h2>
+                <span id="mod-engine-name">Seleziona Motore</span>
+                <span class="status-badge" id="mod-engine-status">OFFLINE</span>
+            </h2>
+            <div class="node-info-grid">
+                <div><span>Host / Porta:</span> <strong id="mod-engine-endpoint">127.0.0.1:8080</strong></div>
+                <div><span>Backend Hardware:</span> <strong id="mod-engine-backend" style="color:var(--accent-blue)">-</strong></div>
+                <div><span>CPU / RAM Nodo:</span> <strong id="mod-engine-cpuram">-</strong></div>
+                <div><span>Modello in VRAM:</span> <strong id="mod-engine-loaded" style="color:var(--accent-green)">-</strong></div>
+            </div>
+
+            <select class="model-select" id="mod-model-select">
+                <option value="">Caricamento modelli in corso...</option>
+            </select>
+
+            <div class="control-btns">
+                <button class="btn btn-load" onclick="executeNativeAction('load')">▶ Carica Modello</button>
+                <button class="btn btn-unload" onclick="executeNativeAction('unload')">⏹ Scarica RAM</button>
+                <button class="btn btn-clear" onclick="executeNativeAction('slot_clear')">🔄 Reset Contesto</button>
+            </div>
+        </div>
+
+        <div class="chart-side">
+            <h3>Telemetria Live (Temp, Ventola, Load, RAM)</h3>
+            <div class="chart-container">
+                <canvas id="engineLineChart"></canvas>
+            </div>
+        </div>
     </div>
 
+    <!-- Sezione Visualizzazione File di Configurazione Topology e Static -->
+    <div class="config-section">
+        <h3>File di Configurazione Cluster & Nodi Statici</h3>
+        <div class="config-grid">
+            <div>
+                <span style="font-size:0.8rem; color:var(--text-muted)">cluster-topology.json (Auto-Discovery)</span>
+                <div class="config-box" id="cfg-topology-box">Caricamento...</div>
+            </div>
+            <div>
+                <span style="font-size:0.8rem; color:var(--text-muted)">cluster-static-nodes.json (Nodi Manuali/Esterni)</span>
+                <div class="config-box" id="cfg-static-box">Caricamento...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Registro Richieste Gateway -->
     <div class="global-logs">
-        <h3>Registro Richieste & Instradamento Cluster (Porta 9001)</h3>
+        <h3>Registro Richieste Gateway Open API (Porta 9001)</h3>
         <table class="log-table">
             <thead>
                 <tr>
@@ -424,16 +457,21 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
                     <th>Nodo / Porta</th>
                     <th>Prompt / Richiesta</th>
                     <th>Modello Target</th>
-                    <th>Tipologia</th>
                     <th>Instradamento Destinazione</th>
                     <th>Latenza</th>
                     <th>Stato</th>
                 </tr>
             </thead>
             <tbody id="global-request-logs">
-                <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">In attesa di richieste API...</td></tr>
+                <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">In attesa di richieste API...</td></tr>
             </tbody>
         </table>
+    </div>
+
+    <!-- Debug & Flow Log Esteso -->
+    <div class="debug-console">
+        <h3>Debug Operativo & Handover Flusso LLM</h3>
+        <div class="debug-box" id="debug-log-box"></div>
     </div>
 
     <script>
@@ -441,168 +479,21 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
         let activeBackendKey = null;
         let engineChart = null;
 
-        // Storico dati per il grafico live a 4 variabili
         const historyData = {
-            labels: [],
-            temp: [],
-            fan: [],
-            load: [],
-            ram: []
+            labels: [], temp: [], fan: [], load: [], ram: []
         };
 
-        async function fetchTelemetry() {
-            try {
-                const res = await fetch('/api/telemetry');
-                const data = await res.json();
-
-                document.getElementById('cpu-host-val').innerText = `${data.cpu_usage}%`;
-                document.getElementById('ram-host-val').innerText = `${data.ram_used_gb} / ${data.ram_total_gb} GB`;
-                document.getElementById('vram-val').innerText = `${data.nvidia.vram_used} / ${data.nvidia.vram_total} MB`;
-                document.getElementById('gpu-temp-val').innerText = `${data.nvidia.temp}°C / ${data.nvidia.fan}%`;
-
-                allBackends = [];
-                data.nodes.forEach(node => {
-                    node.backends.forEach(backend => {
-                        allBackends.push({
-                            node_id: node.node_id,
-                            name: node.name,
-                            host: node.host,
-                            ...backend,
-                            models_available: data.available_models
-                        });
-                    });
-                });
-
-                if (allBackends.length > 0 && !activeBackendKey) {
-                    activeBackendKey = `${allBackends[0].host}:${allBackends[0].port}`;
-                }
-
-                // Aggiornamento storico grafico
-                const now = new Date().toLocaleTimeString();
-                if (historyData.labels.length > 15) {
-                    historyData.labels.shift();
-                    historyData.temp.shift();
-                    historyData.fan.shift();
-                    historyData.load.shift();
-                    historyData.ram.shift();
-                }
-
-                const activeBackend = allBackends.find(b => `${b.host}:${b.port}` === activeBackendKey);
-                const currentTemp = activeBackend?.hardware?.temp || data.nvidia.temp || 45;
-                const currentFan = activeBackend?.hardware?.fan || data.nvidia.fan || 0;
-                const currentLoad = activeBackend?.hardware?.cpu_util_pct || data.cpu_usage || 10;
-                const currentRam = activeBackend?.hardware?.ram_used_gb || data.ram_used_gb || 4.0;
-
-                historyData.labels.push(now);
-                historyData.temp.push(currentTemp);
-                historyData.fan.push(currentFan);
-                historyData.load.push(currentLoad);
-                historyData.ram.push(currentRam);
-
-                renderClusterTabs();
-                renderModularView();
-
-            } catch (err) {
-                console.error("Errore fetch telemetria:", err);
-            }
-        }
-
-        function renderClusterTabs() {
-            const tabsContainer = document.getElementById('cluster-tabs');
-            tabsContainer.innerHTML = '';
-
-            allBackends.forEach(b => {
-                const key = `${b.host}:${b.port}`;
-                const btn = document.createElement('button');
-                btn.className = `tab-btn ${activeBackendKey === key ? 'active' : ''}`;
-                btn.innerText = `${b.name} (${b.port})`;
-                btn.onclick = () => {
-                    activeBackendKey = key;
-                    renderClusterTabs();
-                    renderModularView();
-                };
-                tabsContainer.appendChild(btn);
-            });
-        }
-
-        function renderModularView() {
-            const container = document.getElementById('modular-view');
-            const backend = allBackends.find(b => `${b.host}:${b.port}` === activeBackendKey);
-
-            if (!backend) {
-                container.innerHTML = `<div style="text-align:center; color: var(--text-muted); grid-column: span 2;">Nessun motore selezionato.</div>`;
-                return;
-            }
-
-            const isOnline = backend.status === "ONLINE";
-            const hw = backend.hardware || { cpu_util_pct: 0, ram_used_gb: 0, ram_total_gb: 0 };
-            const loadedModel = (backend.models_loaded || ['N/D'])[0];
-
-            const categories = {};
-            (backend.models_available || []).forEach(m => {
-                if (!categories[m.category]) categories[m.category] = [];
-                categories[m.category].push(m);
-            });
-
-            let optionsHTML = '';
-            for (const [cat, mods] of Object.entries(categories)) {
-                optionsHTML += `<optgroup label="${cat}">`;
-                mods.forEach(m => {
-                    const selected = m.name === loadedModel ? 'selected' : '';
-                    optionsHTML += `<option value="${m.name}" ${selected}>${m.name} (${m.size_gb} GB)</option>`;
-                });
-                optionsHTML += `</optgroup>`;
-            }
-
-            container.innerHTML = `
-                <div class="node-details">
-                    <h2>
-                        <span>${backend.name}</span>
-                        <span class="node-badge ${isOnline ? 'online' : 'offline'}">${backend.status}</span>
-                    </h2>
-                    <div class="node-info-grid">
-                        <div><span>Host / Porta:</span> <strong>${backend.host}:${backend.port}</strong></div>
-                        <div><span>Backend Hardware:</span> <strong style="color:var(--accent-blue)">${backend.backend_type || 'CPU / OpenBLAS'}</strong></div>
-                        <div><span>CPU / RAM Nodo:</span> <strong>${hw.cpu_util_pct || 0}% / ${hw.ram_used_gb || 0} GB</strong></div>
-                        <div><span>Modello In Uso:</span> <strong style="color:var(--accent-green)">${loadedModel}</strong></div>
-                    </div>
-                    <select class="model-select" id="select-${backend.port}">
-                        ${optionsHTML}
-                    </select>
-                    <div class="control-btns">
-                        <button class="btn btn-start" onclick="controlEngine(${backend.port}, 'start')" title="Avvia">▶</button>
-                        <button class="btn btn-stop" onclick="controlEngine(${backend.port}, 'stop')" title="Arresta">⏹</button>
-                        <button class="btn btn-restart" onclick="controlEngine(${backend.port}, 'restart')" title="Riavvia">🔄</button>
-                        <button class="btn btn-kill" onclick="controlEngine(${backend.port}, 'kill')" title="Termina (Kill)">✕</button>
-                    </div>
-                    <div class="terminal-box" id="term-${backend.port}">
-                        [LOG ${backend.node_id}] Porta ${backend.port} attiva - Backend ${backend.backend_type}.
-                    </div>
-                </div>
-                <div class="chart-side">
-                    <h3>Telemetria Live (RAM, Load, Fan, Temp)</h3>
-                    <div class="chart-container">
-                        <canvas id="engineLineChart"></canvas>
-                    </div>
-                </div>
-            `;
-
-            renderEngineLineChart();
-        }
-
-        function renderEngineLineChart() {
+        function initChart() {
             const ctx = document.getElementById('engineLineChart').getContext('2d');
-            if (engineChart) engineChart.destroy();
-
             engineChart = new Chart(ctx, {
                 type: 'line',
                 data: {
                     labels: historyData.labels,
                     datasets: [
-                        { label: 'Temperatura (°C)', data: historyData.temp, borderColor: '#ef4444', backgroundColor: '#ef4444', tension: 0.3, yAxisID: 'y' },
-                        { label: 'Ventola (%)', data: historyData.fan, borderColor: '#38bdf8', backgroundColor: '#38bdf8', tension: 0.3, yAxisID: 'y' },
-                        { label: 'Carico (%)', data: historyData.load, borderColor: '#22c55e', backgroundColor: '#22c55e', tension: 0.3, yAxisID: 'y' },
-                        { label: 'RAM Usata (GB)', data: historyData.ram, borderColor: '#f59e0b', backgroundColor: '#f59e0b', tension: 0.3, yAxisID: 'y1' }
+                        { label: 'Temp (°C)', data: historyData.temp, borderColor: '#ef4444', tension: 0.3, yAxisID: 'y' },
+                        { label: 'Ventola (%)', data: historyData.fan, borderColor: '#38bdf8', tension: 0.3, yAxisID: 'y' },
+                        { label: 'Load (%)', data: historyData.load, borderColor: '#22c55e', tension: 0.3, yAxisID: 'y' },
+                        { label: 'RAM (GB)', data: historyData.ram, borderColor: '#f59e0b', tension: 0.3, yAxisID: 'y1' }
                     ]
                 },
                 options: {
@@ -617,21 +508,157 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
             });
         }
 
-        async function controlEngine(port, action) {
-            const select = document.getElementById(`select-${port}`);
-            const selectedModel = select ? select.value : '';
-            
+        async function fetchTelemetry() {
             try {
-                const res = await fetch('/api/engine/control', {
+                const res = await fetch('/api/telemetry');
+                const data = await res.json();
+
+                // Aggiornamento selettivo elementi UI generali (Zero-Refresh)
+                document.getElementById('cpu-host-val').innerText = `${data.cpu_usage}%`;
+                document.getElementById('ram-host-val').innerText = `${data.ram_used_gb} / ${data.ram_total_gb} GB`;
+                document.getElementById('vram-val').innerText = `${data.nvidia.vram_used} / ${data.nvidia.vram_total} MB`;
+                document.getElementById('gpu-temp-val').innerText = `${data.nvidia.temp}°C / ${data.nvidia.fan}%`;
+
+                // Aggiornamento selettivo dei file JSON di configurazione
+                document.getElementById('cfg-topology-box').innerText = JSON.stringify(data.raw_topology, null, 2);
+                document.getElementById('cfg-static-box').innerText = JSON.stringify(data.raw_static, null, 2);
+
+                allBackends = [];
+                data.nodes.forEach(node => {
+                    (node.backends || []).forEach(b => {
+                        allBackends.push({
+                            node_id: node.node_id,
+                            name: `${node.name || 'Nodo'} (${b.port})`,
+                            host: node.host,
+                            ...b,
+                            available_models: data.available_models
+                        });
+                    });
+                });
+
+                if (allBackends.length > 0 && !activeBackendKey) {
+                    activeBackendKey = `${allBackends[0].host}:${allBackends[0].port}`;
+                    populateModelDropdown(allBackends[0]);
+                }
+
+                updateTabsUI();
+                updateActiveEngineUI(data);
+
+            } catch (err) {
+                console.error("Errore fetch telemetria:", err);
+            }
+        }
+
+        function updateTabsUI() {
+            const tabsContainer = document.getElementById('cluster-tabs');
+            
+            // Se le tab non sono ancora generate o il conteggio cambia, le creiamo
+            if (tabsContainer.children.length !== allBackends.length) {
+                tabsContainer.innerHTML = '';
+                allBackends.forEach(b => {
+                    const key = `${b.host}:${b.port}`;
+                    const btn = document.createElement('button');
+                    btn.className = `tab-btn ${activeBackendKey === key ? 'active' : ''}`;
+                    btn.id = `tab-${b.host}-${b.port}`;
+                    btn.innerText = b.name;
+                    btn.onclick = () => {
+                        activeBackendKey = key;
+                        updateTabsUI();
+                        populateModelDropdown(b);
+                    };
+                    tabsContainer.appendChild(btn);
+                });
+            } else {
+                // Aggiornamento fluido delle classi active senza rigenerare il DOM
+                allBackends.forEach(b => {
+                    const key = `${b.host}:${b.port}`;
+                    const btn = document.getElementById(`tab-${b.host}-${b.port}`);
+                    if (btn) {
+                        btn.className = `tab-btn ${activeBackendKey === key ? 'active' : ''}`;
+                    }
+                });
+            }
+        }
+
+        function populateModelDropdown(backend) {
+            const select = document.getElementById('mod-model-select');
+            const currentSelected = select.value;
+            select.innerHTML = '';
+
+            const categories = {};
+            (backend.available_models || []).forEach(m => {
+                if (!categories[m.category]) categories[m.category] = [];
+                categories[m.category].push(m);
+            });
+
+            for (const [cat, mods] of Object.entries(categories)) {
+                const optgroup = document.createElement('optgroup');
+                optgroup.label = cat;
+                mods.forEach(m => {
+                    const option = document.createElement('option');
+                    option.value = m.filename;
+                    option.innerText = `${m.filename} (${m.size_gb} GB)`;
+                    if (m.filename === currentSelected) option.selected = true;
+                    optgroup.appendChild(option);
+                });
+                select.appendChild(optgroup);
+            }
+        }
+
+        function updateActiveEngineUI(telemetryData) {
+            const backend = allBackends.find(b => `${b.host}:${b.port}` === activeBackendKey);
+            if (!backend) return;
+
+            document.getElementById('mod-engine-name').innerText = backend.name;
+            document.getElementById('mod-engine-status').innerText = backend.status || 'ONLINE';
+            document.getElementById('mod-engine-status').className = `status-badge ${backend.status === 'ONLINE' ? '' : 'offline'}`;
+            document.getElementById('mod-engine-endpoint').innerText = `${backend.host}:${backend.port}`;
+            document.getElementById('mod-engine-backend').innerText = backend.backend_type || 'CPU / OpenBLAS';
+            
+            const hw = backend.hardware || {};
+            document.getElementById('mod-engine-cpuram').innerText = `${hw.cpu_util_pct || 0}% / ${hw.ram_used_gb || 0} GB`;
+            document.getElementById('mod-engine-loaded').innerText = (backend.models_loaded || ['Nessuno'])[0];
+
+            // Update Chart Data in continuo
+            const now = new Date().toLocaleTimeString();
+            if (historyData.labels.length > 15) {
+                historyData.labels.shift();
+                historyData.temp.shift();
+                historyData.fan.shift();
+                historyData.load.shift();
+                historyData.ram.shift();
+            }
+
+            historyData.labels.push(now);
+            historyData.temp.push(telemetryData.nvidia.temp || 45);
+            historyData.fan.push(telemetryData.nvidia.fan || 0);
+            historyData.load.push(hw.cpu_util_pct || telemetryData.cpu_usage || 10);
+            historyData.ram.push(hw.ram_used_gb || telemetryData.ram_used_gb || 4);
+
+            if (engineChart) engineChart.update();
+        }
+
+        async function executeNativeAction(action) {
+            const backend = allBackends.find(b => `${b.host}:${b.port}` === activeBackendKey);
+            if (!backend) return;
+
+            const selectedModel = document.getElementById('mod-model-select').value;
+            try {
+                const res = await fetch('/api/engine/native-control', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ port: port, action: action, model: selectedModel })
+                    body: JSON.stringify({
+                        host: backend.host,
+                        port: backend.port,
+                        action: action,
+                        model: selectedModel
+                    })
                 });
-                const result = await res.json();
-                alert(result.message);
+                const data = await res.json();
+                alert(data.message || "Azione completata!");
                 fetchTelemetry();
             } catch (e) {
-                alert("Errore invio comando: " + e);
+                alert("Errore chiamata Open-API: " + e);
             }
         }
 
@@ -639,7 +666,8 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
             try {
                 const res = await fetch('/api/logs');
                 const data = await res.json();
-                
+
+                // Aggiornamento selettivo tabella richieste
                 const tableBody = document.getElementById('global-request-logs');
                 if (data.request_logs.length > 0) {
                     tableBody.innerHTML = '';
@@ -650,7 +678,6 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
                             <td>${log.node}</td>
                             <td>${log.request}</td>
                             <td>${log.model}</td>
-                            <td>${log.type}</td>
                             <td style="color:var(--accent-blue)">${log.routing}</td>
                             <td>${log.latency_ms} ms</td>
                             <td style="color: ${log.status === 200 ? 'var(--accent-green)' : 'var(--accent-red)'}">${log.status}</td>
@@ -658,21 +685,29 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
                         tableBody.appendChild(tr);
                     });
                 }
+
+                // Aggiornamento console Debug Estesa
+                const debugBox = document.getElementById('debug-log-box');
+                debugBox.innerHTML = data.debug_logs.slice().reverse().map(l => `<div>${l}</div>`).join('');
+
             } catch (e) {
                 console.error("Errore recupero log:", e);
             }
         }
 
-        setInterval(fetchTelemetry, 1000);
-        setInterval(fetchLogs, 1000);
-        fetchTelemetry();
-        fetchLogs();
+        window.onload = () => {
+            initChart();
+            fetchTelemetry();
+            fetchLogs();
+            setInterval(fetchTelemetry, 1000);
+            setInterval(fetchLogs, 1000);
+        };
     </script>
 </body>
 </html>
 EOF_HTML
 
-echo "[*] Generazione del file systemd in $SERVICE_FILE..."
+echo "[*] Generazione del servizio systemd ($SERVICE_FILE)..."
 cat << EOF_SERVICE > "$SERVICE_FILE"
 [Unit]
 Description=Llama Open API Cluster Gateway & Dashboard (Port $PORT)
