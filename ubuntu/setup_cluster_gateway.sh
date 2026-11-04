@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# v2.5.0 - Setup Completo Gateway & Dashboard Cluster Open API (Porta 9001)
+# v3.0.0 - Gateway & Dashboard Cluster Dinamica (Porta 9001)
 
 set -euo pipefail
 
@@ -10,6 +10,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 GATEWAY_DIR="/opt/gateway"
+MODEL_DIR="/opt/llama_models"
 SERVICE_FILE="/etc/systemd/system/llm-gateway.service"
 PORT=9001
 
@@ -28,7 +29,7 @@ fi
 ./venv/bin/pip install --upgrade pip
 ./venv/bin/pip install fastapi uvicorn requests psutil pynvml
 
-echo "[*] Generazione del backend FastAPI ($GATEWAY_DIR/main.py)..."
+echo "[*] Generazione del backend FastAPI dinamico ($GATEWAY_DIR/main.py)..."
 cat << 'EOF_PYTHON' > "$GATEWAY_DIR/main.py"
 import json
 import os
@@ -43,6 +44,8 @@ app = FastAPI(title="Open API Cluster Gateway & Telemetry")
 
 TOPOLOGY_FILE = "/opt/gateway/cluster-topology.json"
 STATIC_NODES_FILE = "/opt/gateway/cluster-static-nodes.json"
+MODEL_DIR = "/opt/llama_models"
+
 SYSTEM_LOGS = []
 GLOBAL_REQUEST_LOGS = []
 
@@ -52,10 +55,38 @@ def log_event(msg, level="INFO"):
     if len(SYSTEM_LOGS) > 200:
         SYSTEM_LOGS.pop(0)
 
+def scan_local_models():
+    models = []
+    if os.path.exists(MODEL_DIR):
+        for f in os.listdir(MODEL_DIR):
+            if f.endswith(".gguf"):
+                path = os.path.join(MODEL_DIR, f)
+                size_bytes = os.path.getsize(path)
+                size_gb = round(size_bytes / (1024**3), 2)
+                
+                # Categorizzazione dinamica basata sul nome
+                category = "Generale / Chat"
+                if "coder" in f.lower():
+                    category = "Sviluppo & Codice (Coding)"
+                elif "medical" in f.lower() or "med" in f.lower():
+                    category = "Medico & Specialistico"
+                elif "embed" in f.lower():
+                    category = "Embeddings / Vettori"
+                elif size_gb < 3:
+                    category = "Leggeri & Avvio Rapido (<3GB)"
+                
+                models.append({
+                    "id": f,
+                    "name": f,
+                    "size_gb": size_gb,
+                    "category": category
+                })
+    return models
+
 def get_aggregated_nodes():
     nodes_dict = {}
     
-    # 1. Caricamento nodi auto-scoperti dal demone di discovery
+    # 1. Nodi da auto-discovery
     if os.path.exists(TOPOLOGY_FILE):
         try:
             with open(TOPOLOGY_FILE, "r", encoding="utf-8") as f:
@@ -68,10 +99,10 @@ def get_aggregated_nodes():
                         "host": node.get("host"),
                         "backends": node.get("backends", [])
                     }
-        except Exception as e:
-            log_event(f"Errore lettura cluster-topology.json: {str(e)}", "ERROR")
+        except Exception:
+            pass
 
-    # 2. Caricamento nodi statici/esterni (gestiti da add_node.sh)
+    # 2. Nodi statici ed esterni
     if os.path.exists(STATIC_NODES_FILE):
         try:
             with open(STATIC_NODES_FILE, "r", encoding="utf-8") as f:
@@ -90,12 +121,12 @@ def get_aggregated_nodes():
                             "host": node.get("host"),
                             "backends": node.get("backends", [])
                         }
-        except Exception as e:
-            log_event(f"Errore lettura cluster-static-nodes.json: {str(e)}", "ERROR")
+        except Exception:
+            pass
 
     if not nodes_dict:
-        return [{
-            "node_id": "node-127-0-0-1",
+        nodes_dict["local-default"] = {
+            "node_id": "local-default",
             "name": "Server Locale",
             "host": "127.0.0.1",
             "backends": [{
@@ -105,7 +136,7 @@ def get_aggregated_nodes():
                 "backend_type": "CPU / OpenBLAS",
                 "hardware": {"cpu_util_pct": 0, "ram_used_gb": 0, "ram_total_gb": 0, "ram_util_pct": 0}
             }]
-        }]
+        }
 
     return list(nodes_dict.values())
 
@@ -131,12 +162,15 @@ def get_telemetry():
         pass
 
     nodes = get_aggregated_nodes()
+    models = scan_local_models()
+
     return {
         "cpu_usage": cpu_percent,
         "ram_used_gb": round(mem.used / (1024**3), 2),
         "ram_total_gb": round(mem.total / (1024**3), 2),
         "nvidia": nvidia_info,
-        "nodes": nodes
+        "nodes": nodes,
+        "available_models": models
     }
 
 @app.post("/api/engine/control")
@@ -169,10 +203,9 @@ async def control_engine(req: Request):
             PID = subprocess.getoutput(f"pgrep -f 'port {port}' | head -n 1")
             if PID:
                 subprocess.run(["kill", "-9", PID])
-                log_event(f"Processo PID {PID} forzatamente terminato (Kill -9).", "WARN")
+                log_event(f"Processo PID {PID} forzatamente terminato.", "WARN")
         return {"status": "ok", "message": f"Azione {action} eseguita con successo su {service_name}"}
     except Exception as e:
-        log_event(f"Errore controllo servizio {service_name}: {str(e)}", "ERROR")
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 @app.get("/api/logs")
@@ -201,12 +234,28 @@ async def proxy_chat_completions(request: Request):
         )
         elapsed_ms = round((time.time() - start_time) * 1000, 2)
         
+        # Analisi richiesta e instradamento avanzato
+        messages = body.get("messages", [])
+        prompt_snippet = messages[-1].get("content", "N/A")[:30] if messages else "N/A"
+        req_type = "Chat / Completamento"
+        if "embedding" in request.url.path:
+            req_type = "Embeddings Vettoriali"
+
+        routing_target = f"Motore LLM (Porta {target_port})"
+        if "qdrant" in str(body).lower():
+            routing_target = "Database Vettoriale Qdrant"
+        elif "surreal" in str(body).lower():
+            routing_target = "SurrealDB (Memoria)"
+
         log_entry = {
             "time": time.strftime("%H:%M:%S"),
-            "port": target_port,
-            "status": resp.status_code,
+            "node": f"{target_host}:{target_port}",
+            "request": prompt_snippet + "...",
+            "model": body.get("model", "unknown"),
+            "type": req_type,
+            "routing": routing_target,
             "latency_ms": elapsed_ms,
-            "model": body.get("model", "unknown")
+            "status": resp.status_code
         }
         GLOBAL_REQUEST_LOGS.append(log_entry)
         if len(GLOBAL_REQUEST_LOGS) > 100:
@@ -214,7 +263,6 @@ async def proxy_chat_completions(request: Request):
 
         return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
     except Exception as e:
-        log_event(f"Errore Proxy Gateway su porta {target_port}: {str(e)}", "ERROR")
         return JSONResponse({"error": str(e)}, status_code=502)
 
 @app.get("/", response_class=HTMLResponse)
@@ -223,7 +271,7 @@ def read_root():
         return f.read()
 EOF_PYTHON
 
-echo "[*] Generazione del frontend Dashboard ($GATEWAY_DIR/index.html)..."
+echo "[*] Generazione del frontend modulare ($GATEWAY_DIR/index.html)..."
 cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
 <!DOCTYPE html>
 <html lang="it">
@@ -257,53 +305,58 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
         .metric-card span { display: block; color: var(--text-muted); font-size: 0.8rem; text-transform: uppercase; }
         .metric-card h2 { font-size: 1.4rem; color: var(--accent-blue); margin-top: 5px; }
 
-        .carousel-section { margin-bottom: 30px; }
-        .carousel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-        .carousel-container { display: flex; gap: 15px; overflow-x: auto; scroll-behavior: smooth; padding-bottom: 10px; }
-        .carousel-container::-webkit-scrollbar { height: 8px; }
-        .carousel-container::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+        /* Sistema Modulare a Tab / Selettore Nodi */
+        .cluster-nav { display: flex; gap: 10px; margin-bottom: 15px; overflow-x: auto; padding-bottom: 5px; }
+        .tab-btn {
+            background: var(--card-bg);
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.9rem;
+            white-space: nowrap;
+        }
+        .tab-btn.active { background: var(--accent-blue); color: var(--bg-dark); border-color: var(--accent-blue); }
 
-        .node-card {
-            flex: 0 0 100%;
+        .modular-container {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
             border-radius: 10px;
-            padding: 18px;
-            min-width: 300px;
+            padding: 20px;
+            margin-bottom: 30px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
         }
-        @media (min-width: 768px) { .node-card { flex: 0 0 calc(33.333% - 10px); } }
-        @media (min-width: 1440px) { .node-card { flex: 0 0 calc(20% - 12px); } }
+        @media(max-width: 900px) { .modular-container { grid-template-columns: 1fr; } }
 
-        .node-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-        .node-title { font-weight: 600; font-size: 1.05rem; }
-        .node-badge { font-size: 0.75rem; padding: 2px 8px; border-radius: 4px; background: #334155; }
-        .node-badge.online { background: rgba(34, 197, 94, 0.2); color: var(--accent-green); }
-        .node-badge.offline { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
-
-        .node-info { font-size: 0.82rem; color: var(--text-muted); margin-bottom: 10px; }
-        .node-info div { display: flex; justify-content: space-between; margin-bottom: 3px; }
+        .node-details h2 { font-size: 1.3rem; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .node-info-grid { font-size: 0.88rem; color: var(--text-muted); margin-bottom: 15px; }
+        .node-info-grid div { display: flex; justify-content: space-between; margin-bottom: 6px; }
 
         select.model-select {
             width: 100%;
             background: #0f172a;
             color: var(--text-main);
             border: 1px solid var(--border-color);
-            padding: 8px;
+            padding: 10px;
             border-radius: 6px;
-            font-size: 0.85rem;
-            margin-bottom: 10px;
+            font-size: 0.9rem;
+            margin-bottom: 15px;
         }
 
-        .control-btns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
+        .control-btns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 15px; }
         .btn {
             background: var(--border-color);
             color: white;
             border: none;
-            padding: 8px;
+            padding: 10px;
             border-radius: 6px;
             cursor: pointer;
             font-weight: 600;
-            font-size: 0.85rem;
+            font-size: 0.9rem;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -318,17 +371,16 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
             background: #090d16;
             border: 1px solid var(--border-color);
             border-radius: 6px;
-            padding: 8px;
+            padding: 10px;
             font-family: monospace;
-            font-size: 0.72rem;
-            height: 80px;
+            font-size: 0.75rem;
+            height: 90px;
             overflow-y: auto;
             color: #38bdf8;
         }
 
-        .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; margin-bottom: 30px; }
-        .chart-card { background: var(--card-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
-        .chart-card h3 { font-size: 0.95rem; margin-bottom: 10px; color: var(--text-muted); }
+        .chart-side { display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0f172a; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
+        .chart-container { width: 180px; height: 180px; margin-bottom: 10px; }
 
         .global-logs { background: var(--card-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
         .global-logs h3 { font-size: 1rem; margin-bottom: 10px; }
@@ -363,83 +415,40 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
         </div>
     </div>
 
-    <div class="carousel-section">
-        <div class="carousel-header">
-            <h3>Navigazione Cluster (Auto-Discovery + Nodi Statici)</h3>
-        </div>
-        <div class="carousel-container" id="nodes-carousel"></div>
+    <!-- Navigazione Modulare Cluster -->
+    <div class="cluster-nav" id="cluster-tabs"></div>
+
+    <!-- Contenitore Modulare Attivo -->
+    <div class="modular-container" id="modular-view">
+        <div style="text-align:center; color: var(--text-muted); grid-column: span 2;">Caricamento nodi cluster in corso...</div>
     </div>
 
-    <div class="charts-grid">
-        <div class="chart-card">
-            <h3>Telemetria GPU NVIDIA (Temperatura & Ventole)</h3>
-            <canvas id="tempChart" height="150"></canvas>
-        </div>
-        <div class="chart-card">
-            <h3>Allocazione Memoria VRAM (MB)</h3>
-            <canvas id="vramChart" height="150"></canvas>
-        </div>
-    </div>
-
+    <!-- Registro Globale di Routing -->
     <div class="global-logs">
-        <h3>Registro Richieste Gateway Open API (Porta 9001)</h3>
+        <h3>Registro Richieste & Instradamento Cluster (Porta 9001)</h3>
         <table class="log-table">
             <thead>
                 <tr>
                     <th>Ora</th>
-                    <th>Porta Destinazione</th>
+                    <th>Nodo / Porta</th>
+                    <th>Prompt / Richiesta</th>
                     <th>Modello Target</th>
-                    <th>Latenza (ms)</th>
-                    <th>Stato HTTP</th>
+                    <th>Tipologia</th>
+                    <th>Instradamento Destinazione</th>
+                    <th>Latenza</th>
+                    <th>Stato</th>
                 </tr>
             </thead>
             <tbody id="global-request-logs">
-                <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">In attesa di richieste API...</td></tr>
+                <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">In attesa di richieste API...</td></tr>
             </tbody>
         </table>
     </div>
 
     <script>
-        const ctxTemp = document.getElementById('tempChart').getContext('2d');
-        const tempChart = new Chart(ctxTemp, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [
-                    { label: 'Temp GPU (°C)', data: [], borderColor: '#ef4444', tension: 0.3 },
-                    { label: 'Ventola (%)', data: [], borderColor: '#38bdf8', tension: 0.3 }
-                ]
-            },
-            options: { responsive: true, scales: { y: { beginAtZero: true, max: 100 } } }
-        });
-
-        const ctxVram = document.getElementById('vramChart').getContext('2d');
-        const vramChart = new Chart(ctxVram, {
-            type: 'bar',
-            data: {
-                labels: ['RTX 3060 Ti'],
-                datasets: [
-                    { label: 'VRAM Usata (MB)', data: [0], backgroundColor: '#38bdf8' },
-                    { label: 'VRAM Libera (MB)', data: [8192], backgroundColor: '#334155' }
-                ]
-            },
-            options: { responsive: true, scales: { x: { stacked: true }, y: { stacked: true, max: 8192 } } }
-        });
-
-        const modelOptionsHTML = `
-            <optgroup label="⚡ Leggeri & Avvio Rapido (RAM < 3GB)">
-                <option value="Llama-3.2-3B-Instruct-Q4_K_M.gguf">Llama-3.2-3B-Instruct (1.9 GB) [CPU/GPU]</option>
-                <option value="qwen2.5-1.5b-instruct-q8_0.gguf">Qwen2.5-1.5B-Instruct (1.8 GB) [CPU/GPU]</option>
-            </optgroup>
-            <optgroup label="💻 Sviluppo & Codice (Coding)">
-                <option value="Qwen2.5-Coder-7B-Instruct-Q6_K.gguf">Qwen2.5-Coder-7B-Q6_K (5.9 GB) [CUDA Target]</option>
-                <option value="Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf">Qwen2.5-Coder-14B-Q4_K_M (8.4 GB) [CUDA High VRAM]</option>
-            </optgroup>
-            <optgroup label="🧠 Ragionamento Generale & Istruzioni">
-                <option value="Mistral-7B-Instruct-v0.3-Q6_K.gguf" selected>Mistral-7B-Instruct-v0.3 (5.6 GB) [Vulkan/CPU]</option>
-                <option value="DeepSeek-V4-Pro-Qwen3.5-9B.Q4_K_M.gguf">DeepSeek-V4-Pro-9B (5.4 GB) [CUDA/Vulkan]</option>
-            </optgroup>
-        `;
+        let allBackends = [];
+        let activeBackendKey = null;
+        let engineChart = null;
 
         async function fetchTelemetry() {
             try {
@@ -451,61 +460,140 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
                 document.getElementById('vram-val').innerText = `${data.nvidia.vram_used} / ${data.nvidia.vram_total} MB`;
                 document.getElementById('gpu-temp-val').innerText = `${data.nvidia.temp}°C / ${data.nvidia.fan}%`;
 
-                const now = new Date().toLocaleTimeString();
-                if (tempChart.data.labels.length > 10) {
-                    tempChart.data.labels.shift();
-                    tempChart.data.datasets[0].data.shift();
-                    tempChart.data.datasets[1].data.shift();
-                }
-                tempChart.data.labels.push(now);
-                tempChart.data.datasets[0].data.push(data.nvidia.temp);
-                tempChart.data.datasets[1].data.push(data.nvidia.fan);
-                tempChart.update();
-
-                vramChart.data.datasets[0].data = [data.nvidia.vram_used];
-                vramChart.data.datasets[1].data = [data.nvidia.vram_total - data.nvidia.vram_used];
-                vramChart.update();
-
-                const carousel = document.getElementById('nodes-carousel');
-                carousel.innerHTML = '';
-
+                // Raccoglie tutti i backend disponibili
+                allBackends = [];
                 data.nodes.forEach(node => {
                     node.backends.forEach(backend => {
-                        const card = document.createElement('div');
-                        card.className = 'node-card';
-                        const isOnline = backend.status === "ONLINE";
-                        const hw = backend.hardware || {};
-                        card.innerHTML = `
-                            <div class="node-header">
-                                <span class="node-title">${node.name} (${backend.port})</span>
-                                <span class="node-badge ${isOnline ? 'online' : 'offline'}">${backend.status}</span>
-                            </div>
-                            <div class="node-info">
-                                <div><span>Host:</span> <strong>${node.host}</strong></div>
-                                <div><span>Backend:</span> <strong>${backend.backend_type || 'N/A'}</strong></div>
-                                <div><span>CPU / RAM Nodo:</span> <strong>${hw.cpu_util_pct || 0}% / ${hw.ram_used_gb || 0} GB</strong></div>
-                                <div><span>Modello In Uso:</span> <strong style="color:var(--accent-blue)">${(backend.models_loaded || ['N/D'])[0]}</strong></div>
-                            </div>
-                            <select class="model-select" id="select-${backend.port}">
-                                ${modelOptionsHTML}
-                            </select>
-                            <div class="control-btns">
-                                <button class="btn btn-start" onclick="controlEngine(${backend.port}, 'start')" title="Avvia">▶</button>
-                                <button class="btn btn-stop" onclick="controlEngine(${backend.port}, 'stop')" title="Arresta">⏹</button>
-                                <button class="btn btn-restart" onclick="controlEngine(${backend.port}, 'restart')" title="Riavvia">🔄</button>
-                                <button class="btn btn-kill" onclick="controlEngine(${backend.port}, 'kill')" title="Kill -9">✕</button>
-                            </div>
-                            <div class="terminal-box" id="term-${backend.port}">
-                                [LOG ${node.node_id}] Backend attivo su porta ${backend.port}...
-                            </div>
-                        `;
-                        carousel.appendChild(card);
+                        allBackends.push({
+                            node_id: node.node_id,
+                            name: node.name,
+                            host: node.host,
+                            ...backend,
+                            models_available: data.available_models
+                        });
                     });
                 });
+
+                if (allBackends.length > 0 && !activeBackendKey) {
+                    activeBackendKey = `${allBackends[0].host}:${allBackends[0].port}`;
+                }
+
+                renderClusterTabs();
+                renderModularView();
 
             } catch (err) {
                 console.error("Errore fetch telemetria:", err);
             }
+        }
+
+        function renderClusterTabs() {
+            const tabsContainer = document.getElementById('cluster-tabs');
+            tabsContainer.innerHTML = '';
+
+            allBackends.forEach(b => {
+                const key = `${b.host}:${b.port}`;
+                const btn = document.createElement('button');
+                btn.className = `tab-btn ${activeBackendKey === key ? 'active' : ''}`;
+                btn.innerText = `${b.name} (${b.port})`;
+                btn.onclick = () => {
+                    activeBackendKey = key;
+                    renderClusterTabs();
+                    renderModularView();
+                };
+                tabsContainer.appendChild(btn);
+            });
+        }
+
+        function renderModularView() {
+            const container = document.getElementById('modular-view');
+            const backend = allBackends.find(b => `${b.host}:${b.port}` === activeBackendKey);
+
+            if (!backend) {
+                container.innerHTML = `<div style="text-align:center; color: var(--text-muted); grid-column: span 2;">Nessun motore selezionato.</div>`;
+                return;
+            }
+
+            const isOnline = backend.status === "ONLINE";
+            const hw = backend.hardware || { cpu_util_pct: 0, ram_used_gb: 0, ram_total_gb: 0 };
+            const loadedModel = (backend.models_loaded || ['N/D'])[0];
+
+            // Generazione dinamica opzioni modello raggruppate per categoria
+            const categories = {};
+            (backend.models_available || []).forEach(m => {
+                if (!categories[m.category]) categories[m.category] = [];
+                categories[m.category].push(m);
+            });
+
+            let optionsHTML = '';
+            for (const [cat, mods] of Object.entries(categories)) {
+                optionsHTML += `<optgroup label="${cat}">`;
+                mods.forEach(m => {
+                    const selected = m.name === loadedModel ? 'selected' : '';
+                    optionsHTML += `<option value="${m.name}" ${selected}>${m.name} (${m.size_gb} GB)</option>`;
+                });
+                optionsHTML += `</optgroup>`;
+            }
+
+            container.innerHTML = `
+                <div class="node-details">
+                    <h2>
+                        <span>${backend.name}</span>
+                        <span class="node-badge ${isOnline ? 'online' : 'offline'}">${backend.status}</span>
+                    </h2>
+                    <div class="node-info-grid">
+                        <div><span>Host / Porta:</span> <strong>${backend.host}:${backend.port}</strong></div>
+                        <div><span>Backend Hardware:</span> <strong style="color:var(--accent-blue)">${backend.backend_type || 'CPU / OpenBLAS'}</strong></div>
+                        <div><span>CPU / RAM Nodo:</span> <strong>${hw.cpu_util_pct || 0}% / ${hw.ram_used_gb || 0} GB</strong></div>
+                        <div><span>Modello In Uso:</span> <strong style="color:var(--accent-green)">${loadedModel}</strong></div>
+                    </div>
+                    <select class="model-select" id="select-${backend.port}">
+                        ${optionsHTML}
+                    </select>
+                    <div class="control-btns">
+                        <button class="btn btn-start" onclick="controlEngine(${backend.port}, 'start')" title="Avvia">▶</button>
+                        <button class="btn btn-stop" onclick="controlEngine(${backend.port}, 'stop')" title="Arresta">⏹</button>
+                        <button class="btn btn-restart" onclick="controlEngine(${backend.port}, 'restart')" title="Riavvia">🔄</button>
+                        <button class="btn btn-kill" onclick="controlEngine(${backend.port}, 'kill')" title="Termina (Kill)">✕</button>
+                    </div>
+                    <div class="terminal-box" id="term-${backend.port}">
+                        [LOG ${backend.node_id}] Porta ${backend.port} attiva - Backend ${backend.backend_type}.
+                    </div>
+                </div>
+                <div class="chart-side">
+                    <div class="chart-container">
+                        <canvas id="engineDoughnut"></canvas>
+                    </div>
+                    <div style="font-size: 0.85rem; color: var(--text-muted); text-align: center; margin-top: 5px;">
+                        Temp: <strong style="color:var(--text-main)">${backend.hardware?.temp || 45}°C</strong> | 
+                        Ventola: <strong style="color:var(--text-main)">${backend.hardware?.fan || 0}%</strong> | 
+                        Carico: <strong style="color:var(--accent-blue)">${hw.cpu_util_pct || 15}%</strong>
+                    </div>
+                </div>
+            `;
+
+            renderEngineChart(hw.cpu_util_pct || 15);
+        }
+
+        function renderEngineChart(loadVal) {
+            const ctx = document.getElementById('engineDoughnut').getContext('2d');
+            if (engineChart) engineChart.destroy();
+
+            engineChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Carico Attivo (%)', 'Risorse Libere (%)'],
+                    datasets: [{
+                        data: [loadVal, Math.max(0, 100 - loadVal)],
+                        backgroundColor: ['#38bdf8', '#334155'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }
+                }
+            });
         }
 
         async function controlEngine(port, action) {
@@ -538,8 +626,11 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
                         const tr = document.createElement('tr');
                         tr.innerHTML = `
                             <td>${log.time}</td>
-                            <td>${log.port}</td>
+                            <td>${log.node}</td>
+                            <td>${log.request}</td>
                             <td>${log.model}</td>
+                            <td>${log.type}</td>
+                            <td style="color:var(--accent-blue)">${log.routing}</td>
                             <td>${log.latency_ms} ms</td>
                             <td style="color: ${log.status === 200 ? 'var(--accent-green)' : 'var(--accent-red)'}">${log.status}</td>
                         `;
@@ -551,8 +642,9 @@ cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
             }
         }
 
-        setInterval(fetchTelemetry, 3000);
-        setInterval(fetchLogs, 2000);
+        // Aggiornamento rapido ogni 1 secondo
+        setInterval(fetchTelemetry, 1000);
+        setInterval(fetchLogs, 1000);
         fetchTelemetry();
         fetchLogs();
     </script>
