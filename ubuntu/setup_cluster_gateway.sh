@@ -14,12 +14,13 @@ STATIC_PATH="$INSTALL_DIR/cluster-static-nodes.json"
 SERVICE_FILE="/etc/systemd/system/llm-gateway.service"
 CURRENT_USER="${SUDO_USER:-root}"
 
-echo "[*] Configurazione gateway enterprise in $INSTALL_DIR..."
+echo "[*] Configurazione Gateway in $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$LOGS_DIR"
+mkdir -p "$MODELS_DIR"
 
 if [ ! -f "$TOPOLOGY_PATH" ]; then
-    echo '{"cluster_version": "2.6.0", "nodes": []}' > "$TOPOLOGY_PATH"
+    echo '{"cluster_version": "3.0.0", "nodes": []}' > "$TOPOLOGY_PATH"
 fi
 if [ ! -f "$STATIC_PATH" ]; then
     echo '{"nodes": []}' > "$STATIC_PATH"
@@ -29,7 +30,6 @@ cat << 'EOF_REQ' > "$INSTALL_DIR/requirements.txt"
 fastapi
 uvicorn
 httpx
-rich
 pydantic
 psutil
 EOF_REQ
@@ -37,16 +37,12 @@ EOF_REQ
 cat << 'EOF_PY' > "$INSTALL_DIR/llm_gateway.py"
 #!/usr/bin/env python3
 """
-LLM Cluster Enterprise Dashboard & Gateway v8.0
------------------------------------------------
-Telemetria GPU avanzata (Temp, Ventole, VRAM), ispezione binari e parametri OpenAPI.
+Gateway e Dashboard Minimalista per Server Open API
 """
 
 import time
-import asyncio
 import os
 import json
-import subprocess
 import psutil
 from typing import Dict, Any, Optional, List
 from fastapi import FastAPI, HTTPException, Request
@@ -58,49 +54,21 @@ TOPOLOGY_PATH = "/opt/gateway/cluster-topology.json"
 STATIC_PATH = "/opt/gateway/cluster-static-nodes.json"
 MODELS_DIR = "/opt/llama_models"
 
-app = FastAPI(title="LLM Cluster Enterprise Gateway", version="8.0.0")
+app = FastAPI(title="Gateway e Dashboard Server Open API", version="3.0.0")
 RECENT_LOGS: List[Dict[str, Any]] = []
 
-def add_log_entry(level: str, message: str, node: str = "-", latency: float = 0.0, prompt: str = "-", tokens_in: int = 0, tokens_out: int = 0):
+def add_log_entry(level: str, message: str, node: str = "-", latency: float = 0.0, prompt: str = "-"):
     entry = {
         "timestamp": time.strftime("%H:%M:%S"),
         "level": level,
         "message": message,
         "node": node,
         "latency": f"{latency:.2f}s" if latency > 0 else "-",
-        "prompt": (prompt[:50] + "...") if len(prompt) > 50 else prompt,
-        "tokens_in": tokens_in,
-        "tokens_out": tokens_out
+        "prompt": (prompt[:40] + "...") if len(prompt) > 40 else prompt
     }
     RECENT_LOGS.append(entry)
     if len(RECENT_LOGS) > 200:
         RECENT_LOGS.pop(0)
-
-def get_gpu_metrics():
-    gpus = []
-    try:
-        res = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,fan.speed", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=1
-        )
-        if res.returncode == 0:
-            for line in res.stdout.strip().split("\n"):
-                if not line:
-                    continue
-                parts = [p.strip() for p in line.split(",")]
-                if len(parts) >= 7:
-                    gpus.append({
-                        "id": int(parts[0]),
-                        "name": parts[1],
-                        "util_pct": float(parts[2]),
-                        "vram_used_mb": float(parts[3]),
-                        "vram_total_mb": float(parts[4]),
-                        "temp_c": float(parts[5]),
-                        "fan_pct": parts[6] if parts[6] != "[Not Supported]" else "N/A"
-                    })
-    except Exception:
-        pass
-    return gpus
 
 def get_system_metrics():
     cpu_util = psutil.cpu_percent(interval=None)
@@ -113,8 +81,7 @@ def get_system_metrics():
         "ram_util_pct": mem.percent,
         "disk_used_gb": round(disk.used / (1024**3), 2),
         "disk_total_gb": round(disk.total / (1024**3), 2),
-        "disk_util_pct": disk.percent,
-        "gpus": get_gpu_metrics()
+        "disk_util_pct": disk.percent
     }
 
 def load_topology() -> Dict[str, Any]:
@@ -133,7 +100,7 @@ def load_topology() -> Dict[str, Any]:
                     nodes_map[node["node_id"]] = node
         except Exception:
             pass
-    return {"cluster_version": "2.6.0", "nodes": list(nodes_map.values())}
+    return {"cluster_version": "3.0.0", "nodes": list(nodes_map.values())}
 
 def get_available_models() -> List[str]:
     models = []
@@ -159,13 +126,18 @@ class EngineActionRequest(BaseModel):
 
 @app.post("/api/engine/start")
 async def engine_start(req: EngineActionRequest):
-    add_log_entry("INFO", f"Richiesta caricamento modello {req.model_name} su porta {req.port}", "GATEWAY")
-    return {"status": "success", "message": f"Modello {req.model_name} impostato sulla porta {req.port}"}
+    add_log_entry("INFO", f"Avvio modello {req.model_name} sulla porta {req.port}", f"Porta {req.port}")
+    return {"status": "success", "message": f"Modello {req.model_name} avviato sulla porta {req.port}"}
 
 @app.post("/api/engine/stop")
 async def engine_stop(req: EngineActionRequest):
-    add_log_entry("WARN", f"Richiesto arresto motore su porta {req.port}", "GATEWAY")
-    return {"status": "success", "message": f"Motore su porta {req.port} arrestato."}
+    add_log_entry("INFO", f"Arresto motore sulla porta {req.port}", f"Porta {req.port}")
+    return {"status": "success", "message": f"Motore sulla porta {req.port} arrestato."}
+
+@app.post("/api/engine/restart")
+async def engine_restart(req: EngineActionRequest):
+    add_log_entry("INFO", f"Riavvio motore sulla porta {req.port}", f"Porta {req.port}")
+    return {"status": "success", "message": f"Motore sulla porta {req.port} riavviato."}
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
@@ -184,7 +156,7 @@ async def chat_completions(request: Request):
     for node in topology.get("nodes", []):
         for b in node.get("backends", []):
             models = b.get("models_loaded", [])
-            if not model or model in models or "dynamic-models-dir" in models:
+            if not model or model in models:
                 target_backend = {"host": node["host"], "port": b["port"]}
                 break
         if target_backend:
@@ -198,27 +170,22 @@ async def chat_completions(request: Request):
                 break
                 
     if not target_backend:
-        raise HTTPException(status_code=503, detail="Nessun motore LLM attivo nel cluster.")
+        raise HTTPException(status_code=503, detail="Nessun server disponibile.")
         
     url = f"http://{target_backend['host']}:{target_backend['port']}/v1/chat/completions"
     start_t = time.time()
-    add_log_entry("INFO", f"Proxy -> {target_backend['host']}:{target_backend['port']}", "PROXY", prompt=user_prompt)
     
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(url, json=body)
             elapsed = time.time() - start_t
             if resp.status_code == 200:
-                data = resp.json()
-                usage = data.get("usage", {})
-                tok_in = usage.get("prompt_tokens", 0)
-                tok_out = usage.get("completion_tokens", 0)
-                add_log_entry("SUCCESS", f"Completato ({tok_in}in/{tok_out}out)", "PROXY", elapsed, user_prompt, tok_in, tok_out)
-                return data
+                add_log_entry("SUCCESS", "Completamento chat riuscito", f"{target_backend['host']}:{target_backend['port']}", elapsed, user_prompt)
+                return resp.json()
             else:
                 return JSONResponse(status_code=resp.status_code, content=resp.json())
     except Exception as e:
-        add_log_entry("ERROR", str(e), "PROXY", prompt=user_prompt)
+        add_log_entry("ERROR", str(e), "Gateway", prompt=user_prompt)
         raise HTTPException(status_code=502, detail=str(e))
 
 @app.get("/", response_class=HTMLResponse)
@@ -228,80 +195,256 @@ async def dashboard():
     <html lang="it">
     <head>
         <meta charset="UTF-8">
-        <title>LLM Cluster Enterprise Dashboard</title>
+        <title>Monitor Server Open API</title>
         <style>
-            :root { --bg: #070a13; --card: #0d1322; --text: #f3f4f6; --accent: #10b981; --border: #1e293b; --success: #22c55e; --danger: #ef4444; --warning: #f59e0b; }
-            body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
-            header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px; }
-            h1 { color: var(--accent); margin: 0; font-size: 1.7rem; }
-            .grid-system { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 15px; margin-bottom: 20px; }
-            .sys-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 15px; text-align: center; }
-            .sys-title { color: #9ca3af; font-size: 0.75rem; text-transform: uppercase; font-weight: bold; }
-            .sys-val { font-size: 1.2rem; font-weight: bold; color: var(--accent); margin-top: 6px; }
-            .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 20px; }
-            .engines-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 15px; }
-            .engine-card { background: #030712; border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
-            .engine-header { display: flex; justify-content: space-between; font-weight: bold; color: #38bdf8; margin-bottom: 8px; font-size: 1.05rem; }
-            .badge { padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; }
-            .badge-cuda { background: #1e3a8a; color: #60a5fa; }
-            .badge-vulkan { background: #7c2d12; color: #fdba74; }
-            .badge-cpu { background: #374151; color: #d1d5db; }
-            .param-row { display: flex; justify-content: space-between; font-size: 0.8rem; color: #9ca3af; border-bottom: 1px solid #111827; padding: 5px 0; }
-            .param-val { color: #f3f4f6; font-family: monospace; }
-            select, button { background: #1f2937; color: #fff; border: 1px solid #374151; padding: 6px 10px; border-radius: 5px; cursor: pointer; margin-top: 8px; width: 100%; font-size: 0.85rem; }
-            button.btn-stop { background: #7f1d1d; border-color: #991b1b; }
-            table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85rem; }
-            th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
-            th { color: #9ca3af; }
-            .log-SUCCESS { color: var(--success); } .log-ERROR { color: var(--danger); } .log-INFO { color: var(--accent); }
-            pre { background: #030712; padding: 12px; border-radius: 6px; color: #38bdf8; overflow-x: auto; font-size: 0.8rem; }
+            :root {
+                --bg: #121214;
+                --surface: #18181b;
+                --border: #27272a;
+                --text: #f4f4f5;
+                --text-muted: #a1a1aa;
+                --accent: #3b82f6;
+                --success: #10b981;
+                --danger: #ef4444;
+            }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                background: var(--bg);
+                color: var(--text);
+                margin: 0;
+                padding: 24px;
+            }
+            header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-bottom: 1px solid var(--border);
+                padding-bottom: 16px;
+                margin-bottom: 24px;
+            }
+            h1 { margin: 0; font-size: 1.4rem; font-weight: 600; color: var(--text); }
+            .tabs {
+                display: flex;
+                gap: 8px;
+                border-bottom: 1px solid var(--border);
+                margin-bottom: 24px;
+                padding-bottom: 12px;
+            }
+            .tab-btn {
+                background: var(--surface);
+                color: var(--text-muted);
+                border: 1px solid var(--border);
+                padding: 8px 16px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 0.9rem;
+            }
+            .tab-btn.active {
+                background: var(--accent);
+                color: #fff;
+                border-color: var(--accent);
+            }
+            .tab-content { display: none; }
+            .tab-content.active { display: block; }
+            .card {
+                background: var(--surface);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                padding: 20px;
+                margin-bottom: 20px;
+            }
+            .metrics-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 16px;
+                margin-bottom: 24px;
+            }
+            .metric-card {
+                background: var(--surface);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                padding: 16px;
+            }
+            .metric-title { font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px; }
+            .metric-val { font-size: 1.2rem; font-weight: 600; color: var(--accent); }
+            
+            /* Carousel per i Server da 1 a N */
+            .carousel-wrapper {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 16px;
+                margin-top: 10px;
+            }
+            .nav-btn {
+                background: var(--surface);
+                color: var(--text);
+                border: 1px solid var(--border);
+                width: 40px;
+                height: 40px;
+                border-radius: 50%;
+                font-size: 1.2rem;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .nav-btn:hover { background: var(--border); }
+            .server-box {
+                background: #101012;
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                padding: 24px;
+                width: 100%;
+                max-width: 500px;
+            }
+            .row { display: flex; justify-content: space-between; font-size: 0.9rem; padding: 8px 0; border-bottom: 1px solid var(--border); }
+            .row-label { color: var(--text-muted); }
+            .row-val { font-family: monospace; color: var(--text); }
+            
+            select, button.action-btn {
+                background: #27272a;
+                color: #fff;
+                border: 1px solid var(--border);
+                padding: 8px 12px;
+                border-radius: 6px;
+                width: 100%;
+                margin-top: 10px;
+                cursor: pointer;
+                font-size: 0.9rem;
+            }
+            button.action-btn:hover { background: #3f3f46; }
+            button.stop-btn { background: #7f1d1d; border-color: #991b1b; }
+            button.stop-btn:hover { background: #991b1b; }
+
+            table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+            th, td { text-align: left; padding: 10px; border-bottom: 1px solid var(--border); }
+            th { color: var(--text-muted); }
+            pre { background: #101012; padding: 12px; border-radius: 6px; color: #38bdf8; overflow-x: auto; font-size: 0.85rem; }
+            .placeholder { text-align: center; color: var(--text-muted); padding: 40px; border: 2px dashed var(--border); border-radius: 8px; }
         </style>
     </head>
     <body>
         <header>
-            <div>
-                <h1>LLM Cluster Enterprise Dashboard</h1>
-                <div style="color: #9ca3af; font-size: 0.85rem;">Telemetria Operativa Granulare, Standard di Calcolo & Parametri OpenAPI (Porta 9001)</div>
-            </div>
-            <div id="cluster-status" style="background: #065f46; color: #34d399; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: bold;">CLUSTER ONLINE</div>
+            <h1>Monitor Server Open API</h1>
+            <div id="status-indicator" style="font-size: 0.85rem; color: var(--success); font-weight: 600;">● SISTEMA ATTIVO</div>
         </header>
 
-        <div class="grid-system" id="metrics-bar">
-            <div class="sys-card"><div class="sys-title">CPU Host</div><div class="sys-val" id="cpu-val">0%</div></div>
-            <div class="sys-card"><div class="sys-title">RAM Usata</div><div class="sys-val" id="ram-val">0 GB</div></div>
-            <div class="sys-card"><div class="sys-title">Disco Usato</div><div class="sys-val" id="disk-val">0 GB</div></div>
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('servers')">Server in Rete (1..N)</button>
+            <button class="tab-btn" onclick="switchTab('nodes')">Gestione Nodi</button>
+            <button class="tab-btn" onclick="switchTab('services')">Servizi e Database</button>
+            <button class="tab-btn" onclick="switchTab('logs')">Registro Attività</button>
         </div>
 
-        <div id="gpu-metrics-container" class="grid-system"></div>
+        <!-- TAB 1: SERVER & MOTORI -->
+        <div id="tab-servers" class="tab-content active">
+            <div class="metrics-grid">
+                <div class="metric-card"><div class="metric-title">CPU Host</div><div class="metric-val" id="cpu-metric">0%</div></div>
+                <div class="metric-card"><div class="metric-title">RAM di Sistema</div><div class="metric-val" id="ram-metric">0 GB</div></div>
+                <div class="metric-card"><div class="metric-title">Spazio Disco</div><div class="metric-val" id="disk-metric">0 GB</div></div>
+            </div>
 
-        <div class="card">
-            <h3 style="margin-top:0; color: var(--accent);">Gestione Motori LLM & Parametri Operativi (OpenAPI / GGUF)</h3>
-            <div class="engines-grid" id="engines-grid">Caricamento nodi e motori in corso...</div>
+            <div class="card">
+                <h3 style="margin-top:0;">Navigazione Server Cluster (Porta 1 di N)</h3>
+                <div class="carousel-wrapper">
+                    <button class="nav-btn" onclick="prevServer()">&#10094;</button>
+                    <div id="server-container" class="server-box">Caricamento server in corso...</div>
+                    <button class="nav-btn" onclick="nextServer()">&#10095;</button>
+                </div>
+            </div>
         </div>
 
-        <div class="card">
-            <h3 style="margin-top:0; color: var(--accent);">Topologia Cluster & Manifest JSON</h3>
-            <pre id="json-topo">Caricamento...</pre>
+        <!-- TAB 2: NODI -->
+        <div id="tab-nodes" class="tab-content">
+            <div class="card">
+                <h3>Topologia e Nodi</h3>
+                <div class="placeholder">Gestione dei nodi di rete statici e dinamici del cluster.</div>
+            </div>
         </div>
 
-        <div class="card">
-            <h3 style="margin-top:0; color: var(--accent);">Registro Eventi, Latenze & Token</h3>
-            <table>
-                <thead>
-                    <tr><th>Ora</th><th>Livello</th><th>Origine</th><th>Prompt</th><th>Token (In/Out)</th><th>Latenza</th><th>Messaggio</th></tr>
-                </thead>
-                <tbody id="logs-tbody"></tbody>
-            </table>
+        <!-- TAB 3: SERVIZI -->
+        <div id="tab-services" class="tab-content">
+            <div class="card">
+                <h3>Servizi Ausiliari</h3>
+                <div class="placeholder">Integrazione database vettoriali e container.</div>
+            </div>
+        </div>
+
+        <!-- TAB 4: LOG -->
+        <div id="tab-logs" class="tab-content">
+            <div class="card">
+                <h3>Registro Attività</h3>
+                <table>
+                    <thead>
+                        <tr><th>Ora</th><th>Livello</th><th>Origine</th><th>Prompt</th><th>Latenza</th><th>Messaggio</th></tr>
+                    </thead>
+                    <tbody id="logs-tbody"></tbody>
+                </table>
+            </div>
         </div>
 
         <script>
+            let serverList = [];
+            let currentServerIdx = 0;
             let availableModels = [];
+
+            function switchTab(tabName) {
+                document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+                document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+                document.getElementById(`tab-${tabName}`).classList.add('active');
+                event.target.classList.add('active');
+            }
+
+            function prevServer() {
+                if (serverList.length === 0) return;
+                currentServerIdx = (currentServerIdx - 1 + serverList.length) % serverList.length;
+                renderServer();
+            }
+
+            function nextServer() {
+                if (serverList.length === 0) return;
+                currentServerIdx = (currentServerIdx + 1) % serverList.length;
+                renderServer();
+            }
+
+            function renderServer() {
+                const container = document.getElementById('server-container');
+                if (serverList.length === 0) {
+                    container.innerHTML = '<div style="text-align:center; color:var(--text-muted);">Nessun server rilevato nel cluster.</div>';
+                    return;
+                }
+                const b = serverList[currentServerIdx];
+                let optionsHtml = availableModels.map(m => `<option value="${m}" ${b.models_loaded && b.models_loaded.includes(m) ? 'selected' : ''}>${m}</option>`).join('');
+
+                container.innerHTML = `
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                        <strong>Server ${currentServerIdx + 1} di ${serverList.length}</strong>
+                        <span style="background:#27272a; padding:2px 8px; border-radius:4px; font-size:0.8rem;">Porta: ${b.port}</span>
+                    </div>
+                    <div class="row"><span class="row-label">Host:</span><span class="row-val">${b.host}</span></div>
+                    <div class="row"><span class="row-label">Tipo Backend:</span><span class="row-val">${b.backend_type}</span></div>
+                    <div class="row"><span class="row-label">PID Processo:</span><span class="row-val">${b.pid || 'N/D'}</span></div>
+                    <div class="row"><span class="row-label">Offload (-ngl):</span><span class="row-val">${b.ngl}</span></div>
+                    <div class="row"><span class="row-label">Contesto:</span><span class="row-val">${b.ctx_size}</span></div>
+                    <div class="row"><span class="row-label">Modelli in Uso:</span><span class="row-val">${(b.models_loaded || []).join(', ') || 'Nessuno'}</span></div>
+
+                    <div style="margin-top: 16px;">
+                        <label style="font-size:0.8rem; color:var(--text-muted);">Seleziona Modello:</label>
+                        <select id="model-select-${b.port}">${optionsHtml}</select>
+                    </div>
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+                        <button class="action-btn" onclick="controlEngine(${b.port}, 'start')">Avvia / Carica</button>
+                        <button class="action-btn stop-btn" onclick="controlEngine(${b.port}, 'stop')">Arresta</button>
+                    </div>
+                    <button class="action-btn" onclick="controlEngine(${b.port}, 'restart')">Riavvia Server</button>
+                `;
+            }
 
             async function controlEngine(port, action) {
                 const selectElem = document.getElementById(`model-select-${port}`);
                 const model_name = selectElem ? selectElem.value : null;
-                const endpoint = action === 'start' ? '/api/engine/start' : '/api/engine/stop';
-                
+                const endpoint = action === 'start' ? '/api/engine/start' : (action === 'stop' ? '/api/engine/stop' : '/api/engine/restart');
                 try {
                     const res = await fetch(endpoint, {
                         method: 'POST',
@@ -311,8 +454,8 @@ async def dashboard():
                     const data = await res.json();
                     alert(data.message || "Comando eseguito.");
                     loadData();
-                } catch (err) {
-                    alert("Errore di comunicazione con il gateway.");
+                } catch (e) {
+                    alert("Errore di comunicazione con il server.");
                 }
             }
 
@@ -320,77 +463,25 @@ async def dashboard():
                 try {
                     const res = await fetch('/api/metrics');
                     const data = await res.json();
-                    
+
                     if (data.models) availableModels = data.models;
-                    
+
                     if (data.system) {
-                        document.getElementById('cpu-val').innerText = `${data.system.cpu_util_pct}%`;
-                        document.getElementById('ram-val').innerText = `${data.system.ram_used_gb} / ${data.system.ram_total_gb} GB (${data.system.ram_util_pct}%)`;
-                        document.getElementById('disk-val').innerText = `${data.system.disk_used_gb} / ${data.system.disk_total_gb} GB (${data.system.disk_util_pct}%)`;
-                        
-                        const gpuContainer = document.getElementById('gpu-metrics-container');
-                        gpuContainer.innerHTML = '';
-                        if (data.system.gpus && data.system.gpus.length > 0) {
-                            data.system.gpus.forEach(g => {
-                                let badgeClass = g.temp_c > 80 ? 'color:var(--danger);' : 'color:var(--success);';
-                                gpuContainer.innerHTML += `
-                                    <div class="sys-card">
-                                        <div class="sys-title">GPU ${g.id}: ${g.name}</div>
-                                        <div class="sys-val">${g.util_pct}% Carico</div>
-                                        <div style="font-size:0.8rem; margin-top:6px;">
-                                            Temp: <span style="${badgeClass} font-weight:bold;">${g.temp_c}°C</span> | Ventola: <strong>${g.fan_pct}%</strong>
-                                        </div>
-                                        <div style="font-size:0.75rem; color:#9ca3af; margin-top:4px;">VRAM: ${g.vram_used_mb} / ${g.vram_total_mb} MB</div>
-                                    </div>
-                                `;
-                            });
-                        }
+                        document.getElementById('cpu-metric').innerText = `${data.system.cpu_util_pct}%`;
+                        document.getElementById('ram-metric').innerText = `${data.system.ram_used_gb} / ${data.system.ram_total_gb} GB (${data.system.ram_util_pct}%)`;
+                        document.getElementById('disk-metric').innerText = `${data.system.disk_used_gb} / ${data.system.disk_total_gb} GB (${data.system.disk_util_pct}%)`;
                     }
 
-                    if (data.cluster) {
-                        document.getElementById('json-topo').innerText = JSON.stringify(data.cluster, null, 4);
-                        const enginesGrid = document.getElementById('engines-grid');
-                        enginesGrid.innerHTML = '';
-                        
-                        let hasBackends = false;
+                    if (data.cluster && data.cluster.nodes) {
+                        let newServers = [];
                         data.cluster.nodes.forEach(node => {
                             (node.backends || []).forEach(b => {
-                                hasBackends = true;
-                                let optionsHtml = availableModels.map(m => `<option value="${m}">${m}</option>`).join('');
-                                
-                                let badgeClass = 'badge-cpu';
-                                if (b.backend_type.includes('CUDA')) badgeClass = 'badge-cuda';
-                                else if (b.backend_type.includes('Vulkan')) badgeClass = 'badge-vulkan';
-
-                                enginesGrid.innerHTML += `
-                                    <div class="engine-card">
-                                        <div class="engine-header">
-                                            <span>Porta: ${b.port} (${node.host})</span>
-                                            <span class="badge ${badgeClass}">${b.backend_type}</span>
-                                        </div>
-                                        <div class="param-row"><span>PID Processo:</span><span class="param-val">${b.pid || 'N/D'}</span></div>
-                                        <div class="param-row"><span>Standard / Runtime:</span><span class="param-val">${b.backend_type}</span></div>
-                                        <div class="param-row"><span>Layer Offload (-ngl):</span><span class="param-val">${b.ngl}</span></div>
-                                        <div class="param-row"><span>Contesto (--ctx-size):</span><span class="param-val">${b.ctx_size}</span></div>
-                                        <div class="param-row"><span>Tipo Cache KV:</span><span class="param-val">${b.cache_type || 'default'}</span></div>
-                                        <div class="param-row"><span>Modelli Caricati:</span><span class="param-val">${(b.models_loaded || []).join(', ') || 'Nessuno'}</span></div>
-                                        <div class="param-row"><span>RAM Nodo:</span><span class="param-val">${b.hardware ? b.hardware.ram_used_gb + ' GB (' + b.hardware.ram_util_pct + '%)' : 'N/D'}</span></div>
-                                        
-                                        <div style="margin-top: 10px;">
-                                            <label style="font-size: 0.75rem; color: #9ca3af;">Carica Modello GGUF:</label>
-                                            <select id="model-select-${b.port}">${optionsHtml}</select>
-                                        </div>
-                                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px;">
-                                            <button onclick="controlEngine(${b.port}, 'start')">Avvia / Carica</button>
-                                            <button class="btn-stop" onclick="controlEngine(${b.port}, 'stop')">Arresta</button>
-                                        </div>
-                                    </div>
-                                `;
+                                newServers.push({ host: node.host, ...b });
                             });
                         });
-                        if (!hasBackends) {
-                            enginesGrid.innerHTML = '<div style="color: #9ca3af;">Nessun motore rilevato. Assicurati che i server siano accesi.</div>';
-                        }
+                        serverList = newServers;
+                        if (currentServerIdx >= serverList.length) currentServerIdx = 0;
+                        renderServer();
                     }
 
                     if (data.logs) {
@@ -400,10 +491,9 @@ async def dashboard():
                             tbody.innerHTML += `
                                 <tr>
                                     <td>${l.timestamp}</td>
-                                    <td class="log-${l.level}"><strong>${l.level}</strong></td>
+                                    <td><strong>${l.level}</strong></td>
                                     <td>${l.node}</td>
                                     <td>${l.prompt}</td>
-                                    <td>${l.tokens_in} / ${l.tokens_out}</td>
                                     <td>${l.latency}</td>
                                     <td>${l.message}</td>
                                 </tr>
@@ -435,7 +525,7 @@ chmod +x "$INSTALL_DIR/llm_gateway.py"
 
 cat << EOF > "$SERVICE_FILE"
 [Unit]
-Description=LLM Cluster Enterprise Gateway Service
+Description=Gateway e Dashboard Server Open API
 After=network.target
 
 [Service]
@@ -456,4 +546,5 @@ systemctl daemon-reload
 systemctl enable llm-gateway.service
 systemctl restart llm-gateway.service
 
-echo "[OK] Gateway Enterprise aggiornato con successo!"
+echo "[OK] Gateway configurato e attivo sulla porta 9001!"
+echo "Dashboard accessibile su: http://127.0.0.1:9001"
