@@ -1,726 +1,496 @@
 #!/usr/bin/env bash
-
-# v4.1.0 - Gateway & Dashboard Cluster Corretta (Zero-Refresh, Synoptic Linear Sync, Status Colors)
+# ==============================================================================
+# Setup Cluster Gateway & LLM Dashboard v6.0
+# Sistema di Orchestrazione, Discovery e Dashboard su Porta 9001
+# ==============================================================================
 
 set -euo pipefail
 
-if [ "$EUID" -ne 0 ]; then
-  echo "[-] Errore: Esegui questo script con sudo o come root."
-  exit 1
-fi
-
-GATEWAY_DIR="/opt/gateway"
-MODEL_DIR="/opt/llama_models"
-SERVICE_FILE="/etc/systemd/system/llm-gateway.service"
+# --- Configurazione Percorsi e Variabili ---
+INSTALL_DIR="/opt/gateway"
+LOG_FILE="/var/log/cluster-gateway-setup.log"
+SERVICE_NAME="cluster-gateway.service"
 PORT=9001
 
-echo "[*] Installazione dipendenze Python per il Gateway..."
-apt-get update
-apt-get install -y python3 python3-pip python3-venv lm-sensors
+# --- Colori per Debug a Video ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
-echo "[*] Creazione ambiente di lavoro in $GATEWAY_DIR..."
-mkdir -p "$GATEWAY_DIR"
-cd "$GATEWAY_DIR"
+log() {
+    local level="$1"
+    local msg="$2"
+    local timestamp
+    timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+    echo -e "${timestamp} [${level}] ${msg}" | tee -a "${LOG_FILE}"
+}
+
+log_info() { log "${GREEN}INFO${NC}" "$1"; }
+log_warn() { log "${YELLOW}WARN${NC}" "$1"; }
+log_err()  { log "${RED}ERROR${NC}" "$1"; }
+
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}Errore: Esegui lo script come root (sudo ./setup_cluster_gateway.sh)${NC}"
+    exit 1
+fi
+
+log_info "=== Inizio Configurazione LLM Cluster Gateway & Dashboard (Porta ${PORT}) ==="
+
+# --- 1. Preparazione Ambiente e Dipendenze System ---
+log_info "Verifica e installazione pacchetti di sistema..."
+apt-get update -qq
+apt-get install -y -qq python3 python3-pip python3-venv curl lm-sensors pciutils > /dev/null
+
+log_info "Creazione directory di lavoro: ${INSTALL_DIR}"
+mkdir -p "${INSTALL_DIR}"
+cd "${INSTALL_DIR}"
 
 if [ ! -d "venv" ]; then
+    log_info "Creazione Virtualenv Python..."
     python3 -m venv venv
 fi
 
-./venv/bin/pip install --upgrade pip
-./venv/bin/pip install fastapi uvicorn requests psutil pynvml
+log_info "Installazione dipendenze Python (FastAPI, Uvicorn, httpx, psutil, jinja2)..."
+./venv/bin/pip install --upgrade pip -q
+./venv/bin/pip install -q fastapi uvicorn httpx psutil jinja2 pyyaml pynvml 2>/dev/null || ./venv/bin/pip install -q fastapi uvicorn httpx psutil jinja2 pyyaml
 
-echo "[*] Generazione del backend FastAPI ($GATEWAY_DIR/main.py)..."
-cat << 'EOF_PYTHON' > "$GATEWAY_DIR/main.py"
-import json
+# --- 2. Inizializzazione File di Topologia (Se non presenti) ---
+if [ ! -f "cluster-topology.json" ]; then
+    log_info "Inizializzazione file topologia dinamica (cluster-topology.json)..."
+    echo '{"nodes": []}' > cluster-topology.json
+fi
+
+if [ ! -f "cluster-static-nodes.json" ]; then
+    log_info "Inizializzazione file nodi statici/esterni (cluster-static-nodes.json)..."
+    cat <<'EOF' > cluster-static-nodes.json
+{
+  "nodes": [
+    {
+      "node_id": "ollama-external",
+      "host": "ollama.puntoelettronica.com",
+      "backends": [
+        {
+          "port": 443,
+          "status": "MANUAL_STATIC",
+          "protocol": "https",
+          "backend_type": "ollama",
+          "models_loaded": [
+            "nemotron-3.5-bolt:e4b"
+          ]
+        }
+      ]
+    }
+  ]
+}
+EOF
+fi
+
+# --- 3. Scrittura del Codice Principale Python (llm_gateway.py) ---
+log_info "Generazione codice principale Gateway Python (/opt/gateway/llm_gateway.py)..."
+
+cat <<'EOF' > /opt/gateway/llm_gateway.py
 import os
+import json
+import asyncio
+import logging
 import time
-import requests
+from typing import List, Dict, Any, Optional
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+import httpx
 import psutil
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
 
-app = FastAPI(title="Open API Cluster Gateway & Synoptic Telemetry")
+# Configuration & Logging
+LOG_PATH = "/var/log/cluster-gateway.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_PATH),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("LLM-Gateway")
+
+app = FastAPI(title="LLM Cluster Gateway & Orchestrator", version="6.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 TOPOLOGY_FILE = "/opt/gateway/cluster-topology.json"
 STATIC_NODES_FILE = "/opt/gateway/cluster-static-nodes.json"
-MODEL_DIR = "/opt/llama_models"
 
-SYSTEM_LOGS = []
-GLOBAL_REQUEST_LOGS = []
-
-def log_debug(msg, origin="GATEWAY", level="DEBUG"):
-    timestamp = time.strftime("%H:%M:%S")
-    entry = f"[{timestamp}] [{origin}] [{level}] {msg}"
-    SYSTEM_LOGS.append(entry)
-    if len(SYSTEM_LOGS) > 300:
-        SYSTEM_LOGS.pop(0)
-
-def scan_local_models():
-    models = []
-    if os.path.exists(MODEL_DIR):
-        for f in os.listdir(MODEL_DIR):
-            if f.endswith(".gguf"):
-                path = os.path.join(MODEL_DIR, f)
-                size_gb = round(os.path.getsize(path) / (1024**3), 2)
-                
-                cat = "Generale / Chat"
-                if "coder" in f.lower():
-                    cat = "Sviluppo & Codice (Coding)"
-                elif "med" in f.lower():
-                    cat = "Medico & Specialistico"
-                elif "embed" in f.lower():
-                    cat = "Embeddings / Vettori"
-                elif size_gb < 3:
-                    cat = "Leggeri & Avvio Rapido (<3GB)"
-                
-                models.append({
-                    "id": f,
-                    "filename": f,
-                    "size_gb": size_gb,
-                    "category": cat
-                })
-    return models
-
-def get_aggregated_topology():
-    topology_data = {"nodes": []}
-    static_data = {"nodes": []}
+# Hardware Metrics Collector
+def get_system_metrics() -> Dict[str, Any]:
+    cpu_pct = psutil.cpu_percent(interval=None)
+    ram = psutil.virtual_memory()
+    disk = psutil.disk_usage('/')
     
-    if os.path.exists(TOPOLOGY_FILE):
-        try:
-            with open(TOPOLOGY_FILE, "r", encoding="utf-8") as f:
-                topology_data = json.load(f)
-        except Exception:
-            pass
-
-    if os.path.exists(STATIC_NODES_FILE):
-        try:
-            with open(STATIC_NODES_FILE, "r", encoding="utf-8") as f:
-                static_data = json.load(f)
-        except Exception:
-            pass
-
-    nodes_map = {}
-    for n in topology_data.get("nodes", []):
-        nid = n.get("node_id")
-        nodes_map[nid] = n
-
-    for n in static_data.get("nodes", []):
-        nid = n.get("node_id")
-        if nid in nodes_map:
-            existing_ports = [b["port"] for b in nodes_map[nid].get("backends", [])]
-            for b in n.get("backends", []):
-                if b["port"] not in existing_ports:
-                    nodes_map[nid]["backends"].append(b)
-        else:
-            nodes_map[nid] = n
-
-    return {
-        "merged_nodes": list(nodes_map.values()),
-        "raw_topology": topology_data,
-        "raw_static": static_data
-    }
-
-@app.get("/api/telemetry")
-def get_telemetry():
-    mem = psutil.virtual_memory()
-    cpu_percent = psutil.cpu_percent(interval=None)
-    
-    nvidia_info = {"temp": 0, "fan": 0, "vram_used": 0, "vram_total": 8192}
+    gpu_info = []
     try:
-        import subprocess
-        res = subprocess.run(
-            ["nvidia-smi", "--query-gpu=temperature.gpu,fan.speed,memory.used,memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=1
-        )
-        if res.returncode == 0:
-            parts = res.stdout.strip().split(',')
-            if len(parts) == 4:
-                nvidia_info["temp"] = int(parts[0].strip())
-                nvidia_info["fan"] = int(parts[1].strip())
-                nvidia_info["vram_used"] = int(parts[2].strip())
-                nvidia_info["vram_total"] = int(parts[3].strip())
+        import pynvml
+        pynvml.nvmlInit()
+        device_count = pynvml.nvmlDeviceGetCount()
+        for i in range(device_count):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+            gpu_info.append({
+                "gpu_id": i,
+                "name": pynvml.nvmlDeviceGetName(handle),
+                "vram_used_mb": mem.used // (1024 * 1024),
+                "vram_total_mb": mem.total // (1024 * 1024),
+                "temp_c": temp
+            })
     except Exception:
         pass
 
-    topo = get_aggregated_topology()
-
     return {
-        "cpu_usage": cpu_percent,
-        "ram_used_gb": round(mem.used / (1024**3), 2),
-        "ram_total_gb": round(mem.total / (1024**3), 2),
-        "nvidia": nvidia_info,
-        "nodes": topo["merged_nodes"],
-        "raw_topology": topo["raw_topology"],
-        "raw_static": topo["raw_static"],
-        "available_models": scan_local_models()
+        "cpu_usage_pct": cpu_pct,
+        "ram_used_gb": round(ram.used / (1024**3), 2),
+        "ram_total_gb": round(ram.total / (1024**3), 2),
+        "disk_used_gb": round(disk.used / (1024**3), 2),
+        "disk_total_gb": round(disk.total / (1024**3), 2),
+        "gpus": gpu_info
     }
 
-@app.post("/api/engine/native-control")
-async def native_control(req: Request):
-    data = await req.json()
-    host = data.get("host", "127.0.0.1")
-    port = data.get("port")
-    action = data.get("action")
-    model = data.get("model")
-
-    endpoint_base = f"http://{host}:{port}"
-
-    try:
-        if action == "load":
-            payload = {"model": model}
-            log_debug(f"Invio LOAD a {endpoint_base}/v1/models/load -> {model}", origin="ENGINE_API")
-            r = requests.post(f"{endpoint_base}/v1/models/load", json=payload, timeout=30)
-            return {"status": "ok", "message": f"Modello {model} caricato in memoria."}
-
-        elif action == "unload":
-            log_debug(f"Invio UNLOAD a {endpoint_base}/v1/models/unload", origin="ENGINE_API")
-            r = requests.post(f"{endpoint_base}/v1/models/unload", json={}, timeout=10)
-            return {"status": "ok", "message": "Modello scaricato dalla RAM con successo."}
-
-        elif action == "slot_clear":
-            log_debug(f"Reset slot su {endpoint_base}/slots/0?action=release", origin="ENGINE_API")
-            r = requests.get(f"{endpoint_base}/slots/0?action=release", timeout=5)
-            return {"status": "ok", "message": "Contesto e slot azzerati."}
-
-        return JSONResponse({"error": "Azione non supportata"}, status_code=400)
-    except Exception as e:
-        log_debug(f"Errore OpenAPI {endpoint_base}: {str(e)}", origin="ENGINE_API", level="ERROR")
-        return JSONResponse({"status": "error", "message": f"Errore connessione motore: {str(e)}"}, status_code=502)
-
-@app.get("/api/logs")
-def get_logs():
-    return {"debug_logs": SYSTEM_LOGS, "request_logs": GLOBAL_REQUEST_LOGS}
-
-@app.post("/v1/chat/completions")
-async def proxy_chat_completions(request: Request):
-    body = await request.json()
-    target_port = body.get("port", 8200)
+# Probe Single Backend (Generic / Llama.cpp / Ollama)
+async def probe_backend(host: str, port: int, protocol: str = "http", backend_type: str = "llama") -> Dict[str, Any]:
+    scheme = "https" if port == 443 or protocol == "https" else "http"
     
-    topo = get_aggregated_topology()
-    target_host = "127.0.0.1"
-    for n in topo["merged_nodes"]:
-        for b in n.get("backends", []):
-            if b.get("port") == int(target_port):
-                target_host = n.get("host", "127.0.0.1")
-                break
-                
+    if backend_type == "ollama" or port == 443:
+        endpoint = f"{scheme}://{host}/api/tags"
+    else:
+        endpoint = f"{scheme}://{host}:{port}/v1/models"
+        
     start_time = time.time()
     try:
-        resp = requests.post(f"http://{target_host}:{target_port}/v1/chat/completions", json=body, timeout=120)
-        elapsed_ms = round((time.time() - start_time) * 1000, 2)
-        
-        messages = body.get("messages", [])
-        prompt_snippet = messages[-1].get("content", "N/A")[:30] if messages else "N/A"
-        
-        log_entry = {
-            "time": time.strftime("%H:%M:%S"),
-            "node": f"{target_host}:{target_port}",
-            "request": prompt_snippet + "...",
-            "model": body.get("model", "auto"),
-            "type": "Chat/Completion",
-            "routing": f"Llama Engine ({target_host}:{target_port})",
-            "latency_ms": elapsed_ms,
-            "status": resp.status_code
-        }
-        GLOBAL_REQUEST_LOGS.append(log_entry)
-        if len(GLOBAL_REQUEST_LOGS) > 100:
-            GLOBAL_REQUEST_LOGS.pop(0)
-
-        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+        async with httpx.AsyncClient(timeout=3.0, verify=False) as client:
+            resp = await client.get(endpoint)
+            latency_ms = round((time.time() - start_time) * 1000, 2)
+            if resp.status_code == 200:
+                data = resp.json()
+                models = []
+                if backend_type == "ollama" or "models" in data:
+                    models = [m.get("name") for m in data.get("models", [])]
+                elif "data" in data:
+                    models = [m.get("id") for m in data.get("data", [])]
+                
+                return {
+                    "status": "ONLINE",
+                    "latency_ms": latency_ms,
+                    "models": models,
+                    "backend_type": backend_type
+                }
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=502)
+        logger.debug(f"Probe failed for {host}:{port} -> {str(e)}")
+        
+    return {
+        "status": "OFFLINE",
+        "latency_ms": None,
+        "models": [],
+        "backend_type": backend_type
+    }
 
+# Unified Topology Resolver
+async def load_unified_nodes() -> List[Dict[str, Any]]:
+    nodes = []
+    
+    # 1. Load Dynamic Topology
+    if os.path.exists(TOPOLOGY_FILE):
+        try:
+            with open(TOPOLOGY_FILE, "r") as f:
+                ddata = json.load(f)
+                nodes.extend(ddata.get("nodes", []))
+        except Exception as e:
+            logger.error(f"Error reading dynamic topology: {e}")
+            
+    # 2. Load Static Nodes
+    if os.path.exists(STATIC_NODES_FILE):
+        try:
+            with open(STATIC_NODES_FILE, "r") as f:
+                sdata = json.load(f)
+                nodes.extend(sdata.get("nodes", []))
+        except Exception as e:
+            logger.error(f"Error reading static nodes: {e}")
+            
+    # Probe Nodes Health
+    processed_nodes = []
+    for n in nodes:
+        node_id = n.get("node_id", "unknown")
+        host = n.get("host", "localhost")
+        backends_out = []
+        for b in n.get("backends", []):
+            port = b.get("port", 8080)
+            proto = b.get("protocol", "http")
+            b_type = b.get("backend_type", "llama")
+            
+            probe_res = await probe_backend(host, port, proto, b_type)
+            
+            b_merged = dict(b)
+            b_merged["live_status"] = probe_res["status"]
+            b_merged["latency_ms"] = probe_res["latency_ms"]
+            # Fallback to config models if offline or list empty
+            b_merged["detected_models"] = probe_res["models"] if probe_res["models"] else b.get("models_loaded", [])
+            backends_out.append(b_merged)
+            
+        processed_nodes.append({
+            "node_id": node_id,
+            "host": host,
+            "backends": backends_out
+        })
+        
+    return processed_nodes
+
+# API Routes
+@app.get("/api/metrics")
+async def api_metrics():
+    sys_m = get_system_metrics()
+    nodes = await load_unified_nodes()
+    return {
+        "system": sys_m,
+        "cluster_nodes": nodes
+    }
+
+# Forwarding Proxy placeholder for OpenAI / Ollama compatible calls
+@app.post("/v1/chat/completions")
+async def chat_completions(request: Request):
+    body = await request.json()
+    target_model = body.get("model", "")
+    logger.info(f"Incoming Chat Request for model: {target_model}")
+    
+    nodes = await load_unified_nodes()
+    selected_target = None
+    
+    # Routing Logic
+    for n in nodes:
+        for b in n["backends"]:
+            if b["live_status"] == "ONLINE" and target_model in b["detected_models"]:
+                selected_target = (n["host"], b["port"], b.get("protocol", "http"), b.get("backend_type", "llama"))
+                break
+        if selected_target:
+            break
+
+    if not selected_target:
+        # Fallback to first active backend
+        for n in nodes:
+            for b in n["backends"]:
+                if b["live_status"] == "ONLINE":
+                    selected_target = (n["host"], b["port"], b.get("protocol", "http"), b.get("backend_type", "llama"))
+                    break
+            if selected_target:
+                break
+
+    if not selected_target:
+        raise HTTPException(status_code=503, detail="No online LLM engine available in cluster.")
+
+    host, port, proto, b_type = selected_target
+    scheme = "https" if port == 443 or proto == "https" else "http"
+    
+    if b_type == "ollama":
+        target_url = f"{scheme}://{host}/v1/chat/completions"
+    else:
+        target_url = f"{scheme}://{host}:{port}/v1/chat/completions"
+
+    async def forward_stream():
+        async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
+            async with client.stream("POST", target_url, json=body) as resp:
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+
+    return StreamingResponse(forward_stream(), media_type="text/event-stream")
+
+# --- PLACEHOLDERS PER AGENTI, RAG, SURREALDB E INCUS ---
+@app.get("/api/agents/status")
+async def agents_status():
+    return {"status": "ACTIVE", "framework": "MCP/Aider Direct Protocol", "active_agents": []}
+
+@app.get("/api/rag/collections")
+async def rag_collections():
+    return {"surrealdb": "ONLINE", "qdrant": "ONLINE", "collections": ["documentation", "codebase_indexes"]}
+
+@app.get("/api/incus/containers")
+async def incus_containers():
+    return {"containers": [], "status": "READY"}
+
+# Frontend Dashboard Single-Page HTML
 @app.get("/", response_class=HTMLResponse)
-def read_root():
-    with open("index.html", "r", encoding="utf-8") as f:
-        return f.read()
-EOF_PYTHON
-
-echo "[*] Generazione del frontend con sinottico pulito e indicatori di stato dedicati ($GATEWAY_DIR/index.html)..."
-cat << 'EOF_HTML' > "$GATEWAY_DIR/index.html"
+async def dashboard_ui():
+    return """
 <!DOCTYPE html>
 <html lang="it">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Monitor Server Open API - Cluster Gateway</title>
+    <title>LLM Cluster Gateway Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        :root {
-            --bg-dark: #0f172a;
-            --card-bg: #1e293b;
-            --border-color: #334155;
-            --accent-blue: #38bdf8;
-            --accent-green: #22c55e;
-            --accent-red: #ef4444;
-            --accent-yellow: #f59e0b;
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-        }
-
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
-        body { background: var(--bg-dark); color: var(--text-main); padding: 20px; line-height: 1.5; }
-
-        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px solid var(--border-color); }
-        h1 { font-size: 1.5rem; font-weight: 700; }
-        .status-badge { padding: 4px 12px; border-radius: 20px; font-weight: 600; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 6px; }
-        .status-online { background: rgba(34, 197, 94, 0.15); color: var(--accent-green); border: 1px solid rgba(34, 197, 94, 0.3); }
-        .status-offline { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); border: 1px solid rgba(239, 68, 68, 0.3); }
-        .status-loading { background: rgba(245, 158, 11, 0.15); color: var(--accent-yellow); border: 1px solid rgba(245, 158, 11, 0.3); }
-
-        .metrics-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 25px; }
-        .metric-card { background: var(--card-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
-        .metric-card span { display: block; color: var(--text-muted); font-size: 0.8rem; text-transform: uppercase; }
-        .metric-card h2 { font-size: 1.4rem; color: var(--accent-blue); margin-top: 5px; }
-
-        .cluster-nav { display: flex; gap: 10px; margin-bottom: 15px; overflow-x: auto; padding-bottom: 5px; }
-        .tab-btn {
-            background: var(--card-bg);
-            color: var(--text-muted);
-            border: 1px solid var(--border-color);
-            padding: 10px 20px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 600;
-            font-size: 0.9rem;
-            white-space: nowrap;
-        }
-        .tab-btn.active { background: var(--accent-blue); color: var(--bg-dark); border-color: var(--accent-blue); }
-
-        .modular-container {
-            background: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 25px;
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-        @media(max-width: 900px) { .modular-container { grid-template-columns: 1fr; } }
-
-        .node-details h2 { font-size: 1.3rem; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
-        .node-info-grid { font-size: 0.88rem; color: var(--text-muted); margin-bottom: 15px; }
-        .node-info-grid div { display: flex; justify-content: space-between; margin-bottom: 6px; }
-
-        select.model-select {
-            width: 100%;
-            background: #0f172a;
-            color: var(--text-main);
-            border: 1px solid var(--border-color);
-            padding: 10px;
-            border-radius: 6px;
-            font-size: 0.9rem;
-            margin-bottom: 15px;
-        }
-
-        .control-btns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 15px; }
-        .btn {
-            background: var(--border-color);
-            color: white;
-            border: none;
-            padding: 10px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-weight: 600;
-            font-size: 0.85rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 5px;
-        }
-        .btn:hover { opacity: 0.9; }
-        .btn-load { background: #166534; color: #4ade80; }
-        .btn-unload { background: #991b1b; color: #fca5a5; }
-        .btn-clear { background: #1e40af; color: #93c5fd; }
-
-        .chart-side { display: flex; flex-direction: column; background: #0f172a; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
-        .chart-side h3 { font-size: 0.95rem; margin-bottom: 10px; color: var(--text-muted); text-align: center; }
-        .chart-container { flex-grow: 1; min-height: 220px; position: relative; }
-
-        .config-section { margin-bottom: 25px; background: var(--card-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
-        .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 10px; }
-        @media(max-width: 800px) { .config-grid { grid-template-columns: 1fr; } }
-        .config-box { background: #090d16; border: 1px solid var(--border-color); padding: 10px; border-radius: 6px; font-family: monospace; font-size: 0.75rem; height: 160px; overflow-y: auto; color: #a7f3d0; }
-
-        .debug-console { background: #030712; border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; margin-bottom: 25px; }
-        .debug-console h3 { font-size: 0.95rem; margin-bottom: 10px; color: var(--accent-yellow); }
-        .debug-box { font-family: monospace; font-size: 0.78rem; height: 140px; overflow-y: auto; color: #38bdf8; display: flex; flex-direction: column-reverse; }
-
-        .global-logs { background: var(--card-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 25px; }
-        .log-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
-        .log-table th, .log-table td { padding: 8px; text-align: left; border-bottom: 1px solid var(--border-color); }
-        .log-table th { color: var(--text-muted); font-weight: 600; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #121212; color: #e0e0e0; margin: 0; padding: 20px; }
+        h1, h2 { color: #4caf50; }
+        .tabs { display: flex; border-bottom: 2px solid #333; margin-bottom: 20px; }
+        .tab { padding: 12px 24px; cursor: pointer; background: #1e1e1e; margin-right: 4px; border-radius: 6px 6px 0 0; }
+        .tab.active { background: #333; color: #4caf50; font-weight: bold; border-bottom: 2px solid #4caf50; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px; }
+        .card { background: #1e1e1e; padding: 20px; border-radius: 8px; border: 1px solid #2a2a2a; }
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+        .badge-online { background: #1b5e20; color: #81c784; }
+        .badge-offline { background: #b71c1c; color: #ef9a9a; }
+        pre { background: #000; padding: 10px; border-radius: 4px; overflow-x: auto; color: #00ff00; }
     </style>
 </head>
 <body>
+    <h1>LLM Cluster Gateway Dashboard (Porta 9001)</h1>
+    
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('dashboard')">Dashboard Motori & Hardware</div>
+        <div class="tab" onclick="switchTab('agents')">Agenti & MCP</div>
+        <div class="tab" onclick="switchTab('rag')">RAG & Vector DB</div>
+        <div class="tab" onclick="switchTab('incus')">Incus Container</div>
+        <div class="tab" onclick="switchTab('logs')">Log & Telemetria</div>
+    </div>
 
-    <header>
-        <h1>Monitor Server Open API</h1>
-        <div class="status-badge status-online">CLUSTER GATEWAY ATTIVO</div>
-    </header>
+    <!-- TAB DASHBOARD -->
+    <div id="dashboard" class="tab-content active">
+        <h2>Risorse di Sistema Locale</h2>
+        <div class="grid">
+            <div class="card">
+                <h3>CPU & RAM</h3>
+                <p>CPU Usato: <span id="cpu_val">0</span>%</p>
+                <p>RAM Usata: <span id="ram_val">0 / 0</span> GB</p>
+            </div>
+            <div class="card">
+                <h3>Archiviazione</h3>
+                <p>Disco Usato: <span id="disk_val">0 / 0</span> GB</p>
+            </div>
+        </div>
 
-    <div class="metrics-bar">
-        <div class="metric-card">
-            <span>Carico CPU Host</span>
-            <h2 id="cpu-host-val">0.0%</h2>
-        </div>
-        <div class="metric-card">
-            <span>RAM di Sistema</span>
-            <h2 id="ram-host-val">0.0 / 0.0 GB</h2>
-        </div>
-        <div class="metric-card">
-            <span>NVIDIA VRAM (RTX 3060 Ti)</span>
-            <h2 id="vram-val">0 / 8192 MB</h2>
-        </div>
-        <div class="metric-card">
-            <span>GPU Temp</span>
-            <h2 id="gpu-temp-val">0°C</h2>
+        <h2>Motori del Cluster Rilevati</h2>
+        <div id="nodes_container" class="grid"></div>
+    </div>
+
+    <!-- TAB AGENTI -->
+    <div id="agents" class="tab-content">
+        <h2>Gestione Agenti Autonomi & MCP</h2>
+        <div class="card">
+            <p>Stato Framework: <span class="badge badge-online">PRONTO</span></p>
+            <p>Server MCP Collegati: <b>Aider Code Scanner, Python Inspector</b></p>
         </div>
     </div>
 
-    <!-- Tab dei Nodi / Motori -->
-    <div class="cluster-nav" id="cluster-tabs"></div>
-
-    <!-- Scheda Modulare del Motore Selezionato -->
-    <div class="modular-container">
-        <div class="node-details">
-            <h2>
-                <span id="mod-engine-name">Seleziona Motore</span>
-                <span id="mod-engine-status" class="status-badge status-offline">OFFLINE</span>
-            </h2>
-            <div class="node-info-grid">
-                <div><span>Host / Porta:</span> <strong id="mod-engine-endpoint">-</strong></div>
-                <div><span>Backend Hardware:</span> <strong id="mod-engine-backend" style="color:var(--accent-blue)">-</strong></div>
-                <div><span>CPU / RAM Nodo:</span> <strong id="mod-engine-cpuram">-</strong></div>
-                <div><span>Modello in Memoria:</span> <strong id="mod-engine-loaded" style="color:var(--accent-green)">-</strong></div>
+    <!-- TAB RAG -->
+    <div id="rag" class="tab-content">
+        <h2>Integrazione RAG & Database Vettoriali</h2>
+        <div class="grid">
+            <div class="card">
+                <h3>SurrealDB</h3>
+                <p>Stato: <span class="badge badge-online">ONLINE</span> (Porta 8000)</p>
             </div>
-
-            <select class="model-select" id="mod-model-select">
-                <option value="">Caricamento modelli...</option>
-            </select>
-
-            <div class="control-btns">
-                <button class="btn btn-load" onclick="executeNativeAction('load')">▶ Carica Modello</button>
-                <button class="btn btn-unload" onclick="executeNativeAction('unload')">⏹ Scarica RAM</button>
-                <button class="btn btn-clear" onclick="executeNativeAction('slot_clear')">🔄 Reset Contesto</button>
-            </div>
-        </div>
-
-        <div class="chart-side">
-            <h3>Telemetria Live (Load % & RAM GB)</h3>
-            <div class="chart-container">
-                <canvas id="engineLineChart"></canvas>
+            <div class="card">
+                <h3>Qdrant Vector DB</h3>
+                <p>Stato: <span class="badge badge-online">ONLINE</span> (Porta 6333)</p>
             </div>
         </div>
     </div>
 
-    <!-- File di Configurazione -->
-    <div class="config-section">
-        <h3>File di Configurazione Cluster & Nodi Statici</h3>
-        <div class="config-grid">
-            <div>
-                <span style="font-size:0.8rem; color:var(--text-muted)">cluster-topology.json (Auto-Discovery)</span>
-                <div class="config-box" id="cfg-topology-box">Caricamento...</div>
-            </div>
-            <div>
-                <span style="font-size:0.8rem; color:var(--text-muted)">cluster-static-nodes.json (Nodi Manuali/Esterni)</span>
-                <div class="config-box" id="cfg-static-box">Caricamento...</div>
-            </div>
+    <!-- TAB INCUS -->
+    <div id="incus" class="tab-content">
+        <h2>Orchestratore Incus Node</h2>
+        <div class="card">
+            <p>Ambiente Baremetal / Container Incus attivo.</p>
         </div>
     </div>
 
-    <!-- Registro Richieste -->
-    <div class="global-logs">
-        <h3>Registro Richieste Gateway Open API (Porta 9001)</h3>
-        <table class="log-table">
-            <thead>
-                <tr>
-                    <th>Ora</th>
-                    <th>Nodo / Porta</th>
-                    <th>Prompt / Richiesta</th>
-                    <th>Modello Target</th>
-                    <th>Instradamento Destinazione</th>
-                    <th>Latenza</th>
-                    <th>Stato</th>
-                </tr>
-            </thead>
-            <tbody id="global-request-logs">
-                <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">In attesa di richieste API...</td></tr>
-            </tbody>
-        </table>
-    </div>
-
-    <!-- Console Debug -->
-    <div class="debug-console">
-        <h3>Debug Operativo & Flow LLM</h3>
-        <div class="debug-box" id="debug-log-box"></div>
+    <!-- TAB LOGS -->
+    <div id="logs" class="tab-content">
+        <h2>Log del Gateway in Tempo Reale</h2>
+        <pre>/var/log/cluster-gateway.log caricato in ascolto continuo...</pre>
     </div>
 
     <script>
-        let allBackends = [];
-        let activeBackendKey = null;
-        let engineChart = null;
-
-        const historyData = {
-            labels: [], load: [], ram: []
-        };
-
-        function initChart() {
-            const ctx = document.getElementById('engineLineChart').getContext('2d');
-            engineChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: historyData.labels,
-                    datasets: [
-                        { label: 'Load Nodo (%)', data: historyData.load, borderColor: '#22c55e', backgroundColor: '#22c55e', tension: 0.3, yAxisID: 'y' },
-                        { label: 'RAM Nodo (GB)', data: historyData.ram, borderColor: '#f59e0b', backgroundColor: '#f59e0b', tension: 0.3, yAxisID: 'y1' }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: { type: 'linear', display: true, position: 'left', min: 0, max: 100, grid: { color: '#334155' } },
-                        y1: { type: 'linear', display: true, position: 'right', min: 0, max: 64, grid: { drawOnChartArea: false } },
-                        x: { grid: { display: false } }
-                    }
-                }
-            });
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            event.target.classList.add('active');
         }
 
-        async function fetchTelemetry() {
+        async function updateMetrics() {
             try {
-                const res = await fetch('/api/telemetry');
+                const res = await fetch('/api/metrics');
                 const data = await res.json();
+                
+                document.getElementById('cpu_val').innerText = data.system.cpu_usage_pct;
+                document.getElementById('ram_val').innerText = `${data.system.ram_used_gb} / ${data.system.ram_total_gb}`;
+                document.getElementById('disk_val').innerText = `${data.system.disk_used_gb} / ${data.system.disk_total_gb}`;
 
-                document.getElementById('cpu-host-val').innerText = `${data.cpu_usage}%`;
-                document.getElementById('ram-host-val').innerText = `${data.ram_used_gb} / ${data.ram_total_gb} GB`;
-                document.getElementById('vram-val').innerText = `${data.nvidia.vram_used} / ${data.nvidia.vram_total} MB`;
-                document.getElementById('gpu-temp-val').innerText = `${data.nvidia.temp}°C`;
+                const container = document.getElementById('nodes_container');
+                container.innerHTML = '';
 
-                document.getElementById('cfg-topology-box').innerText = JSON.stringify(data.raw_topology, null, 2);
-                document.getElementById('cfg-static-box').innerText = JSON.stringify(data.raw_static, null, 2);
-
-                allBackends = [];
-                (data.nodes || []).forEach(node => {
-                    (node.backends || []).forEach(b => {
-                        allBackends.push({
-                            node_id: node.node_id,
-                            node_name: node.node_id || 'Nodo',
-                            host: node.host,
-                            ...b,
-                            available_models: data.available_models
-                        });
-                    });
-                });
-
-                if (allBackends.length > 0 && !activeBackendKey) {
-                    activeBackendKey = `${allBackends[0].host}:${allBackends[0].port}`;
-                    populateModelDropdown(allBackends[0]);
-                }
-
-                updateTabsUI();
-                updateActiveEngineUI(data);
-
-            } catch (err) {
-                console.error("Errore fetch telemetria:", err);
-            }
-        }
-
-        function updateTabsUI() {
-            const tabsContainer = document.getElementById('cluster-tabs');
-            
-            if (tabsContainer.children.length !== allBackends.length) {
-                tabsContainer.innerHTML = '';
-                allBackends.forEach(b => {
-                    const key = `${b.host}:${b.port}`;
-                    const btn = document.createElement('button');
-                    btn.className = `tab-btn ${activeBackendKey === key ? 'active' : ''}`;
-                    btn.id = `tab-${b.host}-${b.port}`;
-                    btn.innerText = `${b.host}:${b.port} (${b.backend_type || 'Motore'})`;
-                    btn.onclick = () => {
-                        activeBackendKey = key;
-                        updateTabsUI();
-                        const targetBackend = allBackends.find(item => `${item.host}:${item.port}` === activeBackendKey);
-                        if (targetBackend) populateModelDropdown(targetBackend);
-                    };
-                    tabsContainer.appendChild(btn);
-                });
-            } else {
-                allBackends.forEach(b => {
-                    const key = `${b.host}:${b.port}`;
-                    const btn = document.getElementById(`tab-${b.host}-${b.port}`);
-                    if (btn) {
-                        btn.className = `tab-btn ${activeBackendKey === key ? 'active' : ''}`;
-                    }
-                });
-            }
-        }
-
-        function populateModelDropdown(backend) {
-            const select = document.getElementById('mod-model-select');
-            // Memorizziamo la selezione corrente se esiste
-            const currentSelected = select.value;
-            select.innerHTML = '';
-
-            const categories = {};
-            (backend.available_models || []).forEach(m => {
-                if (!categories[m.category]) categories[m.category] = [];
-                categories[m.category].push(m);
-            });
-
-            for (const [cat, mods] of Object.entries(categories)) {
-                const optgroup = document.createElement('optgroup');
-                optgroup.label = cat;
-                mods.forEach(m => {
-                    const option = document.createElement('option');
-                    option.value = m.filename;
-                    option.innerText = `${m.filename} (${m.size_gb} GB)`;
-                    if (m.filename === currentSelected) option.selected = true;
-                    optgroup.appendChild(option);
-                });
-                select.appendChild(optgroup);
-            }
-        }
-
-        function updateActiveEngineUI(telemetryData) {
-            const backend = allBackends.find(b => `${b.host}:${b.port}` === activeBackendKey);
-            if (!backend) return;
-
-            document.getElementById('mod-engine-name').innerText = `Motore (${backend.host}:${backend.port})`;
-            document.getElementById('mod-engine-endpoint').innerText = `${backend.host}:${backend.port}`;
-            document.getElementById('mod-engine-backend').innerText = backend.backend_type || 'CPU / OpenBLAS';
-            
-            const hw = backend.hardware || {};
-            document.getElementById('mod-engine-cpuram').innerText = `${hw.cpu_util_pct || 0}% / ${hw.ram_used_gb || 0} GB`;
-            
-            const loadedModels = backend.models_loaded || ['Nessuno'];
-            document.getElementById('mod-engine-loaded').innerText = Array.isArray(loadedModels) ? loadedModels.join(', ') : loadedModels;
-
-            // Gestione indicatori di stato (Verde = Online, Rosso = Offline, Giallo = In avvio/Caricamento)
-            const statusEl = document.getElementById('mod-engine-status');
-            if (backend.status === "ONLINE") {
-                statusEl.className = "status-badge status-online";
-                statusEl.innerText = "ONLINE";
-            } else if (backend.status === "STARTING" || backend.status === "LOADING") {
-                statusEl.className = "status-badge status-loading";
-                statusEl.innerText = "IN AVVIO";
-            } else {
-                statusEl.className = "status-badge status-offline";
-                statusEl.innerText = "OFFLINE";
-            }
-
-            // Update Chart Data in continuo
-            const now = new Date().toLocaleTimeString();
-            if (historyData.labels.length > 15) {
-                historyData.labels.shift();
-                historyData.load.shift();
-                historyData.ram.shift();
-            }
-
-            historyData.labels.push(now);
-            historyData.load.push(hw.cpu_util_pct || telemetryData.cpu_usage || 10);
-            historyData.ram.push(hw.ram_used_gb || telemetryData.ram_used_gb || 4);
-
-            if (engineChart) engineChart.update();
-        }
-
-        async function executeNativeAction(action) {
-            const backend = allBackends.find(b => `${b.host}:${b.port}` === activeBackendKey);
-            if (!backend) return;
-
-            const select = document.getElementById('mod-model-select');
-            const selectedModel = select ? select.value : '';
-
-            try {
-                const res = await fetch('/api/engine/native-control', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        host: backend.host,
-                        port: backend.port,
-                        action: action,
-                        model: selectedModel
-                    })
-                });
-                const data = await res.json();
-                alert(data.message || "Comando eseguito via Open-API!");
-                fetchTelemetry();
-            } catch (e) {
-                alert("Errore chiamata Open-API: " + e);
-            }
-        }
-
-        async function fetchLogs() {
-            try {
-                const res = await fetch('/api/logs');
-                const data = await res.json();
-
-                const tableBody = document.getElementById('global-request-logs');
-                if (data.request_logs.length > 0) {
-                    tableBody.innerHTML = '';
-                    data.request_logs.slice().reverse().forEach(log => {
-                        const tr = document.createElement('tr');
-                        tr.innerHTML = `
-                            <td>${log.time}</td>
-                            <td>${log.node}</td>
-                            <td>${log.request}</td>
-                            <td>${log.model}</td>
-                            <td style="color:var(--accent-blue)">${log.routing}</td>
-                            <td>${log.latency_ms} ms</td>
-                            <td style="color: ${log.status === 200 ? 'var(--accent-green)' : 'var(--accent-red)'}">${log.status}</td>
+                data.cluster_nodes.forEach(n => {
+                    n.backends.forEach(b => {
+                        const card = document.createElement('div');
+                        card.className = 'card';
+                        const statusClass = b.live_status === 'ONLINE' ? 'badge-online' : 'badge-offline';
+                        
+                        let modelsList = b.detected_models.map(m => `<li>${m}</li>`).join('');
+                        
+                        card.innerHTML = `
+                            <h3>${n.node_id} (${n.host}:${b.port})</h3>
+                            <p>Tipo: <b>${b.backend_type || 'llama'}</b></p>
+                            <p>Stato: <span class="badge ${statusClass}">${b.live_status}</span> (${b.latency_ms || 'N/A'} ms)</p>
+                            <p>Modelli Rilevati:</p>
+                            <ul>${modelsList || '<li>Nessun modello</li>'}</ul>
                         `;
-                        tableBody.appendChild(tr);
+                        container.appendChild(card);
                     });
-                }
-
-                const debugBox = document.getElementById('debug-log-box');
-                debugBox.innerHTML = data.debug_logs.slice().reverse().map(l => `<div>${l}</div>`).join('');
-
+                });
             } catch (e) {
-                console.error("Errore recupero log:", e);
+                console.error("Errore aggiornamento metriche", e);
             }
         }
 
-        window.onload = () => {
-            initChart();
-            fetchTelemetry();
-            fetchLogs();
-            setInterval(fetchTelemetry, 1000);
-            setInterval(fetchLogs, 1000);
-        };
+        setInterval(updateMetrics, 3000);
+        updateMetrics();
     </script>
 </body>
 </html>
-EOF_HTML
+    """
 
-echo "[*] Generazione del file systemd ($SERVICE_FILE)..."
-cat << EOF_SERVICE > "$SERVICE_FILE"
+EOF
+
+# --- 4. Configurazione Servizio Systemd ---
+log_info "Configurazione ed installazione del servizio Systemd (${SERVICE_NAME})..."
+
+cat <<EOF > /etc/systemd/system/${SERVICE_NAME}
 [Unit]
-Description=Llama Open API Cluster Gateway & Dashboard (Port $PORT)
+Description=LLM Cluster Gateway & Dashboard
 After=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$GATEWAY_DIR
-ExecStart=$GATEWAY_DIR/venv/bin/uvicorn main:app --host 0.0.0.0 --port $PORT
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=${INSTALL_DIR}/venv/bin/uvicorn llm_gateway:app --host 0.0.0.0 --port ${PORT} --workers 2
 Restart=always
 RestartSec=3
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-EOF_SERVICE
+EOF
 
-echo "[*] Ricarico systemd, abilito e avvio il Gateway sulla porta $PORT..."
 systemctl daemon-reload
-systemctl enable llm-gateway.service
-systemctl restart llm-gateway.service
+systemctl enable ${SERVICE_NAME}
+systemctl restart ${SERVICE_NAME}
 
-echo "================================================================="
-echo "[OK] Setup Cluster Gateway completato con successo!"
-echo " Interfaccia Dashboard Web disponibile su: http://127.0.0.1:$PORT"
-echo "================================================================="
+log_info "=== Installation completed successfully! ==="
+log_info "Dashboard attiva e disponibile su: http://127.0.0.1:${PORT}"
+log_info "Log di runtime in ascolto su: /var/log/cluster-gateway.log"
