@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# v4.1.0 - Gateway LLM
+# v4.1.0 - Gateway & Dashboard Cluster Corretta (Zero-Refresh, Synoptic Linear Sync, Status Colors)
 
 set -euo pipefail
 
