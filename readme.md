@@ -1,4 +1,4 @@
-# Workstation AI - W.I.P. - NOT FOR PRODUCTION USE
+# Ubuntu AI Scripts - W.I.P. - NOT FOR PRODUCTION USE
 
 ---
 
