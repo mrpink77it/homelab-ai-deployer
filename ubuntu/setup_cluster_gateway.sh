@@ -6,18 +6,15 @@
 
 set -euo pipefail
 
-# --- Configurazione Percorsi e Variabili (Servizio Unico) ---
 INSTALL_DIR="/opt/gateway"
 LOG_FILE="/var/log/cluster-gateway-setup.log"
 SERVICE_NAME="cluster-gateway.service"
 PORT=9001
 
-# --- Colori per Output Terminale ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 log() {
     local level="$1"
@@ -38,7 +35,6 @@ fi
 
 log_info "=== Inizio Setup Unificato Cluster Gateway (Porta ${PORT}) ==="
 
-# --- 1. Preparazione Ambiente e Dipendenze System ---
 log_info "Verifica e installazione pacchetti di sistema..."
 apt-get update -qq
 apt-get install -y -qq python3 python3-pip python3-venv curl lm-sensors pciutils > /dev/null
@@ -56,7 +52,6 @@ log_info "Installazione dipendenze Python..."
 ./venv/bin/pip install --upgrade pip -q
 ./venv/bin/pip install -q fastapi uvicorn httpx psutil jinja2 pyyaml pynvml 2>/dev/null || ./venv/bin/pip install -q fastapi uvicorn httpx psutil jinja2 pyyaml
 
-# --- 2. Inizializzazione File di Topologia (Auto-Discovery + Statici) ---
 if [ ! -f "cluster-topology.json" ]; then
     log_info "Inizializzazione cluster-topology.json..."
     echo '{"nodes": []}' > cluster-topology.json
@@ -87,7 +82,6 @@ if [ ! -f "cluster-static-nodes.json" ]; then
 EOF
 fi
 
-# --- 3. Scrittura Script Principale Python (llm_gateway.py) ---
 log_info "Generazione codice unificato Python (/opt/gateway/llm_gateway.py)..."
 
 cat <<'EOF' > /opt/gateway/llm_gateway.py
@@ -103,7 +97,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import httpx
 import psutil
 
-# Configuration & Logging
 LOG_PATH = "/var/log/cluster-gateway.log"
 logging.basicConfig(
     level=logging.INFO,
@@ -128,7 +121,6 @@ app.add_middleware(
 TOPOLOGY_FILE = "/opt/gateway/cluster-topology.json"
 STATIC_NODES_FILE = "/opt/gateway/cluster-static-nodes.json"
 
-# Metric Collector Hardware Locale
 def get_system_metrics() -> Dict[str, Any]:
     cpu_pct = psutil.cpu_percent(interval=None)
     ram = psutil.virtual_memory()
@@ -143,9 +135,12 @@ def get_system_metrics() -> Dict[str, Any]:
             handle = pynvml.nvmlDeviceGetHandleByIndex(i)
             mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
             temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+            gpu_name = pynvml.nvmlDeviceGetName(handle)
+            if isinstance(gpu_name, bytes):
+                gpu_name = gpu_name.decode('utf-8')
             gpu_info.append({
                 "gpu_id": i,
-                "name": pynvml.nvmlDeviceGetName(handle).decode('utf-8') if isinstance(pynvml.nvmlDeviceGetName(handle), bytes) else pynvml.nvmlDeviceGetName(handle),
+                "name": gpu_name,
                 "vram_used_mb": mem.used // (1024 * 1024),
                 "vram_total_mb": mem.total // (1024 * 1024),
                 "temp_c": temp
@@ -162,7 +157,6 @@ def get_system_metrics() -> Dict[str, Any]:
         "gpus": gpu_info
     }
 
-# Probe dinamico motori (Generico / llama.cpp / Ollama)
 async def probe_backend(host: str, port: int, protocol: str = "http", backend_type: str = "llama") -> Dict[str, Any]:
     scheme = "https" if port == 443 or protocol == "https" else "http"
     
@@ -200,7 +194,6 @@ async def probe_backend(host: str, port: int, protocol: str = "http", backend_ty
         "backend_type": backend_type
     }
 
-# Merge Topologia Dinamica + Nodi Statici
 async def load_unified_nodes() -> List[Dict[str, Any]]:
     nodes = []
     if os.path.exists(TOPOLOGY_FILE):
@@ -243,11 +236,10 @@ async def load_unified_nodes() -> List[Dict[str, Any]]:
         
     return processed_nodes
 
-# OpenAPI REST Controls Motori
 @app.post("/api/engine/control")
 async def control_engine(request: Request):
     data = await request.json()
-    action = data.get("action") # "load", "unload", "clear_ram"
+    action = data.get("action")
     host = data.get("host")
     port = data.get("port")
     model = data.get("model")
@@ -275,7 +267,6 @@ async def api_metrics():
         "cluster_nodes": await load_unified_nodes()
     }
 
-# Forwarding Proxy OpenAI Compatible
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     body = await request.json()
@@ -315,7 +306,6 @@ async def chat_completions(request: Request):
 
     return StreamingResponse(forward_stream(), media_type="text/event-stream")
 
-# Placeholder Moduli Gateway
 @app.get("/api/agents/status")
 async def agents_status():
     return {"status": "ACTIVE", "agents": []}
@@ -324,7 +314,6 @@ async def agents_status():
 async def rag_collections():
     return {"surrealdb": "ONLINE", "qdrant": "ONLINE"}
 
-# Dashboard Interface Minimalista
 @app.get("/", response_class=HTMLResponse)
 async def dashboard_ui():
     return """
@@ -481,7 +470,6 @@ async def dashboard_ui():
 
 EOF
 
-# --- 4. Ripristino / Sovrascrittura Servizio Systemd UNICO ---
 log_info "Configurazione ed installazione del servizio systemd UNICO (${SERVICE_NAME})..."
 
 cat <<EOF > /etc/systemd/system/${SERVICE_NAME}
